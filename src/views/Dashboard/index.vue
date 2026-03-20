@@ -14,7 +14,7 @@ interface ToolDef {
   iconColor: string
   iconBg: string
   action?: string
-  statusIndicator?: 'toggle-off' | 'toggle-on' | 'dots' | 'ready'
+  statusIndicator?: 'toggle-off' | 'toggle-on' | 'dots' | 'ready' | 'on-hold'
   statusText?: string
   extra?: string
 }
@@ -93,75 +93,7 @@ const apiTools = ref<ToolDef[]>([
     iconName: 'VideoPlay',
     iconColor: '#10b981',
     iconBg: 'rgba(16, 185, 129, 0.1)',
-    statusIndicator: 'ready',
-    statusText: 'Ready'
-  },
-  {
-    id: 'rest-client',
-    name: 'REST Client',
-    description: 'Fast API debugging and testing utility.',
-    iconName: 'Setting',
-    iconColor: '#6366f1',
-    iconBg: 'rgba(99, 102, 241, 0.1)',
-    statusIndicator: 'ready',
-    statusText: 'Ready'
-  },
-  {
-    id: 'cypress-runner',
-    name: 'Cypress Runner',
-    description: 'Execute headless UI automation suites.',
-    iconName: 'VideoPlay',
-    iconColor: '#ef4444',
-    iconBg: 'rgba(239, 68, 68, 0.1)',
-    statusIndicator: 'dots'
-  },
-  {
-    id: 'load-generator',
-    name: 'Load Generator',
-    description: 'Simulate concurrent traffic for stress tests.',
-    iconName: 'Loading',
-    iconColor: '#3b82f6',
-    iconBg: 'rgba(59, 130, 246, 0.1)',
-    statusIndicator: 'toggle-on'
-  },
-  {
-    id: 'query-optimizer',
-    name: 'Query Optimizer',
-    description: 'Analyze and refactor slow SQL queries.',
-    iconName: 'Document',
-    iconColor: '#f59e0b',
-    iconBg: 'rgba(245, 158, 11, 0.1)',
-    statusIndicator: 'ready',
-    statusText: 'Ready'
-  },
-  // 原有的 API Tools
-  {
-    id: 'check-duplicate',
-    name: '测试剧集是否重复',
-    description: '检测集数据中是否存在重复的drama_intld',
-    iconName: 'Connection',
-    iconColor: '#3b82f6',
-    iconBg: 'rgba(59, 130, 246, 0.1)',
-    statusIndicator: 'toggle-off'
-  },
-  {
-    id: 'check-online',
-    name: '测试剧集是否上架和隐藏',
-    description: '检查剧集的online和is_hidden状态',
-    iconName: 'Switch',
-    iconColor: '#8b5cf6',
-    iconBg: 'rgba(139, 92, 246, 0.1)',
-    statusIndicator: 'toggle-on'
-  },
-  {
-    id: 'check-parent',
-    name: '测试剧集是否母剧去重',
-    description: '检测母剧的去重情况',
-    iconName: 'Filter',
-    iconColor: '#10b981',
-    iconBg: 'rgba(16, 185, 129, 0.1)',
-    statusIndicator: 'ready',
-    statusText: 'Ready'
+    statusIndicator: 'ready'
   },
   {
     id: 'delete-account',
@@ -170,19 +102,81 @@ const apiTools = ref<ToolDef[]>([
     iconName: 'Delete',
     iconColor: '#ef4444',
     iconBg: 'rgba(239, 68, 68, 0.1)',
-    statusIndicator: 'dots'
+    statusIndicator: 'ready'
+  },
+  {
+    id: 'push-test',
+    name: '推送测试',
+    description: '测试应用推送功能',
+    iconName: 'Promotion',
+    iconColor: '#f59e0b',
+    iconBg: 'rgba(245, 158, 11, 0.1)',
+    statusIndicator: 'on-hold'
+  },
+  {
+    id: 'rest-client',
+    name: 'REST Client',
+    description: 'Fast API debugging and testing utility.',
+    iconName: 'Setting',
+    iconColor: '#6366f1',
+    iconBg: 'rgba(99, 102, 241, 0.1)',
+    statusIndicator: 'on-hold'
+  },
+  {
+    id: 'cypress-runner',
+    name: 'Cypress Runner',
+    description: 'Execute headless UI automation suites.',
+    iconName: 'VideoPlay',
+    iconColor: '#ef4444',
+    iconBg: 'rgba(239, 68, 68, 0.1)',
+    statusIndicator: 'on-hold'
+  },
+  {
+    id: 'load-generator',
+    name: 'Load Generator',
+    description: 'Simulate concurrent traffic for stress tests.',
+    iconName: 'Loading',
+    iconColor: '#3b82f6',
+    iconBg: 'rgba(59, 130, 246, 0.1)',
+    statusIndicator: 'on-hold'
+  },
+  {
+    id: 'query-optimizer',
+    name: 'Query Optimizer',
+    description: 'Analyze and refactor slow SQL queries.',
+    iconName: 'Document',
+    iconColor: '#f59e0b',
+    iconBg: 'rgba(245, 158, 11, 0.1)',
+    statusIndicator: 'on-hold'
+  },
+  {
+    id: 'check-duplicate',
+    name: '测试剧集是否重复',
+    description: '检测集数据中是否存在重复的drama_intld',
+    iconName: 'Connection',
+    iconColor: '#3b82f6',
+    iconBg: 'rgba(59, 130, 246, 0.1)',
+    statusIndicator: 'on-hold'
+  },
+  {
+    id: 'check-online',
+    name: '测试剧集是否上架和隐藏',
+    description: '检查剧集的online和is_hidden状态',
+    iconName: 'Switch',
+    iconColor: '#8b5cf6',
+    iconBg: 'rgba(139, 92, 246, 0.1)',
+    statusIndicator: 'on-hold'
+  },
+  {
+    id: 'check-parent',
+    name: '测试剧集是否母剧去重',
+    description: '检测母剧的去重情况',
+    iconName: 'Filter',
+    iconColor: '#10b981',
+    iconBg: 'rgba(16, 185, 129, 0.1)',
+    statusIndicator: 'on-hold'
   }
 ])
-
-const pushTool = ref<ToolDef>({
-  id: 'push-test',
-  name: '推送测试',
-  description: '测试应用推送功能',
-  iconName: 'Promotion',
-  iconColor: '#f59e0b',
-  iconBg: 'rgba(245, 158, 11, 0.1)',
-  extra: 'Push Service'
-})
 
 const perfTools = ref<ToolDef[]>([
   {
@@ -272,21 +266,11 @@ const perfTools = ref<ToolDef[]>([
           <p class="tool-card__desc">{{ tool.description }}</p>
           <div class="tool-card__footer">
             <div class="status-indicator">
-              <span v-if="tool.statusIndicator === 'toggle-off'" class="toggle-icon toggle-off">
-                <span class="toggle-track"><span class="toggle-knob"></span></span>
-                <span class="toggle-track"><span class="toggle-knob"></span></span>
-              </span>
-              <span v-else-if="tool.statusIndicator === 'toggle-on'" class="toggle-icon toggle-on">
-                <span class="toggle-track active"><span class="toggle-knob on"></span></span>
-                <span class="toggle-track"><span class="toggle-knob"></span></span>
-              </span>
-              <span v-else-if="tool.statusIndicator === 'ready'" class="ready-text">
+              <span v-if="tool.statusIndicator === 'ready'" class="ready-text">
                 Ready
               </span>
-              <span v-else-if="tool.statusIndicator === 'dots'" class="status-dots">
-                <span class="dot dot--red"></span>
-                <span class="dot dot--gray"></span>
-                <span class="dot dot--gray"></span>
+              <span v-else-if="tool.statusIndicator === 'on-hold'" class="on-hold-text">
+                On hold
               </span>
             </div>
             <a href="#" class="open-link" @click.prevent="handleLaunch(tool)">Open</a>
@@ -294,24 +278,6 @@ const perfTools = ref<ToolDef[]>([
         </div>
       </div>
 
-      <!-- 推送测试 — 单卡片 -->
-      <div class="card-grid card-grid--4" style="margin-top: 16px;">
-        <div class="tool-card">
-          <div class="tool-card__top">
-            <div class="tool-card__icon" :style="{ background: pushTool.iconBg }">
-              <el-icon :size="20" :color="pushTool.iconColor">
-                <component :is="Icons[pushTool.iconName as keyof typeof Icons]" />
-              </el-icon>
-            </div>
-          </div>
-          <h3 class="tool-card__name">{{ pushTool.name }}</h3>
-          <p class="tool-card__desc">{{ pushTool.description }}</p>
-          <div class="tool-card__footer">
-            <span class="extra-text">{{ pushTool.extra }}</span>
-            <a href="#" class="open-link" @click.prevent="handleLaunch(pushTool)">Open</a>
-          </div>
-        </div>
-      </div>
     </div>
  
     <!-- ========== Test Process Tools ========== -->
@@ -597,9 +563,19 @@ const perfTools = ref<ToolDef[]>([
 
 /* Ready 文本 */
 .ready-text {
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 700;
   color: #10b981;
-  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.on-hold-text {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ef4444;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 /* ==================== 状态指示器 ==================== */

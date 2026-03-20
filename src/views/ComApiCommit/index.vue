@@ -22,6 +22,16 @@ const toolName = ref((route.query.name as string) || '测试剧集是否重复')
 const toolDesc = ref((route.query.desc as string) || '检测剧集数据中是否存在重复的drama_intid')
 const projectName = ref('ShortsWave')
 
+// 协助定位后端地址
+const getBackendHost = () => {
+  return `${window.location.protocol}//${window.location.hostname}:8080`
+}
+
+const getWsBase = () => {
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${protocol}://${window.location.hostname}:8080`
+}
+
 // 是否是剧集播放自检工具
 const isDramaCheck = toolName.value.includes('播放')
 // 是否是删除账号工具
@@ -104,7 +114,7 @@ const handleAccountDelete = async (token: string, originalHeaders: Record<string
   scrollToBottom()
 
   try {
-    const response = await fetch('http://localhost:8080/api/proxy', {
+    const response = await fetch(`${getBackendHost()}/api/proxy`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -188,7 +198,7 @@ const startExecution = async () => {
     scrollToBottom()
     
     try {
-      const response = await fetch('http://localhost:8080/api/proxy', {
+      const response = await fetch(`${getBackendHost()}/api/proxy`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -278,7 +288,7 @@ const startExecution = async () => {
     dramaListUrl: profile.dramaListUrl
   }).toString()
 
-  ws = new WebSocket(`ws://localhost:8080/api/ws/k6?${query}`)
+  ws = new WebSocket(`${getWsBase()}/api/ws/k6?${query}`)
 
   ws.onopen = () => {
     logs.value.push(`[${new Date().toLocaleTimeString()}] WebSocket 连接已建立`)
@@ -307,7 +317,7 @@ const startExecution = async () => {
       
       // 指向特定的剧集检测报告或通用报告
       const reportFile = isDramaCheck ? 'drama_check_report.html' : 'summary.html'
-      const finalReportUrl = `http://localhost:8080/reports/${reportFile}?t=${Date.now()}`
+      const finalReportUrl = `${getBackendHost()}/reports/${reportFile}?t=${Date.now()}`
       
       logs.value.push(`[${new Date().toLocaleTimeString()}] 任务执行完成。`)
       reportUrl.value = finalReportUrl
