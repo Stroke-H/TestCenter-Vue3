@@ -31,6 +31,16 @@ func main() {
 		api.GET("/ws/k6", services.RunK6TestHandler)
 		// Generic HTTP proxy to avoid CORS for external APIs
 		api.POST("/proxy", services.ProxyHandler)
+
+		// Mind Map Processes
+		services.EnsureDataDir()
+		processes := api.Group("/processes")
+		{
+			processes.GET("", services.ListProcessesHandler)
+			processes.GET("/:id", services.GetProcessHandler)
+			processes.POST("", services.SaveProcessHandler)
+			processes.DELETE("/:id", services.DeleteProcessHandler)
+		}
 	}
 
 	log.Println("TestCenter Go Backend starting on :8080")

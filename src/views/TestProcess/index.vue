@@ -15,6 +15,11 @@ const props = defineProps<{
 const router = useRouter()
 const processName = ref('未命名流程')
 
+// 协助定位后端地址
+const getBackendHost = () => {
+  return `${window.location.protocol}//${window.location.hostname}:8080`
+}
+
 // ===== 核心数据 =====
 const treeData = ref<MindNode>({
   id: 'root',
@@ -147,32 +152,27 @@ const handleNodeDrop = (targetId: string) => {
 }
 
 // ===== 持久化逻辑 =====
-const LIST_STORAGE_KEY = 'test_process_list_v4'
 
-const loadProcess = () => {
+async function loadProcess() {
   if (!props.id) {
-    // 只有在数据为空时才初始化默认名称
     if (processName.value === '未命名流程') {
       processName.value = '新业务流程-' + new Date().toLocaleDateString()
     }
     return
   }
 
-  const saved = localStorage.getItem(LIST_STORAGE_KEY)
-  if (saved) {
-    try {
-      const list: ProcessItem[] = JSON.parse(saved)
-      const item = list.find(l => l.id === props.id)
-      if (item) {
-        processName.value = item.name
-        treeData.value = JSON.parse(JSON.stringify(item.data))
-      } else {
-        ElMessage.error('该流程不存在')
-        router.push({ name: 'TestProcessList' })
-      }
-    } catch (e) {
-      console.error('Failed to load process', e)
+  try {
+    const response = await fetch(`${getBackendHost()}/api/processes/${props.id}`)
+    if (response.ok) {
+      const item: ProcessItem = await response.json()
+      processName.value = item.name
+      treeData.value = JSON.parse(JSON.stringify(item.data))
+    } else {
+      ElMessage.error('该流程不存在')
+      router.push({ name: 'TestProcessList' })
     }
+  } catch (e) {
+    ElMessage.error('加载失败，请检查网络')
   }
 }
 
@@ -181,38 +181,37 @@ watch(() => props.id, () => {
   loadProcess()
 }, { immediate: true })
 
-const handleSave = () => {
-  const saved = localStorage.getItem(LIST_STORAGE_KEY)
-  let list: ProcessItem[] = []
-  if (saved) {
-    try {
-      list = JSON.parse(saved)
-    } catch (e) {}
-  }
-
+const handleSave = async () => {
   const now = new Date().toLocaleString()
   const dataToSave = JSON.parse(JSON.stringify(treeData.value))
-
-  if (props.id) {
-    const index = list.findIndex(l => l.id === props.id)
-    if (index !== -1 && list[index]) {
-      list[index].name = processName.value
-      list[index].data = dataToSave
-      list[index].updatedAt = now
-    }
-  } else {
-    const newId = 'proc-' + Math.random().toString(36).substring(2, 9)
-    list.push({
-      id: newId,
-      name: processName.value,
-      data: dataToSave,
-      updatedAt: now
-    })
-    router.replace({ name: 'TestProcessEditor', params: { id: newId } })
+  
+  const idToSave = props.id || 'proc-' + Math.random().toString(36).substring(2, 9)
+  
+  const payload: ProcessItem = {
+    id: idToSave,
+    name: processName.value,
+    data: dataToSave,
+    updatedAt: now
   }
 
-  localStorage.setItem(LIST_STORAGE_KEY, JSON.stringify(list))
-  ElMessage.success('保存成功')
+  try {
+    const response = await fetch(`${getBackendHost()}/api/processes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    
+    if (response.ok) {
+      ElMessage.success('保存成功')
+      if (!props.id) {
+        router.replace({ name: 'TestProcessEditor', params: { id: idToSave } })
+      }
+    } else {
+      ElMessage.error('保存失败')
+    }
+  } catch (e) {
+    ElMessage.error('网络错误，保存失败')
+  }
 }
 
 // ===== 节点操作 =====

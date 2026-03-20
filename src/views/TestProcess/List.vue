@@ -11,44 +11,54 @@ const router = useRouter()
 const searchQuery = ref('')
 const processList = ref<ProcessItem[]>([])
 
-const OLD_STORAGE_KEY = 'test_process_mindmap_v3'
+// 协助定位后端地址
+const getBackendHost = () => {
+  return `${window.location.protocol}//${window.location.hostname}:8080`
+}
+
 const LIST_STORAGE_KEY = 'test_process_list_v4'
 
-const loadList = () => {
+// 加载后台数据
+const loadList = async () => {
+  try {
+    const response = await fetch(`${getBackendHost()}/api/processes`)
+    if (response.ok) {
+      processList.value = await response.json()
+    }
+  } catch (e) {
+    ElMessage.error('无法连接到后台服务')
+  }
+}
+
+// 迁移逻辑：将本地 localStorage 数据同步到后台
+const migrateToBackend = async () => {
   const saved = localStorage.getItem(LIST_STORAGE_KEY)
-  if (saved) {
-    try {
-      processList.value = JSON.parse(saved)
-    } catch (e) {
-      console.error('Failed to load process list', e)
-    }
-  } else {
-    // 尝试迁移老数据
-    migrateOldData()
-  }
-}
+  if (!saved) return
 
-const migrateOldData = () => {
-  const oldData = localStorage.getItem(OLD_STORAGE_KEY)
-  if (oldData) {
-    try {
-      const mindmap = JSON.parse(oldData)
-      const newItem: ProcessItem = {
-        id: 'legacy-' + Math.random().toString(36).substring(2, 9),
-        name: '迁移的旧流程',
-        data: mindmap,
-        updatedAt: new Date().toLocaleString()
+  try {
+    const localList: ProcessItem[] = JSON.parse(saved)
+    if (localList.length === 0) return
+
+    // 如果后台目前没数据，则尝试同步
+    if (processList.value.length === 0) {
+      console.log('Migrating local data to backend...')
+      for (const item of localList) {
+        await fetch(`${getBackendHost()}/api/processes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item)
+        })
       }
-      processList.value = [newItem]
-      saveList()
-    } catch (e) {
-      console.error('Migration failed', e)
+      // 同步完后重新加载
+      await loadList()
+      ElMessage.success('已自动同步本地数据到云端')
+      // 标记已迁移
+      localStorage.setItem(LIST_STORAGE_KEY + '_migrated', saved)
+      localStorage.removeItem(LIST_STORAGE_KEY)
     }
+  } catch (e) {
+    console.error('Migration failed', e)
   }
-}
-
-const saveList = () => {
-  localStorage.setItem(LIST_STORAGE_KEY, JSON.stringify(processList.value))
 }
 
 const handleCreate = () => {
@@ -59,20 +69,29 @@ const handleEdit = (id: string) => {
   router.push({ name: 'TestProcessEditor', params: { id } })
 }
 
-const handleDelete = (index: number) => {
+const handleDelete = (id: string) => {
   ElMessageBox.confirm('确定要删除这个流程吗？此操作不可逆。', '警告', {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
     type: 'warning'
-  }).then(() => {
-    processList.value.splice(index, 1)
-    saveList()
-    ElMessage.success('删除成功')
+  }).then(async () => {
+    try {
+      const response = await fetch(`${getBackendHost()}/api/processes/${id}`, {
+        method: 'DELETE'
+      })
+      if (response.ok) {
+        ElMessage.success('删除成功')
+        loadList()
+      }
+    } catch (e) {
+      ElMessage.error('删除失败')
+    }
   })
 }
 
-onMounted(() => {
-  loadList()
+onMounted(async () => {
+  await loadList()
+  await migrateToBackend()
 })
 
 const filteredList = ref<ProcessItem[]>([])
@@ -112,7 +131,7 @@ watch([processList, searchQuery], () => {
 
     <!-- 列表区域 -->
     <div v-if="filteredList.length > 0" class="process-grid">
-      <div v-for="(item, index) in filteredList" :key="item.id" class="process-card">
+      <div v-for="item in filteredList" :key="item.id" class="process-card">
         <div class="card-content" @click="handleEdit(item.id)">
           <div class="card-header">
             <h3 class="process-name">{{ item.name }}</h3>
@@ -126,7 +145,7 @@ watch([processList, searchQuery], () => {
         </div>
         <div class="card-actions">
           <el-button link type="primary" :icon="Edit" @click="handleEdit(item.id)">编辑</el-button>
-          <el-button link type="danger" :icon="Delete" @click="handleDelete(index)">删除</el-button>
+          <el-button link type="danger" :icon="Delete" @click="handleDelete(item.id)">删除</el-button>
         </div>
       </div>
     </div>
