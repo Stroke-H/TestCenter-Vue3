@@ -1,0 +1,7 @@
+{
+    "vus": 30,
+    "maxDuration": "10m",
+    "testEnv": "test",
+    "timeout": "15s",
+    "reportTitle": "Drama Detection Report (核心剧集章节检测报表)"
+}
