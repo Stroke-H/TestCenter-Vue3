@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"testcenter-server/feishu"
 	"testcenter-server/services"
 
 	"github.com/gin-contrib/cors"
@@ -21,7 +22,6 @@ func main() {
 	r.Use(cors.New(config))
 
 	// Serve static files for K6 reports
-	// We will map the /reports route to the local ../k6-scripts/reports directory
 	r.StaticFS("/reports", http.Dir("../k6-scripts/reports"))
 
 	// API Routes
@@ -42,6 +42,9 @@ func main() {
 			processes.DELETE("/:id", services.DeleteProcessHandler)
 		}
 	}
+
+	// Initialize Feishu Bot Bridge
+	feishu.InitFeishuBridge(r)
 
 	log.Println("TestCenter Go Backend starting on :8080")
 	if err := r.Run(":8080"); err != nil {
