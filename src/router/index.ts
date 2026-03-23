@@ -40,6 +40,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/TestProcess/index.vue'),
         meta: { title: '编辑流程', hidden: true },
         props: true
+      },
+      {
+        path: 'acceptance_reports',
+        name: 'AcceptanceReport',
+        component: () => import('@/views/AcceptanceReport/index.vue'),
+        meta: { title: '验收报告', icon: 'Monitor' }
       }
     ]
   }

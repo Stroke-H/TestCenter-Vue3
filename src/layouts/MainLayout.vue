@@ -32,7 +32,7 @@ const menuItems = [
   { path: '/dashboard', title: '仪表盘', icon: Odometer },
   { path: '/reports', title: '测试报告', icon: DataAnalysis },
   { path: '/testcases', title: '用例管理', icon: Document },
-  { path: '/tasks', title: '任务中心', icon: Monitor },
+  { path: '/acceptance_reports', title: '验收报告', icon: Monitor },
   { path: '/settings', title: '系统设置', icon: Setting }
 ]
 
