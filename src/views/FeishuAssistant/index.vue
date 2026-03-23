@@ -1,338 +1,398 @@
-<template>
-  <div class="feishu-assistant">
-    <!-- 头部信息 -->
-    <div class="header-section">
-      <div class="title-area">
-        <h1 class="page-title">Feishu Assistant</h1>
-        <el-breadcrumb separator="/">
-          <el-breadcrumb-item :to="{ path: '/' }">Home</el-breadcrumb-item>
-          <el-breadcrumb-item>飞书助手</el-breadcrumb-item>
-        </el-breadcrumb>
-      </div>
-      <div class="action-area">
-        <el-button type="primary" :icon="ChatRound" round @click="handleConfig">
-          Bot Config
-        </el-button>
-      </div>
-    </div>
-
-    <!-- 统计指标 (Mock 数据) -->
-    <el-row :gutter="24" class="stat-cards">
-      <el-col :span="8">
-        <el-card shadow="hover" class="stat-card blue-card">
-          <div class="stat-content">
-            <div class="stat-info">
-              <span class="stat-label">Total Messages</span>
-              <span class="stat-value"><strong>{{ mockStats.totalMessages }}</strong></span>
-            </div>
-            <div class="stat-icon-wrapper">
-              <el-icon :size="24"><ChatLineSquare /></el-icon>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-      
-      <el-col :span="8">
-        <el-card shadow="hover" class="stat-card green-card">
-          <div class="stat-content">
-            <div class="stat-info">
-              <span class="stat-label">Active Users</span>
-              <span class="stat-value"><strong>{{ mockStats.activeUsers }}</strong></span>
-            </div>
-            <div class="stat-icon-wrapper">
-              <el-icon :size="24"><User /></el-icon>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-
-      <el-col :span="8">
-        <el-card shadow="hover" class="stat-card purple-card">
-          <div class="stat-content">
-            <div class="stat-info">
-              <span class="stat-label">Bot Status</span>
-              <span class="stat-value"><strong>{{ mockStats.status }}</strong></span>
-            </div>
-            <div class="stat-icon-wrapper">
-              <el-icon :size="24"><Connection /></el-icon>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- 业务数据展示区 -->
-    <el-row :gutter="24" class="data-view-section">
-      <!-- 左侧：最新消息列表 (2/3 宽度) -->
-      <el-col :span="16">
-        <el-card shadow="never" class="table-card">
-          <template #header>
-            <div class="card-header-flex">
-              <span class="card-title">Recent Messages</span>
-              <div class="header-filters">
-                <el-input 
-                  v-model="searchQuery" 
-                  placeholder="Search contents..." 
-                  prefix-icon="Search"
-                  style="width: 200px" 
-                />
-              </div>
-            </div>
-          </template>
-          
-          <el-table :data="mockMessages" stripe style="width: 100%">
-            <el-table-column label="Sender" min-width="120">
-              <template #default="scope">
-                <div class="sender-info">
-                  <el-avatar :size="30" :style="getAvatarStyle(scope.row.senderName)">
-                    {{ scope.row.senderName.charAt(0) }}
-                  </el-avatar>
-                  <span class="sender-name">{{ scope.row.senderName }}</span>
-                </div>
-              </template>
-            </el-table-column>
-
-            <el-table-column prop="msgType" label="Type" width="100">
-              <template #default="scope">
-                <el-tag :type="getTypeStyle(scope.row.msgType)" size="small" round>
-                  {{ scope.row.msgType }}
-                </el-tag>
-              </template>
-            </el-table-column>
-
-            <el-table-column prop="content" label="Content" min-width="250" show-overflow-tooltip />
-            
-            <el-table-column prop="time" label="Time" width="150" />
-            
-            <el-table-column label="Action" width="100" fixed="right">
-              <template #default="scope">
-                <el-button link type="primary" @click="handleReply(scope.row)">Reply</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-
-      <!-- 右侧：快捷操作或活跃用户 (1/3 宽度) -->
-      <el-col :span="8">
-        <el-card shadow="never" class="side-card active-users-card">
-          <template #header>
-            <div class="card-header-flex">
-              <span class="card-title">Top Active Users</span>
-            </div>
-          </template>
-          
-          <div class="user-list">
-            <div v-for="(user, index) in mockActiveUsers" :key="index" class="user-item">
-              <div class="user-meta">
-                <el-avatar :size="32" :style="getAvatarStyle(user.name)">
-                  {{ user.name.charAt(0) }}
-                </el-avatar>
-                <div class="user-details">
-                  <div class="user-name">{{ user.name }}</div>
-                  <div class="user-dept">{{ user.dept }}</div>
-                </div>
-              </div>
-              <div class="user-count">
-                <el-badge :value="user.msgCount" class="count-badge" type="primary" />
-              </div>
-            </div>
-          </div>
-        </el-card>
-
-        <!-- 模拟发消息表单 (未来替换为真实 API) -->
-        <el-card shadow="never" class="side-card quick-reply-card" style="margin-top: 24px;">
-          <template #header>
-            <div class="card-header-flex">
-              <span class="card-title">Quick Reply Test</span>
-            </div>
-          </template>
-          <div class="quick-reply-form">
-            <el-input 
-              v-model="replyContent" 
-              type="textarea" 
-              :rows="3" 
-              placeholder="Enter message to broadcast or test..." 
-            />
-            <el-button type="primary" style="margin-top: 12px; width: 100%" @click="sendMockReply">
-              Send Message
-            </el-button>
-          </div>
-        </el-card>
-
-      </el-col>
-    </el-row>
-
-  </div>
-</template>
-
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ChatRound, ChatLineSquare, User, Connection, Search } from '@element-plus/icons-vue'
+import * as Icons from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
-// State
-const searchQuery = ref('')
+// --- Types ---
+interface ChatMessage {
+  id: string
+  sender: 'user' | 'bot'
+  senderName: string
+  msgType: 'text' | 'post' | 'image' | 'file'
+  content: string
+  time: string
+}
+
+interface SessionRecord {
+  id: string
+  userName: string
+  status: 'active' | 'ended'
+  msgCount: number
+  startTime: string
+  lastActiveTime: string
+  summary: string
+  messages: ChatMessage[]
+}
+
+// --- Mock Data ---
+const tools = ref([
+  {
+    id: 'total-sessions',
+    name: 'Total Sessions',
+    value: '142',
+    iconName: 'ChatLineSquare',
+    iconColor: '#3b82f6',
+    iconBg: 'rgba(59, 130, 246, 0.1)'
+  },
+  {
+    id: 'active-users',
+    name: 'Active Users',
+    value: '45',
+    iconName: 'User',
+    iconColor: '#10b981',
+    iconBg: 'rgba(16, 185, 129, 0.1)'
+  },
+  {
+    id: 'bot-status',
+    name: 'Bot Status',
+    value: 'Online',
+    iconName: 'Connection',
+    iconColor: '#6366f1',
+    iconBg: 'rgba(99, 102, 241, 0.1)'
+  },
+  {
+    id: 'bot-config',
+    name: 'Configuration',
+    value: 'Settings',
+    iconName: 'Setting',
+    iconColor: '#f59e0b',
+    iconBg: 'rgba(245, 158, 11, 0.1)'
+  }
+])
+
+const sessions = ref<SessionRecord[]>([
+  {
+    id: 'sess-001',
+    userName: 'Minghong Huang',
+    status: 'active',
+    msgCount: 3,
+    startTime: 'Today 10:20 AM',
+    lastActiveTime: 'Today 10:25 AM',
+    summary: 'Querying streaming media playback API performance.',
+    messages: [
+      { id: 'm1', sender: 'user', senderName: 'Minghong Huang', msgType: 'text', content: 'Help me check the latest K6 report.', time: '10:20 AM' },
+      { id: 'm2', sender: 'bot', senderName: 'Feishu Bot', msgType: 'text', content: 'Sure. Looking up the latest K6 playback test results...', time: '10:20 AM' },
+      { id: 'm3', sender: 'user', senderName: 'Minghong Huang', msgType: 'text', content: 'Thanks, what is the P95 latency?', time: '10:25 AM' }
+    ]
+  },
+  {
+    id: 'sess-002',
+    userName: 'Alice Wong',
+    status: 'ended',
+    msgCount: 6,
+    startTime: 'Yesterday 14:00 PM',
+    lastActiveTime: 'Yesterday 14:15 PM',
+    summary: 'Troubleshooting test environment login issue.',
+    messages: [
+      { id: 'm4', sender: 'user', senderName: 'Alice Wong', msgType: 'text', content: 'I cannot login to test env.', time: '14:00 PM' },
+      { id: 'm5', sender: 'bot', senderName: 'Feishu Bot', msgType: 'text', content: 'It seems the auth server was restarting. Please try again now.', time: '14:02 PM' },
+      { id: 'm6', sender: 'user', senderName: 'Alice Wong', msgType: 'text', content: 'Works now, thanks.', time: '14:10 PM' },
+      { id: 'm7', sender: 'user', senderName: 'Alice Wong', msgType: 'text', content: '会话结束', time: '14:15 PM' },
+      { id: 'm8', sender: 'bot', senderName: 'Feishu Bot', msgType: 'text', content: '会话已结束。', time: '14:15 PM' }
+    ]
+  }
+])
+
+// --- State ---
+const drawerVisible = ref(false)
+const selectedSession = ref<SessionRecord | null>(null)
 const replyContent = ref('')
 
-// Mock Data
-const mockStats = ref({
-  totalMessages: 1284,
-  activeUsers: 45,
-  status: 'Online'
-})
-
-const mockMessages = ref([
-  { id: 1, senderName: 'Alice Wong', msgType: 'text', content: 'Can you help me check the server status?', time: '10:23 AM' },
-  { id: 2, senderName: 'Bob Chen', msgType: 'post', content: '[Rich Text] Bug report for the new landing page.', time: '09:45 AM' },
-  { id: 3, senderName: 'Charlie Liu', msgType: 'image', content: '[Image: dashboard_error.png]', time: '09:12 AM' },
-  { id: 4, senderName: 'Diana Ma', msgType: 'text', content: 'LGTM!', time: 'Yesterday' },
-  { id: 5, senderName: 'Alice Wong', msgType: 'text', content: 'Thanks, the fix works perfectly.', time: 'Yesterday' }
-])
-
-const mockActiveUsers = ref([
-  { name: 'Alice Wong', dept: 'QA Engineering', msgCount: 42 },
-  { name: 'Bob Chen', dept: 'Frontend Team', msgCount: 38 },
-  { name: 'Diana Ma', dept: 'Product Manager', msgCount: 21 },
-  { name: 'Charlie Liu', dept: 'DevOps', msgCount: 15 },
-  { name: 'Eve Zhang', dept: 'Backend Team', msgCount: 9 }
-])
-
-// Handlers
-const handleConfig = () => {
-  ElMessage.info('Bot configuration dialog will open here.')
+// --- Handlers ---
+const handleToolClick = (toolId: string) => {
+  if (toolId === 'bot-config') {
+    ElMessage.info('Opening Bot Configuration...')
+  }
 }
 
-const handleReply = (row: any) => {
-  ElMessage.success(`Replying to ${row.senderName}... (Not implemented yet)`)
+const openSessionDetail = (row: SessionRecord) => {
+  selectedSession.value = row
+  drawerVisible.value = true
 }
 
-const sendMockReply = () => {
+const sendReply = () => {
   if (!replyContent.value) {
-    ElMessage.warning('Please enter a message first.')
+    ElMessage.warning('Empty message.')
     return
   }
-  ElMessage.success('Message sent! (Mock implementation)')
-  replyContent.value = ''
+  if (selectedSession.value) {
+    selectedSession.value.messages.push({
+      id: `m${Date.now()}`,
+      sender: 'bot',
+      senderName: 'Feishu Bot',
+      msgType: 'text',
+      content: replyContent.value,
+      time: 'Just now'
+    })
+    replyContent.value = ''
+    ElMessage.success('Reply sent (Mock)')
+  }
 }
 
-// Helpers
+// --- Helpers ---
 const getAvatarStyle = (name: string) => {
   const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#8E44AD', '#3498DB']
-  const charCode = name.charCodeAt(0)
+  const charCode = name.charCodeAt(0) || 0
   return {
     backgroundColor: colors[charCode % colors.length],
     color: '#fff'
   }
 }
 
-const getTypeStyle = (type: string) => {
-  switch (type) {
-    case 'text': return 'primary'
-    case 'post': return 'success'
-    case 'image': return 'warning'
-    case 'file': return 'info'
-    default: return 'info'
-  }
+const getStatusType = (status: string) => {
+  return status === 'active' ? 'success' : 'info'
 }
 </script>
 
+<template>
+  <div class="dashboard">
+    <!-- ========== Overview Cards ========== -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title-row">
+          <div class="section-icon section-icon--indigo">
+            <el-icon :size="14"><component :is="Icons.DataBoard" /></el-icon>
+          </div>
+          <h2 class="section-title">Bot Subsystem Overview</h2>
+        </div>
+      </div>
+
+      <div class="card-grid card-grid--4">
+        <div
+          v-for="tool in tools"
+          :key="tool.id"
+          class="tool-card"
+          @click="handleToolClick(tool.id)"
+          :style="{ cursor: tool.id === 'bot-config' ? 'pointer' : 'default' }"
+        >
+          <div class="tool-card__top">
+            <div class="tool-card__icon" :style="{ background: tool.iconBg }">
+              <el-icon :size="20" :color="tool.iconColor">
+                <component :is="Icons[tool.iconName as keyof typeof Icons]" />
+              </el-icon>
+            </div>
+          </div>
+          <h3 class="tool-card__name">{{ tool.name }}</h3>
+          <div class="tool-card__footer">
+            <span class="tool-card__value" :style="{ color: tool.iconColor }">{{ tool.value }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== Session Cycles ========== -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title-row">
+          <div class="section-icon section-icon--blue">
+            <el-icon :size="14"><component :is="Icons.ChatDotRound" /></el-icon>
+          </div>
+          <h2 class="section-title">Session Cycles (Recent Messages)</h2>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <el-table 
+          :data="sessions" 
+          style="width: 100%" 
+          row-class-name="session-row"
+          @row-click="openSessionDetail"
+        >
+          <el-table-column label="User" width="200">
+            <template #default="scope">
+              <div class="sender-info">
+                <el-avatar :size="30" :style="getAvatarStyle(scope.row.userName)">
+                  {{ scope.row.userName.charAt(0) }}
+                </el-avatar>
+                <span class="sender-name">{{ scope.row.userName }}</span>
+              </div>
+            </template>
+          </el-table-column>
+
+          <el-table-column prop="status" label="State" width="100">
+            <template #default="scope">
+              <el-tag :type="getStatusType(scope.row.status)" size="small" round>
+                {{ scope.row.status.toUpperCase() }}
+              </el-tag>
+            </template>
+          </el-table-column>
+
+          <el-table-column prop="msgCount" label="Msgs" width="80" align="center" />
+
+          <el-table-column prop="summary" label="Latest Activity Summary" min-width="250" show-overflow-tooltip />
+
+          <el-table-column prop="lastActiveTime" label="Last Active Time" width="180" />
+        </el-table>
+      </div>
+    </div>
+
+    <!-- ========== Chat Drawer ========== -->
+    <el-drawer
+      v-model="drawerVisible"
+      :title="`Session with ${selectedSession?.userName}`"
+      size="450px"
+      direction="rtl"
+      destroy-on-close
+    >
+      <div class="chat-drawer-container">
+        <div class="chat-messages">
+          <div 
+            v-for="msg in selectedSession?.messages" 
+            :key="msg.id" 
+            :class="['chat-bubble-wrapper', msg.sender === 'bot' ? 'right' : 'left']"
+          >
+            <!-- User Avatar -->
+            <el-avatar v-if="msg.sender === 'user'" :size="32" :style="getAvatarStyle(msg.senderName)" class="chat-avatar">
+              {{ msg.senderName.charAt(0) }}
+            </el-avatar>
+
+            <!-- Message Content -->
+            <div class="chat-bubble-content">
+              <span class="chat-time">{{ msg.time }}</span>
+              <div :class="['chat-bubble', msg.sender === 'bot' ? 'bg-bot' : 'bg-user']">
+                {{ msg.content }}
+              </div>
+            </div>
+            
+            <!-- Bot Avatar -->
+            <el-avatar v-if="msg.sender === 'bot'" :size="32" style="background:#6366f1; color:#fff;" class="chat-avatar">
+              🤖
+            </el-avatar>
+          </div>
+        </div>
+
+        <!-- Reply Area -->
+        <div class="chat-reply-area" v-if="selectedSession?.status === 'active'">
+          <el-input 
+            v-model="replyContent" 
+            type="textarea" 
+            :rows="3" 
+            placeholder="Type a reply to send to Feishu..." 
+            resize="none"
+          />
+          <div class="reply-actions">
+            <el-button type="primary" size="default" @click="sendReply">Send</el-button>
+          </div>
+        </div>
+        <div class="chat-ended-notice" v-else>
+          This session has been ended.
+        </div>
+      </div>
+    </el-drawer>
+
+  </div>
+</template>
+
 <style scoped>
-.feishu-assistant {
-  padding: 24px;
-  background-color: #f7f9fa;
-  min-height: calc(100vh - 60px);
-}
-
-/* Header Section */
-.header-section {
+/* ==================== Container ==================== */
+.dashboard {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-}
-
-.title-area .page-title {
-  margin: 0 0 8px 0;
-  font-size: 24px;
-  font-weight: 600;
-  color: #1f2329;
-}
-
-/* Stat Cards */
-.stat-cards {
-  margin-bottom: 24px;
-}
-
-.stat-card {
-  border-radius: 12px;
-  border: none;
-  transition: transform 0.2s, box-shadow 0.2s;
-}
-
-.stat-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08) !important;
-}
-
-.stat-content {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: 32px;
   padding: 8px 0;
 }
 
-.stat-info {
+/* ==================== Sections ==================== */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+
+.section-icon--blue { background: #3b82f6; }
+.section-icon--indigo { background: #6366f1; }
+
+.section-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 0;
+  letter-spacing: -0.2px;
+}
+
+/* ==================== Card Grid (Dashboard Layout) ==================== */
+.card-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.card-grid--4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.tool-card {
+  background: #ffffff;
+  border: 1px solid #f0f0f0;
+  border-radius: 14px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
+  gap: 16px;
+  transition: box-shadow 0.25s ease, transform 0.2s ease;
+  position: relative;
 }
 
-.stat-label {
-  font-size: 14px;
-  color: #8f959e;
-  margin-bottom: 8px;
+.tool-card:hover {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
+  transform: translateY(-2px);
 }
 
-.stat-value {
-  font-size: 28px;
-  color: #1f2329;
-  line-height: 1;
+.tool-card__top {
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-start;
 }
 
-.stat-icon-wrapper {
-  width: 48px;
-  height: 48px;
+.tool-card__icon {
+  width: 42px;
+  height: 42px;
   border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
-/* Color Themes for Cards */
-.blue-card .stat-icon-wrapper { background-color: rgba(64, 158, 255, 0.1); color: #409EFF; }
-.green-card .stat-icon-wrapper { background-color: rgba(103, 194, 58, 0.1); color: #67C23A; }
-.purple-card .stat-icon-wrapper { background-color: rgba(142, 68, 173, 0.1); color: #8E44AD; }
-
-/* Data View Section */
-.data-view-section {
-  margin-bottom: 24px;
-}
-
-.table-card, .side-card {
-  border-radius: 12px;
-  border: 1px solid #ebeef5;
-}
-
-.card-header-flex {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.card-title {
-  font-size: 16px;
+.tool-card__name {
+  font-size: 14px;
   font-weight: 600;
-  color: #1f2329;
+  color: #64748b;
+  margin: 0;
+}
+
+.tool-card__footer {
+  margin-top: auto;
+}
+
+.tool-card__value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ==================== Table Container ==================== */
+.table-container {
+  background: #ffffff;
+  border: 1px solid #f0f0f0;
+  border-radius: 14px;
+  overflow: hidden;
 }
 
 .sender-info {
@@ -346,44 +406,106 @@ const getTypeStyle = (type: string) => {
   color: #333;
 }
 
-/* Side Card: Expected User List */
-.user-list {
+:deep(.session-row) {
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+:deep(.session-row:hover > td.el-table__cell) {
+  background-color: #f8fafc !important;
+}
+
+/* ==================== Chat Drawer ==================== */
+.chat-drawer-container {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  height: 100%;
 }
 
-.user-item {
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: 20px;
+  background-color: #f8fafc;
 }
 
-.user-meta {
+.chat-bubble-wrapper {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 12px;
 }
 
-.user-details {
+.chat-bubble-wrapper.left {
+  justify-content: flex-start;
+}
+
+.chat-bubble-wrapper.right {
+  justify-content: flex-end;
+}
+
+.chat-bubble-content {
   display: flex;
   flex-direction: column;
+  max-width: 70%;
 }
 
-.user-name {
+.chat-bubble-wrapper.left .chat-bubble-content {
+  align-items: flex-start;
+}
+
+.chat-bubble-wrapper.right .chat-bubble-content {
+  align-items: flex-end;
+}
+
+.chat-time {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+.chat-bubble {
+  padding: 10px 14px;
+  border-radius: 12px;
   font-size: 14px;
-  font-weight: 500;
-  color: #1f2329;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
-.user-dept {
-  font-size: 12px;
-  color: #8f959e;
-  margin-top: 2px;
+.bg-user {
+  background-color: #ffffff;
+  color: #1e293b;
+  border: 1px solid #e2e8f0;
+  border-bottom-left-radius: 4px;
 }
 
-:deep(.el-badge__content.is-fixed) {
-  position: static;
-  transform: none;
+.bg-bot {
+  background-color: #e0e7ff;
+  color: #312e81;
+  border: 1px solid #c7d2fe;
+  border-bottom-right-radius: 4px;
+}
+
+.chat-reply-area {
+  padding: 16px 20px;
+  background: #ffffff;
+  border-top: 1px solid #e2e8f0;
+}
+
+.reply-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.chat-ended-notice {
+  padding: 16px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+  background: #f1f5f9;
+  border-top: 1px solid #e2e8f0;
 }
 </style>
