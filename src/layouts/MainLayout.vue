@@ -9,7 +9,7 @@ import {
   Expand,
   Odometer,
   Setting,
-  Document,
+  Service,
   DataAnalysis,
   Monitor
 } from '@element-plus/icons-vue'
@@ -31,7 +31,7 @@ const activeMenu = computed(() => route.path)
 const menuItems = [
   { path: '/dashboard', title: '仪表盘', icon: Odometer },
   { path: '/reports', title: '测试报告', icon: DataAnalysis },
-  { path: '/testcases', title: '用例管理', icon: Document },
+  { path: '/feishu_assistant', title: '飞书助手', icon: Service },
   { path: '/acceptance_reports', title: '验收报告', icon: Monitor },
   { path: '/settings', title: '系统设置', icon: Setting }
 ]

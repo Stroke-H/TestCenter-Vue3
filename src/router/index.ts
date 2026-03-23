@@ -42,6 +42,12 @@ const routes: RouteRecordRaw[] = [
         props: true
       },
       {
+        path: 'feishu_assistant',
+        name: 'FeishuAssistant',
+        component: () => import('@/views/FeishuAssistant/index.vue'),
+        meta: { title: '飞书助手', icon: 'Service' }
+      },
+      {
         path: 'acceptance_reports',
         name: 'AcceptanceReport',
         component: () => import('@/views/AcceptanceReport/index.vue'),
