@@ -1,9 +1,9 @@
 package client
 
 import (
-	"sync"
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	"sync"
 )
 
 var (
@@ -14,7 +14,7 @@ var (
 // InitClient initializes the global Lark client singleton
 func InitClient(appID, appSecret string) {
 	once.Do(func() {
-		larkClient = lark.NewClient(appID, appSecret, 
+		larkClient = lark.NewClient(appID, appSecret,
 			lark.WithLogLevel(larkcore.LogLevelInfo),
 			lark.WithLogReqAtDebug(true),
 		)

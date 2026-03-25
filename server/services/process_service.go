@@ -22,10 +22,10 @@ type MindNode struct {
 
 // ProcessItem 定义了完整的流程记录结构
 type ProcessItem struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Data      MindNode  `json:"data"`
-	UpdatedAt string    `json:"updatedAt"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	Data      MindNode `json:"data"`
+	UpdatedAt string   `json:"updatedAt"`
 }
 
 const dataDir = "./data/processes"

@@ -1,5 +1,19 @@
 # ChangeLog - Test Reports
 
+## 2026-03-24
+
+### Added
+- **AI-Powered Report Assistant**: 实现了基于 AI 简写（如 `swa, 2.58.0`）自动填充复杂报告模版的功能。
+- **Acceptance Data Migration**: 成功从旧版 MySQL 数据库迁移了 50 份历史验收报告及 20 台测试机数据。
+- **Linked Data Models**: 建立了报告、项目代码与测试负责人之间的底层数据关联映射。
+
+## 2026-03-23
+
+### Added
+- **Acceptance Report Center**: 新增“验收报告”核心模块，采用原生 Vue 3 高效重构，取代原始 Mock 页面。
+- **Multi-Dimension Metrics**: 实现了报告总数、今日新增及项目覆盖率等多维度的可视化看板。
+- **Persistence Foundation**: 接入了 JSONL 后端存储，支持报告的实时保存与历史追溯。
+
 ## 2026-03-13
 
 ### Added

@@ -1,0 +1,2 @@
+{"id":"OP_1774405173817668000","tool_name":"delete_account","project":"ShortsWave","env":"test","user_id":"bdf6951adcb7b08c","user_name":"","status":"success","detail":"Account bdf6951adcb7b08c deleted in test env","timestamp":"2026-03-25T10:19:33.817679+08:00"}
+{"id":"OP_1774406245407152000","tool_name":"delete_account","project":"ShortsWave","env":"test","user_id":"e41109636570521b","user_name":"","status":"success","detail":"Account e41109636570521b deleted in test env","timestamp":"2026-03-25T10:37:25.407154+08:00"}

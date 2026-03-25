@@ -55,13 +55,13 @@ func ProxyHandler(c *gin.Context) {
 		if lowerK == "accept-encoding" || lowerK == "content-length" || lowerK == "connection" {
 			continue
 		}
-		
+
 		switch value := v.(type) {
 		case string:
 			httpReq.Header.Set(k, value)
 		}
 	}
-	
+
 	// 针对非 GET 请求设置 Content-Type
 	if method != "GET" {
 		if httpReq.Header.Get("Content-Type") == "" {

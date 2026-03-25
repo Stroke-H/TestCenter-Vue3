@@ -67,10 +67,10 @@ func RunK6TestHandler(c *gin.Context) {
 		prepCmd := exec.Command("node", prepareScriptPath)
 		prepCmd.Env = env
 		prepCmd.Dir = rootDir
-		
+
 		stdoutPipe, _ := prepCmd.StdoutPipe()
 		prepCmd.Stderr = prepCmd.Stdout
-		
+
 		if err := prepCmd.Start(); err != nil {
 			ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\n[❌] 启动数据准备脚本失败: %v", err)))
 			return
@@ -80,7 +80,7 @@ func RunK6TestHandler(c *gin.Context) {
 		for scanner.Scan() {
 			ws.WriteMessage(websocket.TextMessage, []byte(scanner.Text()))
 		}
-		
+
 		if err := prepCmd.Wait(); err != nil {
 			ws.WriteMessage(websocket.TextMessage, []byte("\n[❌] 前置数据准备出现异常，终止后续执行。"))
 			return

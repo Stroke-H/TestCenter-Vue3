@@ -4,6 +4,7 @@
 import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAppStore } from '@/stores'
+import { useAuthStore } from '@/stores/auth'
 import {
   Fold,
   Expand,
@@ -11,7 +12,11 @@ import {
   Setting,
   Service,
   DataAnalysis,
-  Monitor
+  Monitor,
+  UserFilled,
+  SwitchButton,
+  Collection,
+  Iphone
 } from '@element-plus/icons-vue'
 
 // 路由实例
@@ -20,6 +25,9 @@ const router = useRouter()
 const route = useRoute()
 // 应用状态
 const appStore = useAppStore()
+const authStore = useAuthStore()
+
+import GlobalAssistant from '@/components/GlobalAssistant.vue'
 
 // 侧边栏宽度：折叠时 64px，展开时 220px
 const sidebarWidth = computed(() => (appStore.sidebarCollapsed ? '64px' : '220px'))
@@ -33,12 +41,26 @@ const menuItems = [
   { path: '/reports', title: '测试报告', icon: DataAnalysis },
   { path: '/feishu_assistant', title: '飞书助手', icon: Service },
   { path: '/acceptance_reports', title: '验收报告', icon: Monitor },
-  { path: '/settings', title: '系统设置', icon: Setting }
+  { 
+    path: '/settings', 
+    title: '系统设置', 
+    icon: Setting,
+    children: [
+      { path: '/settings/projects', title: '项目代码', icon: Collection },
+      { path: '/settings/devices', title: '测试设备', icon: Iphone }
+    ]
+  }
 ]
 
 // 菜单点击导航
 const handleMenuSelect = (path: string) => {
   router.push(path)
+}
+
+// 退出登录
+const handleLogout = () => {
+  authStore.logout()
+  router.push('/login')
 }
 </script>
 
@@ -70,14 +92,29 @@ const handleMenuSelect = (path: string) => {
         active-text-color="#3b82f6"
         @select="handleMenuSelect"
       >
-        <el-menu-item
-          v-for="item in menuItems"
-          :key="item.path"
-          :index="item.path"
-        >
-          <el-icon><component :is="item.icon" /></el-icon>
-          <template #title>{{ item.title }}</template>
-        </el-menu-item>
+        <template v-for="item in menuItems" :key="item.path">
+          <!-- 子菜单 -->
+          <el-sub-menu v-if="item.children" :index="item.path">
+            <template #title>
+              <el-icon><component :is="item.icon" /></el-icon>
+              <span>{{ item.title }}</span>
+            </template>
+            <el-menu-item
+              v-for="child in item.children"
+              :key="child.path"
+              :index="child.path"
+            >
+              <el-icon><component :is="child.icon" /></el-icon>
+              <template #title>{{ child.title }}</template>
+            </el-menu-item>
+          </el-sub-menu>
+
+          <!-- 普通菜单 -->
+          <el-menu-item v-else :index="item.path">
+            <el-icon><component :is="item.icon" /></el-icon>
+            <template #title>{{ item.title }}</template>
+          </el-menu-item>
+        </template>
       </el-menu>
     </el-aside>
 
@@ -101,9 +138,24 @@ const handleMenuSelect = (path: string) => {
           </el-breadcrumb>
         </div>
         <div class="header-right">
-          <el-tag type="success" effect="dark" round size="small">
+          <el-tag v-if="authStore.isLoggedIn" type="success" effect="dark" round size="small" class="mr-4">
             在线
           </el-tag>
+          
+          <el-dropdown trigger="click" @command="handleLogout">
+            <div class="user-profile">
+              <el-avatar :size="32" :icon="UserFilled" class="user-avatar" />
+              <span class="username">{{ authStore.user?.username || '用户' }}</span>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item :icon="Setting">个人设置</el-dropdown-item>
+                <el-dropdown-item divided command="logout" :icon="SwitchButton">
+                  退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -116,6 +168,9 @@ const handleMenuSelect = (path: string) => {
         </router-view>
       </el-main>
     </el-container>
+
+    <!-- 全局智能助手 -->
+    <GlobalAssistant />
   </el-container>
 </template>
 
@@ -228,8 +283,35 @@ const handleMenuSelect = (path: string) => {
 .header-right {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 20px;
 }
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.user-profile:hover {
+  background: #f1f5f9;
+}
+
+.username {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1e293b;
+}
+
+.user-avatar {
+  background: #eef2ff;
+  color: #6366f1;
+}
+
+.mr-4 { margin-right: 16px; }
 
 /* ==================== 主内容区 ==================== */
 .layout-main-container {

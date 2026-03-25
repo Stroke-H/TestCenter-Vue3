@@ -19,6 +19,9 @@ func main() {
 	// Configure CORS to allow the Vue frontend to connect
 	config := cors.DefaultConfig()
 	config.AllowAllOrigins = true
+	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization", "Accept"}
+	config.AllowCredentials = true
 	r.Use(cors.New(config))
 
 	// Serve static files for K6 reports
@@ -32,6 +35,19 @@ func main() {
 		// Generic HTTP proxy to avoid CORS for external APIs
 		api.POST("/proxy", services.ProxyHandler)
 
+		// System Configuration
+		services.InitConfigService("data/projects.jsonl", "data/test_phones.jsonl")
+		configGroup := api.Group("/config")
+		{
+			configGroup.GET("/projects", services.GetProjectsHandler)
+			configGroup.POST("/projects", services.SaveProjectHandler)
+			configGroup.DELETE("/projects/:id", services.DeleteProjectHandler)
+
+			configGroup.GET("/devices", services.GetDevicesHandler)
+			configGroup.POST("/devices", services.SaveDeviceHandler)
+			configGroup.DELETE("/devices/:id", services.DeleteDeviceHandler)
+		}
+
 		// Mind Map Processes
 		services.EnsureDataDir()
 		processes := api.Group("/processes")
@@ -40,6 +56,36 @@ func main() {
 			processes.GET("/:id", services.GetProcessHandler)
 			processes.POST("", services.SaveProcessHandler)
 			processes.DELETE("/:id", services.DeleteProcessHandler)
+		}
+
+		// Core Authentication (Public)
+		auth := api.Group("/auth")
+		{
+			auth.POST("/register", services.RegisterHandler)
+			auth.POST("/login", services.LoginHandler)
+			auth.GET("/me", services.GetUserMeHandler)
+		}
+
+		// Acceptance Reports (Protected)
+		reports := api.Group("/acceptance-reports")
+		reports.Use(func(c *gin.Context) {
+			token := c.GetHeader("Authorization")
+			if token == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: No token provided"})
+				c.Abort()
+				return
+			}
+			_, err := services.GetUserByID(token)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid token"})
+				c.Abort()
+				return
+			}
+			c.Next()
+		})
+		{
+			reports.GET("/list", services.GetAcceptanceReportsHandler)
+			reports.POST("/save", services.SaveAcceptanceReportHandler)
 		}
 	}
 

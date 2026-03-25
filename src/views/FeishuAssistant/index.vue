@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
 
 // --- Types ---
 interface ChatMessage {
@@ -24,7 +25,23 @@ interface SessionRecord {
   messages: ChatMessage[]
 }
 
-// --- Mock Data ---
+interface OperationLog {
+  id: string
+  tool_name: string
+  project: string
+  env: string
+  user_id: string
+  user_name: string
+  status: string
+  detail: string
+  timestamp: string
+}
+
+// --- API Service (Direct fetch for simplicity in this dashboard) ---
+const API_BASE = 'http://localhost:8080/api'
+const authStore = useAuthStore()
+
+// --- Mock / Init Data ---
 const tools = ref([
   {
     id: 'total-sessions',
@@ -74,31 +91,39 @@ const sessions = ref<SessionRecord[]>([
       { id: 'm2', sender: 'bot', senderName: 'Feishu Bot', msgType: 'text', content: 'Sure. Looking up the latest K6 playback test results...', time: '10:20 AM' },
       { id: 'm3', sender: 'user', senderName: 'Minghong Huang', msgType: 'text', content: 'Thanks, what is the P95 latency?', time: '10:25 AM' }
     ]
-  },
-  {
-    id: 'sess-002',
-    userName: 'Alice Wong',
-    status: 'ended',
-    msgCount: 6,
-    startTime: 'Yesterday 14:00 PM',
-    lastActiveTime: 'Yesterday 14:15 PM',
-    summary: 'Troubleshooting test environment login issue.',
-    messages: [
-      { id: 'm4', sender: 'user', senderName: 'Alice Wong', msgType: 'text', content: 'I cannot login to test env.', time: '14:00 PM' },
-      { id: 'm5', sender: 'bot', senderName: 'Feishu Bot', msgType: 'text', content: 'It seems the auth server was restarting. Please try again now.', time: '14:02 PM' },
-      { id: 'm6', sender: 'user', senderName: 'Alice Wong', msgType: 'text', content: 'Works now, thanks.', time: '14:10 PM' },
-      { id: 'm7', sender: 'user', senderName: 'Alice Wong', msgType: 'text', content: '会话结束', time: '14:15 PM' },
-      { id: 'm8', sender: 'bot', senderName: 'Feishu Bot', msgType: 'text', content: '会话已结束。', time: '14:15 PM' }
-    ]
   }
 ])
+
+const operationLogs = ref<OperationLog[]>([])
 
 // --- State ---
 const drawerVisible = ref(false)
 const selectedSession = ref<SessionRecord | null>(null)
 const replyContent = ref('')
 
+// --- Lifecycle ---
+onMounted(() => {
+  fetchOperationLogs()
+  // Refresh every 10s
+  const timer = setInterval(fetchOperationLogs, 10000)
+  onUnmounted(() => clearInterval(timer))
+})
+
 // --- Handlers ---
+const fetchOperationLogs = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/ai/logs/operations`, {
+      headers: {
+        'Authorization': authStore.token
+      }
+    })
+    const data = await res.json()
+    operationLogs.value = data || []
+  } catch (e) {
+    console.error('Failed to fetch logs', e)
+  }
+}
+
 const handleToolClick = (toolId: string) => {
   if (toolId === 'bot-config') {
     ElMessage.info('Opening Bot Configuration...')
@@ -141,6 +166,11 @@ const getAvatarStyle = (name: string) => {
 
 const getStatusType = (status: string) => {
   return status === 'active' ? 'success' : 'info'
+}
+
+const formatTime = (ts: string) => {
+  if (!ts) return '-'
+  return new Date(ts).toLocaleString()
 }
 </script>
 
@@ -226,7 +256,47 @@ const getStatusType = (status: string) => {
       </div>
     </div>
 
-    <!-- ========== Chat Drawer ========== -->
+    <!-- ========== Operation History ========== -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title-row">
+          <div class="section-icon section-icon--orange">
+            <el-icon :size="14"><component :is="Icons.List" /></el-icon>
+          </div>
+          <h2 class="section-title">Audit Log: AI Operations History</h2>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <el-table :data="operationLogs" style="width: 100%" empty-text="No records yet. Perform an operation via AI to see it here.">
+          <el-table-column prop="timestamp" label="Time" width="180">
+            <template #default="scope">{{ formatTime(scope.row.timestamp) }}</template>
+          </el-table-column>
+          <el-table-column prop="tool_name" label="Operation" width="140">
+            <template #default="scope">
+              <el-tag type="danger" size="small">{{ scope.row.tool_name }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="project" label="Project" width="120" />
+          <el-table-column prop="env" label="Env" width="100">
+             <template #default="scope">
+                <el-tag :type="scope.row.env === 'prod' ? 'danger' : 'warning'" size="small">
+                  {{ scope.row.env.toUpperCase() }}
+                </el-tag>
+             </template>
+          </el-table-column>
+          <el-table-column prop="detail" label="Result Summary" min-width="300" />
+          <el-table-column prop="status" label="Status" width="100" align="center">
+            <template #default="scope">
+              <el-icon color="#67C23A" v-if="scope.row.status === 'success'"><component :is="Icons.CircleCheckFilled" /></el-icon>
+              <el-icon color="#F56C6C" v-else><component :is="Icons.CircleCloseFilled" /></el-icon>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>
+
+    <!-- ========== Chat Drawer (Original) ========== -->
     <el-drawer
       v-model="drawerVisible"
       :title="`Session with ${selectedSession?.userName}`"
@@ -241,45 +311,27 @@ const getStatusType = (status: string) => {
             :key="msg.id" 
             :class="['chat-bubble-wrapper', msg.sender === 'bot' ? 'right' : 'left']"
           >
-            <!-- User Avatar -->
             <el-avatar v-if="msg.sender === 'user'" :size="32" :style="getAvatarStyle(msg.senderName)" class="chat-avatar">
               {{ msg.senderName.charAt(0) }}
             </el-avatar>
-
-            <!-- Message Content -->
             <div class="chat-bubble-content">
               <span class="chat-time">{{ msg.time }}</span>
               <div :class="['chat-bubble', msg.sender === 'bot' ? 'bg-bot' : 'bg-user']">
                 {{ msg.content }}
               </div>
             </div>
-            
-            <!-- Bot Avatar -->
             <el-avatar v-if="msg.sender === 'bot'" :size="32" style="background:#6366f1; color:#fff;" class="chat-avatar">
               🤖
             </el-avatar>
           </div>
         </div>
-
-        <!-- Reply Area -->
         <div class="chat-reply-area" v-if="selectedSession?.status === 'active'">
-          <el-input 
-            v-model="replyContent" 
-            type="textarea" 
-            :rows="3" 
-            placeholder="Type a reply to send to Feishu..." 
-            resize="none"
-          />
-          <div class="reply-actions">
-            <el-button type="primary" size="default" @click="sendReply">Send</el-button>
-          </div>
+          <el-input v-model="replyContent" type="textarea" :rows="3" placeholder="Type a reply to send to Feishu..." resize="none" />
+          <div class="reply-actions text-right mt-2"><el-button type="primary" @click="sendReply">Send</el-button></div>
         </div>
-        <div class="chat-ended-notice" v-else>
-          This session has been ended.
-        </div>
+        <div class="chat-ended-notice" v-else>This session has been ended.</div>
       </div>
     </el-drawer>
-
   </div>
 </template>
 
@@ -290,6 +342,7 @@ const getStatusType = (status: string) => {
   flex-direction: column;
   gap: 32px;
   padding: 8px 0;
+  position: relative;
 }
 
 /* ==================== Sections ==================== */
@@ -318,6 +371,7 @@ const getStatusType = (status: string) => {
 
 .section-icon--blue { background: #3b82f6; }
 .section-icon--indigo { background: #6366f1; }
+.section-icon--orange { background: #f59e0b; }
 
 .section-title {
   font-size: 17px;
@@ -327,7 +381,7 @@ const getStatusType = (status: string) => {
   letter-spacing: -0.2px;
 }
 
-/* ==================== Card Grid (Dashboard Layout) ==================== */
+/* ==================== Card Grid ==================== */
 .card-grid {
   display: grid;
   gap: 16px;
@@ -346,18 +400,11 @@ const getStatusType = (status: string) => {
   flex-direction: column;
   gap: 16px;
   transition: box-shadow 0.25s ease, transform 0.2s ease;
-  position: relative;
 }
 
 .tool-card:hover {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06);
   transform: translateY(-2px);
-}
-
-.tool-card__top {
-  display: flex;
-  justify-content: flex-start;
-  align-items: flex-start;
 }
 
 .tool-card__icon {
@@ -367,7 +414,6 @@ const getStatusType = (status: string) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
 }
 
 .tool-card__name {
@@ -377,17 +423,12 @@ const getStatusType = (status: string) => {
   margin: 0;
 }
 
-.tool-card__footer {
-  margin-top: auto;
-}
-
 .tool-card__value {
   font-size: 28px;
   font-weight: 700;
-  line-height: 1;
 }
 
-/* ==================== Table Container ==================== */
+/* ==================== Table ==================== */
 .table-container {
   background: #ffffff;
   border: 1px solid #f0f0f0;
@@ -401,111 +442,22 @@ const getStatusType = (status: string) => {
   gap: 12px;
 }
 
-.sender-name {
-  font-weight: 500;
-  color: #333;
-}
-
 :deep(.session-row) {
   cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-:deep(.session-row:hover > td.el-table__cell) {
-  background-color: #f8fafc !important;
 }
 
 /* ==================== Chat Drawer ==================== */
-.chat-drawer-container {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.chat-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  background-color: #f8fafc;
-}
-
-.chat-bubble-wrapper {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-}
-
-.chat-bubble-wrapper.left {
-  justify-content: flex-start;
-}
-
-.chat-bubble-wrapper.right {
-  justify-content: flex-end;
-}
-
-.chat-bubble-content {
-  display: flex;
-  flex-direction: column;
-  max-width: 70%;
-}
-
-.chat-bubble-wrapper.left .chat-bubble-content {
-  align-items: flex-start;
-}
-
-.chat-bubble-wrapper.right .chat-bubble-content {
-  align-items: flex-end;
-}
-
-.chat-time {
-  font-size: 11px;
-  color: #94a3b8;
-  margin-bottom: 4px;
-}
-
-.chat-bubble {
-  padding: 10px 14px;
-  border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.5;
-  word-break: break-word;
-}
-
-.bg-user {
-  background-color: #ffffff;
-  color: #1e293b;
-  border: 1px solid #e2e8f0;
-  border-bottom-left-radius: 4px;
-}
-
-.bg-bot {
-  background-color: #e0e7ff;
-  color: #312e81;
-  border: 1px solid #c7d2fe;
-  border-bottom-right-radius: 4px;
-}
-
-.chat-reply-area {
-  padding: 16px 20px;
-  background: #ffffff;
-  border-top: 1px solid #e2e8f0;
-}
-
-.reply-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
-}
-
-.chat-ended-notice {
-  padding: 16px;
-  text-align: center;
-  color: #94a3b8;
-  font-size: 13px;
-  background: #f1f5f9;
-  border-top: 1px solid #e2e8f0;
-}
+.chat-drawer-container { display: flex; flex-direction: column; height: 100%; }
+.chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 20px; background: #f8fafc; }
+.chat-bubble-wrapper { display: flex; align-items: flex-end; gap: 12px; }
+.chat-bubble-wrapper.right { justify-content: flex-end; }
+.chat-bubble-content { display: flex; flex-direction: column; max-width: 70%; }
+.chat-bubble-wrapper.right .chat-bubble-content { align-items: flex-end; }
+.chat-bubble { padding: 10px 14px; border-radius: 12px; font-size: 14px; }
+.bg-user { background: #fff; border: 1px solid #e2e8f0; }
+.bg-bot { background: #e0e7ff; color: #312e81; }
+.chat-reply-area { padding: 16px 20px; background: #fff; border-top: 1px solid #e2e8f0; }
+.text-right { text-align: right; }
+.mt-2 { margin-top: 8px; }
+.chat-ended-notice { padding: 16px; text-align: center; color: #94a3b8; background: #f1f5f9; }
 </style>

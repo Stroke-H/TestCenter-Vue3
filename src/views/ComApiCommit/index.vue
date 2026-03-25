@@ -94,7 +94,9 @@ const parseParams = (str: string) => {
   const regex = /"([^"]+)":\s*"([^"]*)"/g
   let match
   while ((match = regex.exec(str)) !== null) {
-    params[match[1]] = match[2]
+    if (match[1]) {
+      params[match[1]] = match[2] || ''
+    }
   }
   return params
 }

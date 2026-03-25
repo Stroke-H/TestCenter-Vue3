@@ -8,11 +8,14 @@ import (
 // FeishuConfig holds app credentials and mode
 type FeishuConfig struct {
 	AppID             string `json:"app_id"`
-	AppSecret          string `json:"app_secret"`
+	AppSecret         string `json:"app_secret"`
 	VerificationToken string `json:"verification_token"`
 	EncryptKey        string `json:"encrypt_key"`
-	Mode              string `json:"mode"` // "long_conn" or "webhook"
+	Mode              string `json:"mode"`     // "long_conn" or "webhook"
+	GroupID           string `json:"group_id"` // Configured group ID for bot activity
 }
+
+var GlobalFeishuConfig *FeishuConfig
 
 // LoadConfig loads configuration from file or environment variables
 func LoadConfig(filePath string) (*FeishuConfig, error) {
@@ -43,6 +46,9 @@ func LoadConfig(filePath string) (*FeishuConfig, error) {
 	}
 	if key := os.Getenv("FEISHU_ENCRYPT_KEY"); key != "" {
 		config.EncryptKey = key
+	}
+	if gid := os.Getenv("FEISHU_GROUP_ID"); gid != "" {
+		config.GroupID = gid
 	}
 
 	return config, nil

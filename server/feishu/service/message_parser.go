@@ -2,9 +2,9 @@ package service
 
 import (
 	"encoding/json"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	"strings"
 	"testcenter-server/feishu/model"
-	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 // ParseMessageContent converts raw Feishu message content into a string and standard model

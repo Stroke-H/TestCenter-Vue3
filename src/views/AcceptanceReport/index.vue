@@ -1,36 +1,73 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { Plus, Search, Calendar, User, Money } from '@element-plus/icons-vue'
+import { useAuthStore } from '@/stores/auth'
 
 defineOptions({ name: 'AcceptanceReport' })
 
-// ===== Mock Data =====
+// --- API Service ---
+const API_BASE = 'http://localhost:8080/api'
+const authStore = useAuthStore()
+
+// ===== State =====
 const stats = ref([
-  { title: 'Total Report', value: 49, icon: Calendar, color: '#3b82f6', bgColor: '#eff6ff' },
-  { title: 'Tester', value: 7, icon: User, color: '#eab308', bgColor: '#fefce8' },
+  { title: 'Total Report', value: 0, icon: Calendar, color: '#3b82f6', bgColor: '#eff6ff' },
+  { title: 'Tester', value: 1, icon: User, color: '#eab308', bgColor: '#fefce8' },
   { title: 'Coming Soon', value: 'N/A', icon: Money, color: '#f97316', bgColor: '#fff7ed' }
 ])
 
-const recentReports = ref([
-  { id: 1, avatar: 'Y', reporter: 'yuerusong | A1157_powerfulcleaner-Andriod', date: '2026-03-20', status: 'Completed' },
-  { id: 2, avatar: 'M', reporter: 'minghong.huang | A1203_browser-iOS', date: '2026-03-21', status: 'Completed' },
-  { id: 3, avatar: 'L', reporter: 'liwei | A1099_cleaner-Pro', date: '2026-03-22', status: 'In Progress' },
-  { id: 4, avatar: 'Z', reporter: 'zhangsan | B1022_music-Andriod', date: '2026-03-23', status: 'Completed' },
-  { id: 5, avatar: 'Y', reporter: 'yuerusong | A1158_powerfulcleaner-iOS', date: '2026-03-24', status: 'Pending' }
-])
-
-const historyProjects = ref([
-  { id: 'A1106', count: 9 },
-  { id: 'A1107', count: 5 },
-  { id: 'B1022', count: 12 },
-  { id: 'C3011', count: 3 },
-  { id: 'A1157', count: 7 },
-  { id: 'A1158', count: 2 },
-  { id: 'D4055', count: 1 }
-])
-
+const recentReports = ref<any[]>([])
+const historyProjects = ref<any[]>([])
 const searchQuery = ref('')
 const categoryFilter = ref('')
+
+// --- Preview State ---
+const previewVisible = ref(false)
+const currentPreview = ref<any>(null)
+
+// --- Fetch Logic ---
+const fetchReports = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/acceptance-reports/list`, {
+      headers: {
+        'Authorization': authStore.token
+      }
+    })
+    const data = await res.json()
+    if (data && Array.isArray(data)) {
+      recentReports.value = data.map(r => ({
+        ...r, // Keep original data for preview
+        avatar: r.reporter ? r.reporter.charAt(0).toUpperCase() : 'R',
+        reporter: `${r.reporter} | ${r.project_name}`,
+        date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '-',
+        status: r.status || 'Completed'
+      }))
+
+      // Update Stats
+      if (stats.value[0]) {
+        stats.value[0].value = data.length
+      }
+      
+      // Update History Projects (Count per Code)
+      const counts: Record<string, number> = {}
+      data.forEach((r: any) => {
+        counts[r.project_code] = (counts[r.project_code] || 0) + 1
+      })
+      historyProjects.value = Object.entries(counts).map(([id, count]) => ({ id, count }))
+    }
+  } catch (err) {
+    console.error('Failed to fetch reports', err)
+  }
+}
+
+const handleRowClick = (row: any) => {
+  currentPreview.value = row
+  previewVisible.value = true
+}
+
+onMounted(() => {
+  fetchReports()
+})
 </script>
 
 <template>
@@ -90,26 +127,34 @@ const categoryFilter = ref('')
             </div>
           </template>
           
-          <el-table :data="recentReports" style="width: 100%" class="custom-table" :row-style="{ height: '60px' }">
-            <el-table-column label="Img" width="70">
-              <template #default="{ row }">
-                <div class="avatar-circle">{{ row.avatar }}</div>
-              </template>
-            </el-table-column>
-            <el-table-column prop="reporter" label="Reporter/Project" min-width="250">
-              <template #default="{ row }">
-                <span class="reporter-text">{{ row.reporter }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="date" label="Report Date" width="150" />
-            <el-table-column prop="status" label="Status" width="120">
-              <template #default="{ row }">
-                <span class="status-badge" :class="row.status.toLowerCase().replace(' ', '-')">
-                  {{ row.status }}
-                </span>
-              </template>
-            </el-table-column>
-          </el-table>
+          <div class="table-scroll-container">
+            <el-table 
+              :data="recentReports" 
+              style="width: 100%" 
+              class="custom-table" 
+              :row-style="{ height: '60px', cursor: 'pointer' }"
+              @row-click="handleRowClick"
+            >
+              <el-table-column label="Img" width="70">
+                <template #default="{ row }">
+                  <div class="avatar-circle">{{ row.avatar }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="reporter" label="Reporter/Project" min-width="250">
+                <template #default="{ row }">
+                  <span class="reporter-text">{{ row.reporter }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="date" label="Report Date" width="150" />
+              <el-table-column prop="status" label="Status" width="120">
+                <template #default="{ row }">
+                  <span class="status-badge" :class="row.status.toLowerCase().replace(' ', '-')">
+                    {{ row.status }}
+                  </span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
         </el-card>
       </el-col>
 
@@ -122,18 +167,83 @@ const categoryFilter = ref('')
             </div>
           </template>
           
-          <div class="history-list">
-            <div v-for="item in historyProjects" :key="item.id" class="history-item">
-              <div class="project-id">
-                <span class="id-dot"></span>
-                {{ item.id }}
+            <div class="history-list scroll-container">
+              <div v-for="item in historyProjects" :key="item.id" class="history-item">
+                <div class="project-id">
+                  <span class="id-dot"></span>
+                  {{ item.id }}
+                </div>
+                <div class="count-bubble">{{ item.count }}</div>
               </div>
-              <div class="count-bubble">{{ item.count }}</div>
             </div>
-          </div>
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- Preview Dialog -->
+    <el-dialog
+      v-model="previewVisible"
+      :title="`Report Preview - ${currentPreview?.project_name || 'Detail'}`"
+      width="600px"
+      destroy-on-close
+      class="preview-dialog"
+    >
+      <div v-if="currentPreview" class="preview-content">
+        <div class="preview-section">
+          <div class="preview-item">
+            <span class="label">Project Code:</span>
+            <span class="value font-bold">{{ currentPreview.project_code }}</span>
+          </div>
+          <div class="preview-item">
+            <span class="label">Version:</span>
+            <span class="value">v{{ currentPreview.version }}</span>
+          </div>
+        </div>
+
+        <div class="preview-section">
+          <div class="preview-item">
+            <span class="label">Test Owner:</span>
+            <span class="value">{{ currentPreview.reporter }}</span>
+          </div>
+          <div class="preview-item">
+            <span class="label">Test Time:</span>
+            <span class="value">{{ currentPreview.test_time || currentPreview.created_at?.split('T')[0] }}</span>
+          </div>
+        </div>
+
+        <div class="preview-section">
+          <div class="preview-item">
+            <span class="label">Test Env:</span>
+            <span class="value">{{ currentPreview.test_env || 'N/A' }}</span>
+          </div>
+          <div class="preview-item">
+            <span class="label">Conclusion:</span>
+            <el-tag :type="currentPreview.test_conclusion === 'Pass' ? 'success' : 'danger'" size="small" effect="dark">
+              {{ currentPreview.test_conclusion || 'Unknown' }}
+            </el-tag>
+          </div>
+        </div>
+
+        <el-divider border-style="dashed" />
+
+        <div class="preview-grid">
+          <div class="preview-detail">
+            <h4 class="detail-title">测试需求点 (Acceptance Requirements)</h4>
+            <pre class="detail-text">{{ currentPreview.update_requirements || '无需求说明' }}</pre>
+          </div>
+
+          <div class="preview-detail">
+            <h4 class="detail-title">缺陷提交/修复情况 (Bug Status)</h4>
+            <pre class="detail-text">{{ [currentPreview.bug_submission_status, currentPreview.bug_fix_status].filter(Boolean).join('\n') || '无缺陷记录' }}</pre>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button type="primary" @click="previewVisible = false">Close</el-button>
+        </span>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -318,7 +428,20 @@ const categoryFilter = ref('')
   color: #64748b;
 }
 
-/* History List */
+/* History List & Scroll */
+.table-scroll-container,
+.history-list {
+  height: 480px; /* Approx 8 rows */
+  overflow-y: auto;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+
+.table-scroll-container::-webkit-scrollbar,
+.history-list::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
+}
+
 .history-list {
   display: flex;
   flex-direction: column;
@@ -363,5 +486,63 @@ const categoryFilter = ref('')
   border-radius: 12px;
   font-size: 13px;
   font-weight: 700;
+}
+
+/* Preview Dialog */
+.preview-content {
+  color: #334155;
+}
+
+.preview-section {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  gap: 20px;
+}
+
+.preview-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.value {
+  font-size: 15px;
+  color: #1e293b;
+}
+
+.detail-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #6366f1;
+  margin-bottom: 8px;
+}
+
+.preview-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.detail-text {
+  background: #f8fafc;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+  max-height: 200px;
+  overflow-y: auto;
 }
 </style>

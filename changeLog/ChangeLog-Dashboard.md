@@ -1,5 +1,20 @@
 # ChangeLog - Dashboard
 
+## 2026-03-24
+
+### Added
+- **Global AI Assistant v2**: 实现了常驻右下角的悬浮 AI 助手，支持全局唤起。
+- **Interactive Report Editor**: 新增了全局弹窗式验收报告编辑器，支持在 AI 生成后进行实时编辑、确认与持久化存储。
+- **UI Avoidance Logic**: 在编辑器打开时，悬浮助手会自动淡出缩放以避免视觉遮挡及交互冲突。
+
+## 2026-03-23
+
+### Added
+- **Feishu Assistant Dashboard**: 将原“测试用例管理”重构为“飞书助手监控大盘”。
+- **Session Cycles Tracker**: 实现了会话周期追踪表，聚合显示聊天频次、最后活跃时间及会话状态。
+- **Interactive Chat Drawer**: 新增了会话详情抽屉，支持查看完整上下文历史及 AI 实时回复联调。
+- **Bot Subsystem Overview**: 在大盘顶部增加了 Bot 状态看板（总用户数、活跃会话等）。
+
 ## 2026-03-19
 
 ### Added

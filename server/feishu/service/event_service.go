@@ -2,13 +2,23 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
+	"os"
+	"regexp"
 	"strconv"
+	"strings"
+	"testcenter-server/feishu/client"
 	"testcenter-server/feishu/model"
-	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
-	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
-	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	"testcenter-server/services"
 	"time"
+
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
+	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
+	larkwiki "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
 )
 
 // NewEventDispatcher creates a dispatcher for handle events
@@ -16,6 +26,10 @@ func NewEventDispatcher(verifyToken, encryptKey string) *dispatcher.EventDispatc
 	return dispatcher.NewEventDispatcher(verifyToken, encryptKey).
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 			handleMessageReceive(ctx, event)
+			return nil
+		}).
+		OnP2MessageReadV1(func(ctx context.Context, event *larkim.P2MessageReadV1) error {
+			// Dummy handler to ignore read receipts
 			return nil
 		})
 }
@@ -50,10 +64,219 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 	// 3. Extract Mentions
 	stdMsg.Mentions = ExtractMentions(msg.Mentions)
 
-	// 4. Output (For Phase 1, we just log it as a standardized JSON)
-	log.Printf("[Feishu Standardized Output] User: %s, Content: %s, ChatID: %s\n", 
-		stdMsg.SenderID, stdMsg.Content, stdMsg.ChatID)
-	
+	// 4. Output
+	log.Printf("[Feishu Standardized Output] User: %s, Content: %s, ChatID: %s, ChatType: %s\n",
+		stdMsg.SenderID, stdMsg.Content, stdMsg.ChatID, stdMsg.ChatType)
+
 	// Prettified JSON log for verification
 	log.Println(larkcore.Prettify(stdMsg))
+
+	// Write to file for visibility
+	if b, err := json.Marshal(stdMsg); err == nil {
+		f, _ := os.OpenFile("data/feishu_messages.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if f != nil {
+			f.Write(b)
+			f.WriteString("\n")
+			f.Close()
+		}
+	}
+
+	// 0. Handle Multi-turn Confirmation States
+	session := GetOrCreateSession(stdMsg.ChatID)
+	if session.State == StateWaitBindConfirm {
+		cleanMsg := strings.TrimSpace(stripAllMentions(stdMsg))
+		if isConfirmation(cleanMsg) {
+			// Execute pending binding
+			err := services.UpdateUserFeishuOpenID(session.PendingUserID, stdMsg.SenderID)
+			if err != nil {
+				replyText(ctx, stdMsg.MsgID, fmt.Sprintf("❌ 绑定失败: %v", err))
+			} else {
+				replyText(ctx, stdMsg.MsgID, "✅ 确认成功！绑定已完成。")
+			}
+		} else {
+			replyText(ctx, stdMsg.MsgID, "已取消绑定操作。")
+		}
+		session.State = StateNormal
+		session.PendingUserID = ""
+		return
+	}
+
+	// 1. Mandatory Binding Check for sensitive operations
+	cleanRaw := stripAllMentions(stdMsg)
+	isBindingCmd := strings.HasPrefix(cleanRaw, "绑定") || strings.HasPrefix(cleanRaw, "帮我绑定") || strings.HasPrefix(cleanRaw, "解绑") || strings.HasPrefix(cleanRaw, "取消绑定")
+
+	if !isBindingCmd {
+		boundUser, err := services.FindUserByFeishuOpenID(stdMsg.SenderID)
+		if err != nil || boundUser == nil {
+			replyText(ctx, stdMsg.MsgID, "⚠️ 【身份验证提醒】\n您尚未绑定测试平台账号，无法使用删号、生成报告等核心功能。\n\n• 请先发送：「绑定 用户名」完成账号关联。\n• 如果您还没有账号，请前往测试平台新建账户：\n🔗 地址: http://strokeh.local:5173/register\n\n完成后即可开始您的报告协作！")
+			return
+		}
+	}
+
+	if stdMsg.MsgType == "text" && (strings.HasPrefix(stripAllMentions(stdMsg), "绑定") || strings.HasPrefix(stripAllMentions(stdMsg), "帮我绑定")) {
+		cleanContent := stripAllMentions(stdMsg)
+		// Handle full-width characters
+		cleanContent = strings.ReplaceAll(cleanContent, "：", ":")
+		cleanContent = strings.ReplaceAll(cleanContent, "　", " ")
+		cleanContent = strings.TrimSpace(cleanContent)
+		
+		log.Printf("[Feishu Command] Intercepted binding command: %s", cleanContent)
+		
+		// 1. Check uniqueness first
+		existingUser, err := services.FindUserByFeishuOpenID(stdMsg.SenderID)
+		if err == nil && existingUser != nil {
+			replyText(ctx, stdMsg.MsgID, fmt.Sprintf("⚠️ 您当前的飞书账号已绑定测试账户: %s。\n如需绑定新账号，请先发送【解绑】以清空当前关系。", existingUser.Username))
+			return
+		}
+
+		targetName := ""
+		if strings.HasPrefix(cleanContent, "帮我绑定") {
+			targetName = strings.TrimSpace(strings.TrimPrefix(cleanContent, "帮我绑定"))
+		} else {
+			targetName = strings.TrimSpace(strings.TrimPrefix(cleanContent, "绑定"))
+		}
+		
+		targetName = strings.TrimPrefix(targetName, ":")
+		targetName = strings.TrimSpace(targetName)
+		
+		if targetName == "" {
+			replyText(ctx, stdMsg.MsgID, "⚠️ 请输入要绑定的用户名，例如：绑定 minghong")
+			return
+		}
+
+		user, isExact, err := services.FindUserByFuzzyName(targetName)
+		if err != nil || user == nil {
+			replyText(ctx, stdMsg.MsgID, fmt.Sprintf("未查询到匹配用户: %s", targetName))
+			return
+		}
+
+		if isExact {
+			// Execute binding immediately for exact match
+			err = services.UpdateUserFeishuOpenID(user.ID, stdMsg.SenderID)
+			if err != nil {
+				replyText(ctx, stdMsg.MsgID, fmt.Sprintf("绑定失败: %v", err))
+			} else {
+				replyText(ctx, stdMsg.MsgID, fmt.Sprintf("✅ 绑定成功！\n平台用户: %s\n飞书 ID: %s", user.Username, stdMsg.SenderID))
+			}
+		} else {
+			// Fuzzy match found, entering confirmation state
+			session.State = StateWaitBindConfirm
+			session.PendingUserID = user.ID
+			replyText(ctx, stdMsg.MsgID, fmt.Sprintf("❓ 未找到精确匹配。您是指要绑定用户【%s】吗？\n(回复“是/确定”继续，或回复其他内容取消)", user.Username))
+		}
+	} else if stdMsg.MsgType == "text" && (strings.TrimSpace(stripAllMentions(stdMsg)) == "解绑" || strings.TrimSpace(stripAllMentions(stdMsg)) == "取消绑定") {
+		err := services.UnbindFeishuOpenID(stdMsg.SenderID)
+		if err != nil {
+			replyText(ctx, stdMsg.MsgID, fmt.Sprintf("❌ 解绑失败: %v", err))
+		} else {
+			replyText(ctx, stdMsg.MsgID, "✅ 解绑成功！您当前的飞书账号已不再关联任何测试账户。")
+		}
+	} else if stdMsg.MsgType == "text" {
+		// UNIFIED LOGIC: Unify P2P and specific Group ID logic
+		cfg := model.GlobalFeishuConfig
+		isAllowedGroup := cfg != nil && cfg.GroupID != "" && stdMsg.ChatID == cfg.GroupID
+
+		if stdMsg.ChatType == "p2p" || isAllowedGroup {
+			// Strip mentions for cleaner AI input (handles both <at> and @_user_1)
+			cleanContent := stripAllMentions(stdMsg)
+
+			go func() {
+				aiResponse := ProcessChat(ctx, stdMsg.ChatID, stdMsg.SenderID, cleanContent)
+				replyText(ctx, stdMsg.MsgID, aiResponse)
+			}()
+		}
+	}
+}
+
+// stripAllMentions removes legacy <at> tags AND modern @_user_1 style mentions from content
+func stripAllMentions(stdMsg *model.StandardizedMessage) string {
+	content := stdMsg.Content
+	// 1. Remove XML-style <at> tags
+	re := regexp.MustCompile(`<at [^>]*>[^<]*</at>`)
+	content = re.ReplaceAllString(content, "")
+
+	// 2. Remove mention keys identified by Feishu (like @_user_1)
+	for _, m := range stdMsg.Mentions {
+		if m.Key != "" {
+			content = strings.ReplaceAll(content, m.Key, "")
+		}
+	}
+
+	return strings.TrimSpace(content)
+}
+
+// replyText sends a basic text reply to the user using the Lark API
+func replyText(ctx context.Context, msgId string, text string) {
+	cli := client.GetClient()
+	if cli == nil {
+		return
+	}
+
+	msgMap := map[string]string{"text": text}
+	b, _ := json.Marshal(msgMap)
+
+	req := larkim.NewReplyMessageReqBuilder().
+		MessageId(msgId).
+		Body(larkim.NewReplyMessageReqBodyBuilder().
+			Content(string(b)).
+			MsgType("text").
+			Build()).
+		Build()
+
+	resp, err := cli.Im.Message.Reply(ctx, req)
+	if err != nil {
+		log.Printf("[Feishu Reply Error] %v", err)
+	} else if !resp.Success() {
+		log.Printf("[Feishu Reply Failed] Code: %d, Msg: %s", resp.Code, resp.Msg)
+	}
+}
+
+// fetchWikiAndReply attempts to read a wiki linking directly and reply the raw text
+func fetchWikiAndReply(ctx context.Context, wikiToken string, msgId string) {
+	cli := client.GetClient()
+	if cli == nil {
+		return
+	}
+
+	replyText(ctx, msgId, "收到 Wiki 链接，正在尝试通过云文档 API 提取内容... \n(提示: 需确保你已将飞书助手添加为该文档的阅读者)")
+
+	nodeReq := larkwiki.NewGetNodeSpaceReqBuilder().Token(wikiToken).Build()
+	nodeResp, err := cli.Wiki.Space.GetNode(ctx, nodeReq)
+
+	if err != nil {
+		replyText(ctx, msgId, fmt.Sprintf("API 调用异常设: %v", err))
+		return
+	}
+	if !nodeResp.Success() {
+		replyText(ctx, msgId, fmt.Sprintf("权限不足或不存在！API 被拒绝。\n错误码: %d\n错误信息: %s\n这可能意味着你需要把机器人加到文档的分享权限中。", nodeResp.Code, nodeResp.Msg))
+		return
+	}
+
+	if nodeResp.Data == nil || nodeResp.Data.Node == nil {
+		replyText(ctx, msgId, "文档信息为空。")
+		return
+	}
+
+	objType := *nodeResp.Data.Node.ObjType
+	objToken := *nodeResp.Data.Node.ObjToken
+
+	if objType == "docx" || objType == "doc" {
+		docReq := larkdocx.NewRawContentDocumentReqBuilder().DocumentId(objToken).Build()
+		docResp, err := cli.Docx.Document.RawContent(ctx, docReq)
+		if err == nil && docResp.Success() {
+			content := *docResp.Data.Content
+			if len(content) > 1000 {
+				content = content[:1000] + "...\n[内容由于太长被截断]"
+			}
+			replyText(ctx, msgId, fmt.Sprintf("📖 提取成功（格式 %s），前1000字预览如下：\n%s", objType, content))
+		} else {
+			if err != nil {
+				replyText(ctx, msgId, fmt.Sprintf("请求文档正文发生网络错误: %v", err))
+			} else {
+				replyText(ctx, msgId, fmt.Sprintf("抽取失败！API 业务报错 Code: %d, Msg: %s\n类型: %s (注: docx API 只能读新版文档，如果提示 Document not found 可能是旧版 doc！另外请确认在文档右上角【分享】里真正把机器人加为了协作者。)", docResp.Code, docResp.Msg, objType))
+			}
+		}
+	} else {
+		replyText(ctx, msgId, fmt.Sprintf("抱歉，API 获取成功，但该节点是一个 [%s] 类型的文件，目前我的逻辑仅解析了 docx 纯文本。", objType))
+	}
 }

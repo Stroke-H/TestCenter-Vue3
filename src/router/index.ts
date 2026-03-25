@@ -1,9 +1,21 @@
-// 路由配置 — 使用 Vue Router 4 的 createRouter + createWebHistory
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 // 路由表定义
 const routes: RouteRecordRaw[] = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login/index.vue'),
+    meta: { title: '登录', hidden: true, public: true }
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: () => import('@/views/Register/index.vue'),
+    meta: { title: '注册', hidden: true, public: true }
+  },
   {
     path: '/',
     name: 'Root',
@@ -52,6 +64,26 @@ const routes: RouteRecordRaw[] = [
         name: 'AcceptanceReport',
         component: () => import('@/views/AcceptanceReport/index.vue'),
         meta: { title: '验收报告', icon: 'Monitor' }
+      },
+      {
+        path: 'settings',
+        name: 'Settings',
+        redirect: '/settings/projects',
+        meta: { title: '系统设置', icon: 'Setting' },
+        children: [
+          {
+            path: 'projects',
+            name: 'ProjectConfig',
+            component: () => import('@/views/Settings/ProjectConfig.vue'),
+            meta: { title: '项目代码', icon: 'Collection' }
+          },
+          {
+            path: 'devices',
+            name: 'DeviceConfig',
+            component: () => import('@/views/Settings/DeviceConfig.vue'),
+            meta: { title: '测试设备', icon: 'Iphone' }
+          }
+        ]
       }
     ]
   }
@@ -63,6 +95,35 @@ const router = createRouter({
   routes,
   // 平滑滚动
   scrollBehavior: () => ({ top: 0 })
+})
+
+// 导航守卫
+router.beforeEach(async (to, _from, next) => {
+  const authStore = useAuthStore()
+  
+  // 1. 如果去往公开页面（登录/注册），直接放行
+  if (to.meta.public) {
+    next()
+    return
+  }
+
+  // 2. 如果未登录，且去往需要权限的页面，重定向到登录
+  if (!authStore.isLoggedIn) {
+    next('/login')
+    return
+  }
+
+  // 3. 如果已登录但没有用户信息，尝试获取用户信息
+  if (authStore.isLoggedIn && !authStore.user) {
+    await authStore.fetchMe()
+    // 如果获取失败（token失效），会被 fetchMe 自动调用 logout 并清除 token
+    if (!authStore.isLoggedIn) {
+      next('/login')
+      return
+    }
+  }
+
+  next()
 })
 
 export default router
