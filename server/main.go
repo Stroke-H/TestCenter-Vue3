@@ -28,10 +28,15 @@ func main() {
 	r.StaticFS("/reports", http.Dir("../k6-scripts/reports"))
 
 	// API Routes
+	services.StartMatchmaker() // Start the matching worker
 	api := r.Group("/api")
 	{
 		// WebSocket endpoint for streaming K6 execution
 		api.GET("/ws/k6", services.RunK6TestHandler)
+		// WebSocket endpoint for Lighthouse execution
+		api.GET("/ws/lighthouse", services.RunLighthouseHandler)
+		// WebSocket endpoint for Jungle Chess multiplayer
+		api.GET("/ws/jungle", services.JungleChessWSHandler)
 		// Generic HTTP proxy to avoid CORS for external APIs
 		api.POST("/proxy", services.ProxyHandler)
 

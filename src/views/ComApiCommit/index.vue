@@ -22,6 +22,11 @@ const toolName = ref((route.query.name as string) || '测试剧集是否重复')
 const toolDesc = ref((route.query.desc as string) || '检测剧集数据中是否存在重复的drama_intid')
 const projectName = ref('ShortsWave')
 
+// 对于 Web前端压测，重置 projectName 为空，方便输入 URL
+if (toolName.value === 'Web前端压测') {
+  projectName.value = ''
+}
+
 // 协助定位后端地址
 const getBackendHost = () => {
   return `${window.location.protocol}//${window.location.hostname}:8080`
@@ -34,6 +39,8 @@ const getWsBase = () => {
 
 // 是否是剧集播放自检工具
 const isDramaCheck = toolName.value.includes('播放')
+// 是否是Web前端压测
+const isWebFrontendStressTest = toolName.value === 'WebFrontend性能' || toolName.value === 'Web前端压测'
 // 是否是删除账号工具
 const isDeleteAccount = toolName.value === '删除账号'
 const deleteAccountParam = ref('')
@@ -177,8 +184,22 @@ const scrollToBottom = () => {
   })
 }
 
+// 新增：URL 校验函数
+const isValidUrl = (url: string) => {
+  const pattern = /^(https?:\/\/)?([\da-z.-]+)\.([a-z.]{2,6})([\/\w .-]*)*\/?$/
+  return pattern.test(url)
+}
+
 const startExecution = async () => {
   if (currentStatus.value === 'Executing') return
+
+  // 针对 Web前端压测的链接校验
+  if (isWebFrontendStressTest) {
+    if (!projectName.value || !isValidUrl(projectName.value)) {
+      ElMessage.warning('请输入有效的测试链接 (如: http://example.com)')
+      return
+    }
+  }
 
   // 特殊处理：删除账号工具的匿名登录逻辑
   if (isDeleteAccount) {
@@ -281,60 +302,82 @@ const startExecution = async () => {
   // 获取当前配置
   const profile = serverProfiles[testServer.value as keyof typeof serverProfiles]
   
-  // 组装 WebSocket 链接地址，注入动态参数
-  const query = new URLSearchParams({
-    script: scriptName,
-    email: profile.email,
-    password: profile.password,
-    loginUrl: profile.loginUrl,
-    dramaListUrl: profile.dramaListUrl
-  }).toString()
-
-  ws = new WebSocket(`${getWsBase()}/api/ws/k6?${query}`)
-
-  ws.onopen = () => {
-    logs.value.push(`[${new Date().toLocaleTimeString()}] WebSocket 连接已建立`)
-    // 启动计时器
-    uptime.value = 0
-    duration.value = 0
-    timer = setInterval(() => {
-      uptime.value++
-      duration.value++
-    }, 1000)
-  }
-
-  ws.onmessage = (event) => {
-    logs.value.push(event.data)
-    scrollToBottom()
-  }
-
-  ws.onerror = () => {
-    logs.value.push(`[WARN/ERR] WebSocket 连接错误`)
-  }
-
-  ws.onclose = () => {
-    if (timer) clearInterval(timer)
-    if (currentStatus.value === 'Executing') {
-      currentStatus.value = 'Finished'
-      
-      // 指向特定的剧集检测报告或通用报告
-      const reportFile = isDramaCheck ? 'drama_check_report.html' : 'summary.html'
-      const finalReportUrl = `${getBackendHost()}/reports/${reportFile}?t=${Date.now()}`
-      
-      logs.value.push(`[${new Date().toLocaleTimeString()}] 任务执行完成。`)
-      reportUrl.value = finalReportUrl
-
-      // 追加到存储仓库
-      reportStore.addReport({
-        name: toolName.value,
-        type: isDramaCheck ? '业务自动化' : 'K6 压测',
-        status: 'Passed',
-        duration: formatTime(duration.value),
-        author: 'Current User',
-        reportUrl: finalReportUrl
-      })
+    // 组装 WebSocket 链接地址，注入动态参数
+    let wsUrl = `${getWsBase()}/api/ws/k6`
+    const params: Record<string, string> = {
+      script: scriptName,
+      email: profile.email,
+      password: profile.password,
+      loginUrl: profile.loginUrl,
+      dramaListUrl: profile.dramaListUrl
     }
-  }
+
+    if (isWebFrontendStressTest) {
+      wsUrl = `${getWsBase()}/api/ws/lighthouse`
+      // 确保有协议头
+      const finalUrl = projectName.value.startsWith('http') ? projectName.value : `http://${projectName.value}`
+      delete params.script // lighthouse 不需要 script 参数
+      params.url = finalUrl
+    }
+
+    const query = new URLSearchParams(params).toString()
+    ws = new WebSocket(`${wsUrl}?${query}`)
+
+    ws.onopen = () => {
+      logs.value.push(`[${new Date().toLocaleTimeString()}] WebSocket 连接已建立`)
+      // 启动计时器
+      uptime.value = 0
+      duration.value = 0
+      timer = setInterval(() => {
+        uptime.value++
+        duration.value++
+      }, 1000)
+    }
+
+    ws.onmessage = (event) => {
+      const data = event.data
+      // 识别后端发送的报告就绪信号
+      if (typeof data === 'string' && data.startsWith('REPORT_READY:')) {
+        const reportFile = data.split(':')[1]
+        reportUrl.value = `${getBackendHost()}/reports/${reportFile}?t=${Date.now()}`
+        return
+      }
+      logs.value.push(data)
+      scrollToBottom()
+    }
+
+    ws.onerror = () => {
+      logs.value.push(`[WARN/ERR] WebSocket 连接错误`)
+    }
+
+    ws.onclose = () => {
+      if (timer) clearInterval(timer)
+      if (currentStatus.value === 'Executing') {
+        currentStatus.value = 'Finished'
+        
+        // 如果是 K6 类任务，手动设置报告路径（Lighthouse 类任务由 ws 消息驱动）
+        if (!isWebFrontendStressTest) {
+          const reportFile = isDramaCheck ? 'drama_check_report.html' : 'summary.html'
+          const finalReportUrl = `${getBackendHost()}/reports/${reportFile}?t=${Date.now()}`
+          reportUrl.value = finalReportUrl
+        }
+        
+        logs.value.push(`[${new Date().toLocaleTimeString()}] 任务执行完成。`)
+
+        // 决定任务类型标签
+        const reportType = isWebFrontendStressTest ? 'Web 性能分析' : (isDramaCheck ? '业务自动化' : 'K6 压测')
+
+        // 追加到存储仓库
+        reportStore.addReport({
+          name: toolName.value,
+          type: reportType,
+          status: 'Passed',
+          duration: formatTime(duration.value),
+          author: 'Current User',
+          reportUrl: reportUrl.value || ''
+        })
+      }
+    }
 }
 
 const stopExecution = () => {
@@ -405,10 +448,14 @@ onUnmounted(() => {
             <label class="param-label">
               <span class="link-icon">🔗</span> 测试链接
             </label>
-            <el-input v-model="projectName" disabled class="param-input-disabled" />
+            <el-input 
+              v-model="projectName" 
+              :disabled="!isWebFrontendStressTest" 
+              :class="{ 'param-input-disabled': !isWebFrontendStressTest && !isWebFrontendStressTest }" 
+            />
           </div>
 
-          <div class="param-row">
+          <div v-if="!isWebFrontendStressTest" class="param-row">
             <div class="param-group half">
               <label class="param-label">测试服务器</label>
               <!-- 改为下拉框切换 -->

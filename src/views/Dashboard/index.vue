@@ -115,8 +115,8 @@ const apiTools = ref<ToolDef[]>([
   },
   {
     id: 'rest-client',
-    name: 'REST Client',
-    description: 'Fast API debugging and testing utility.',
+    name: 'REST 客户端',
+    description: '快速 API 调试与测试工具。',
     iconName: 'Setting',
     iconColor: '#6366f1',
     iconBg: 'rgba(99, 102, 241, 0.1)',
@@ -124,8 +124,8 @@ const apiTools = ref<ToolDef[]>([
   },
   {
     id: 'cypress-runner',
-    name: 'Cypress Runner',
-    description: 'Execute headless UI automation suites.',
+    name: 'Cypress 运行器',
+    description: '执行无头 UI 自动化测试套件。',
     iconName: 'VideoPlay',
     iconColor: '#ef4444',
     iconBg: 'rgba(239, 68, 68, 0.1)',
@@ -133,8 +133,8 @@ const apiTools = ref<ToolDef[]>([
   },
   {
     id: 'load-generator',
-    name: 'Load Generator',
-    description: 'Simulate concurrent traffic for stress tests.',
+    name: '负载生成器',
+    description: '模拟并发流量进行压力测试。',
     iconName: 'Loading',
     iconColor: '#3b82f6',
     iconBg: 'rgba(59, 130, 246, 0.1)',
@@ -142,8 +142,8 @@ const apiTools = ref<ToolDef[]>([
   },
   {
     id: 'query-optimizer',
-    name: 'Query Optimizer',
-    description: 'Analyze and refactor slow SQL queries.',
+    name: '查询优化器',
+    description: '分析并重构慢 SQL 查询。',
     iconName: 'Document',
     iconColor: '#f59e0b',
     iconBg: 'rgba(245, 158, 11, 0.1)',
@@ -180,24 +180,34 @@ const apiTools = ref<ToolDef[]>([
 
 const perfTools = ref<ToolDef[]>([
   {
+    id: 'web-stress-test',
+    name: 'Web前端压测',
+    description: '基于 Lighthouse 引擎，深度分析网页性能、可访问性及最佳实践。',
+    iconName: 'Odometer',
+    iconColor: '#f59e0b',
+    iconBg: 'rgba(245, 158, 11, 0.1)',
+    statusText: '性能就绪'
+  },
+  {
     id: 'latency-sim',
-    name: 'Latency Simulator',
-    description: 'Throttle network for real-world tests.',
+    name: '时延模拟器',
+    description: '针对真实场景进行网络限速测试。',
     iconName: 'Clock',
     iconColor: '#6b7280',
     iconBg: 'rgba(107, 114, 128, 0.1)',
-    statusText: 'Offline'
+    statusText: '离线'
   },
   {
     id: 'resource-monitor',
-    name: 'Resource Monitor',
-    description: 'Watch CPU/RAM during test runs.',
+    name: '资源监控器',
+    description: '在测试运行时监控 CPU/内存占用。',
     iconName: 'Cpu',
     iconColor: '#3b82f6',
     iconBg: 'rgba(59, 130, 246, 0.1)',
-    statusText: 'Monitoring Active'
+    statusText: '监控激活'
   }
 ])
+
 </script>
 
 <template>
@@ -209,9 +219,9 @@ const perfTools = ref<ToolDef[]>([
           <div class="section-icon section-icon--blue">
             <el-icon :size="14"><component :is="Icons.Clock" /></el-icon>
           </div>
-          <h2 class="section-title">Recently Used</h2>
+          <h2 class="section-title">最近使用</h2>
         </div>
-        <a href="#" class="clear-link" @click.prevent="clearHistory">Clear History</a>
+        <a href="#" class="clear-link" @click.prevent="clearHistory">清除历史</a>
       </div>
 
       <div class="card-grid card-grid--4">
@@ -231,7 +241,7 @@ const perfTools = ref<ToolDef[]>([
           <p class="tool-card__desc">{{ tool.description }}</p>
           <div class="tool-card__footer tool-card__footer--launch">
             <button class="launch-btn" @click="handleLaunch(tool)">
-              Launch
+              启动
             </button>
           </div>
         </div>
@@ -245,7 +255,7 @@ const perfTools = ref<ToolDef[]>([
           <div class="section-icon section-icon--indigo">
             <el-icon :size="14"><component :is="Icons.Connection" /></el-icon>
           </div>
-          <h2 class="section-title">API Tools</h2>
+          <h2 class="section-title">API 工具</h2>
         </div>
       </div>
 
@@ -267,13 +277,13 @@ const perfTools = ref<ToolDef[]>([
           <div class="tool-card__footer">
             <div class="status-indicator">
               <span v-if="tool.statusIndicator === 'ready'" class="ready-text">
-                Ready
+                就绪
               </span>
               <span v-else-if="tool.statusIndicator === 'on-hold'" class="on-hold-text">
-                On hold
+                挂起
               </span>
             </div>
-            <a href="#" class="open-link" @click.prevent="handleLaunch(tool)">Open</a>
+            <a href="#" class="open-link" @click.prevent="handleLaunch(tool)">打开</a>
           </div>
         </div>
       </div>
@@ -287,7 +297,7 @@ const perfTools = ref<ToolDef[]>([
           <div class="section-icon section-icon--orange">
             <el-icon :size="14"><component :is="Icons.Tickets" /></el-icon>
           </div>
-          <h2 class="section-title">Test Process Tools</h2>
+          <h2 class="section-title">测试流程工具</h2>
         </div>
       </div>
 
@@ -302,7 +312,7 @@ const perfTools = ref<ToolDef[]>([
           <p class="tool-card__desc">管理与跟踪核心业务流程的测试状态（思维导图模式）</p>
           <div class="tool-card__footer">
             <span class="ready-text">V1.0</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/test_process')">Open</a>
+            <a href="#" class="open-link" @click.prevent="router.push('/test_process')">打开</a>
           </div>
         </div>
       </div>
@@ -315,19 +325,23 @@ const perfTools = ref<ToolDef[]>([
           <div class="section-icon section-icon--teal">
             <el-icon :size="14"><component :is="Icons.Monitor" /></el-icon>
           </div>
-          <h2 class="section-title">UI Automation</h2>
+          <h2 class="section-title">UI 自动化</h2>
         </div>
       </div>
 
       <div class="card-grid card-grid--4">
-        <div class="tool-card tool-card--coming-soon">
+        <div class="tool-card">
           <div class="tool-card__top">
-            <div class="tool-card__icon" style="background: rgba(107,114,128,0.08)">
-              <el-icon :size="20" color="#9ca3af"><component :is="Icons.Setting" /></el-icon>
+            <div class="tool-card__icon" style="background: rgba(139, 92, 246, 0.1)">
+              <el-icon :size="20" color="#8b5cf6"><component :is="Icons.Grid" /></el-icon>
             </div>
           </div>
-          <h3 class="tool-card__name" style="color: #9ca3af;">敬请期待</h3>
-          <p class="tool-card__desc">UI自动化工具即将上线</p>
+          <h3 class="tool-card__name">斗兽棋</h3>
+          <p class="tool-card__desc">休闲类游戏自动化策略验证（实验性功能）</p>
+          <div class="tool-card__footer">
+            <span class="ready-text">V0.1-Beta</span>
+            <a href="#" class="open-link" @click.prevent="router.push('/ui_auto_jungle')">打开</a>
+          </div>
         </div>
       </div>
     </div>
@@ -339,7 +353,7 @@ const perfTools = ref<ToolDef[]>([
           <div class="section-icon section-icon--green">
             <el-icon :size="14"><component :is="Icons.Cpu" /></el-icon>
           </div>
-          <h2 class="section-title">Performance</h2>
+          <h2 class="section-title">性能测试</h2>
         </div>
       </div>
 
@@ -360,7 +374,7 @@ const perfTools = ref<ToolDef[]>([
           <p class="tool-card__desc">{{ tool.description }}</p>
           <div class="tool-card__footer">
             <span class="extra-text">{{ tool.statusText }}</span>
-            <a href="#" class="open-link" @click.prevent="handleLaunch(tool)">Open</a>
+            <a href="#" class="open-link" @click.prevent="handleLaunch(tool)">打开</a>
           </div>
         </div>
       </div>

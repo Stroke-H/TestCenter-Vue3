@@ -66,6 +66,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '验收报告', icon: 'Monitor' }
       },
       {
+        path: 'ui_auto_jungle',
+        name: 'JungleChess',
+        component: () => import('@/views/JungleChess/index.vue'),
+        meta: { title: '斗兽棋', hidden: true }
+      },
+      {
         path: 'settings',
         name: 'Settings',
         redirect: '/settings/projects',

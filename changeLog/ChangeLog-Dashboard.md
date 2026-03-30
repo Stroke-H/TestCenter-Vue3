@@ -1,5 +1,11 @@
 # ChangeLog - Dashboard
 
+## 2026-03-30
+
+### Added
+- **Web前端压测入口**: 在性能测试分区首位新增了“Web前端压测”工具卡片，支持快速发起 Lighthouse 性能审计。
+- **Card Optimization**: 优化了性能测试分区的卡片顺序，将高频使用的 Web 压测工具调整至靠左第一个位置。
+
 ## 2026-03-24
 
 ### Added
