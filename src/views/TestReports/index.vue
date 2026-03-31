@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import {
   Search,
   DataAnalysis,
   View,
   FullScreen,
-  Delete
+  Delete,
+  MagicStick
 } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 
@@ -17,22 +18,58 @@ const activeFilter = ref('全部')
 const searchQuery = ref('')
 const dialogVisible = ref(false)
 const iframeUrl = ref('')
+const selectedReport = ref<any>(null)
 
-const filterOptions = ['全部', 'K6 压测', '接口验证', 'UI 自动化']
+const filterOptions = ['全部', 'Web 性能分析', 'K6 压测', '接口验证', 'UI 自动化']
 
 // 挂载全局 Reports 仓库
 const reportStore = useReportStore()
 const { reports } = storeToRefs(reportStore)
+
+// 协助定位后端地址
+const getBackendHost = () => {
+  return `${window.location.protocol}//${window.location.hostname}:8080`
+}
+
+const availablePerformanceReports = ref<string[]>([])
+
+// 获取后端 report 目录下真正存在的性能报告文件列表
+const fetchAvailableReports = async () => {
+  try {
+    const response = await fetch(`${getBackendHost()}/api/performance/reports`)
+    availablePerformanceReports.value = await response.json()
+  } catch (e) {
+    console.error('获取性能报告列表失败', e)
+  }
+}
+
+onMounted(() => {
+  fetchAvailableReports()
+  reportStore.fetchReports()
+})
 
 // ---------- 2. 核心计算属性与方法 ----------
 
 // 根据顶栏的 Filter 与搜索框双重过滤列表
 const filteredReports = computed(() => {
   return reports.value.filter(item => {
+    // 1. 基础过滤：匹配侧边栏分类和搜索框
     const matchesFilter = activeFilter.value === '全部' || item.type === activeFilter.value
     const matchesSearch = item.name.toLowerCase().includes(searchQuery.value.toLowerCase()) || 
                           item.id.toLowerCase().includes(searchQuery.value.toLowerCase())
-    return matchesFilter && matchesSearch
+    
+    if (!matchesFilter || !matchesSearch) return false
+
+    // 2. 特殊逻辑：针对 “Web 性能分析”（Lighthouse），只有 report 文件夹中有文件才显示
+    if (item.type === 'Web 性能分析') {
+      if (!item.reportUrl) return false
+      // 提取文件名，例如从 /performance-reports/baidu.report.html?t=... 提取出 baidu.report.html
+      const fileName = item.reportUrl.split('/').pop()?.split('?')[0]
+      return fileName && availablePerformanceReports.value.includes(fileName)
+    }
+
+    // 3. K6 压测等其他类型保持原始逻辑，直接显示记录
+    return true
   })
 })
 
@@ -49,6 +86,7 @@ const getStatusType = (status: string) => {
 // 打开弹窗查看报告 (只针对压测)
 const viewReport = (row: any) => {
   if (row.reportUrl) {
+    selectedReport.value = row
     iframeUrl.value = row.reportUrl + `?t=${Date.now()}` // 防止缓存
     dialogVisible.value = true
   }
@@ -199,6 +237,17 @@ const confirmClear = () => {
       <div class="iframe-container">
         <iframe v-if="dialogVisible" :src="iframeUrl" frameborder="0" class="report-iframe" />
       </div>
+
+      <!-- AI 智能总结面板 -->
+      <div v-if="selectedReport?.analysisResult" class="ai-analysis-panel">
+        <div class="analysis-header">
+          <el-icon class="magic-icon"><MagicStick /></el-icon>
+          <span class="header-text">AI 智能报告总结</span>
+        </div>
+        <div class="analysis-content">
+          {{ selectedReport.analysisResult }}
+        </div>
+      </div>
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="dialogVisible = false">关闭</el-button>
@@ -345,5 +394,39 @@ const confirmClear = () => {
   width: 100%;
   height: 100%;
   border: none;
+}
+/* ==================== AI 总结面板 ==================== */
+.ai-analysis-panel {
+  margin-top: 24px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #6366f1;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.analysis-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #4f46e5;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.magic-icon {
+  font-size: 20px;
+}
+
+.analysis-content {
+  color: #334155;
+  line-height: 1.8;
+  font-size: 14px;
+  white-space: pre-wrap;
+  background: #ffffff;
+  padding: 16px;
+  border-radius: 6px;
+  border: 1px solid #f1f5f9;
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onUnmounted, nextTick, watch } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useReportStore } from '@/stores'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -159,6 +159,9 @@ type ExecStatus = 'Ready' | 'Executing' | 'Stopped' | 'Finished'
 const currentStatus = ref<ExecStatus>('Ready')
 
 // 运行时间控制
+const reportUrl = ref('')
+const analysisResult = ref('')
+const tempLighthouseFile = ref('')
 const uptime = ref(0)
 const duration = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
@@ -167,7 +170,6 @@ let timer: ReturnType<typeof setInterval> | null = null
 const logs = ref<string[]>(['准备就绪，点击 Execute 开始执行'])
 const logContainer = ref<HTMLElement | null>(null)
 let ws: WebSocket | null = null
-const reportUrl = ref<string | null>(null)
 
 const formatTime = (seconds: number) => {
   const h = Math.floor(seconds / 3600).toString().padStart(2, '0')
@@ -186,8 +188,11 @@ const scrollToBottom = () => {
 
 // 新增：URL 校验函数
 const isValidUrl = (url: string) => {
-  const pattern = /^(https?:\/\/)?([\da-z.-]+)\.([a-z.]{2,6})([\/\w .-]*)*\/?$/
-  return pattern.test(url)
+  if (!url) return false
+  // 更加宽松的判断逻辑：支持 http/https 协议头，支持 IP 地址、端口号及 localhost
+  // 符合用户描述：理论上带有 http:// 的就是一个正常链接
+  const pattern = /^(https?:\/\/)?(([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}|localhost|(?:\d{1,3}\.){3}\d{1,3})(:\d+)?(\/.*)?$/
+  return pattern.test(url) || url.startsWith('http://') || url.startsWith('https://')
 }
 
 const startExecution = async () => {
@@ -293,7 +298,7 @@ const startExecution = async () => {
     return
   }
 
-  reportUrl.value = null // 清除上一次的报告
+  reportUrl.value = '' // 清除上一次的报告
   logs.value = []
   logs.value.push(`[${new Date().toLocaleTimeString()}] 准备连接调度引擎...`)
 
@@ -338,8 +343,14 @@ const startExecution = async () => {
       const data = event.data
       // 识别后端发送的报告就绪信号
       if (typeof data === 'string' && data.startsWith('REPORT_READY:')) {
-        const reportFile = data.split(':')[1]
-        reportUrl.value = `${getBackendHost()}/reports/${reportFile}?t=${Date.now()}`
+        const reportFile = data.split(':')[1] || ''
+        if (isWebFrontendStressTest) {
+          // 暂存文件名，等分析完再显示
+          tempLighthouseFile.value = reportFile
+        } else {
+          const staticPath = 'reports'
+          reportUrl.value = `${getBackendHost()}/${staticPath}/${reportFile}?t=${Date.now()}`
+        }
         return
       }
       logs.value.push(data)
@@ -350,7 +361,7 @@ const startExecution = async () => {
       logs.value.push(`[WARN/ERR] WebSocket 连接错误`)
     }
 
-    ws.onclose = () => {
+    ws.onclose = async () => {
       if (timer) clearInterval(timer)
       if (currentStatus.value === 'Executing') {
         currentStatus.value = 'Finished'
@@ -367,20 +378,47 @@ const startExecution = async () => {
         // 决定任务类型标签
         const reportType = isWebFrontendStressTest ? 'Web 性能分析' : (isDramaCheck ? '业务自动化' : 'K6 压测')
 
-        // 追加到存储仓库
-        reportStore.addReport({
+        // 如果是 Web 性能分析，补充分析逻辑
+        if (isWebFrontendStressTest && tempLighthouseFile.value) {
+          logs.value.push(`\n[AI] 正在分析报告结果，请稍候。。。`)
+          scrollToBottom()
+          
+          try {
+            const jsonFile = tempLighthouseFile.value.replace('.html', '.json')
+            const response = await fetch(`${getBackendHost()}/api/performance/analyze`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ filename: jsonFile })
+            })
+            const result = await response.json()
+            analysisResult.value = result.analysis
+            
+            // 将 AI 分析结果输出到日志区
+            logs.value.push(`\n${analysisResult.value}\n`)
+            
+            // 分析完成后，正式显示 HTML 报告
+            reportUrl.value = `${getBackendHost()}/performance-reports/${tempLighthouseFile.value}?t=${Date.now()}`
+          } catch (e) {
+            logs.value.push(`[ERROR] AI 分析失败: ${e}`)
+          }
+          scrollToBottom()
+        }
+
+        // 同步到后端执行记录
+        await reportStore.addReport({
           name: toolName.value,
           type: reportType,
           status: 'Passed',
           duration: formatTime(duration.value),
-          author: 'Current User',
-          reportUrl: reportUrl.value || ''
+          author: 'tester',
+          reportUrl: reportUrl.value || '',
+          analysisResult: analysisResult.value || ''
         })
       }
     }
 }
 
-const stopExecution = () => {
+const stopExecution = async () => {
   if (currentStatus.value !== 'Executing') return
 
   if (ws) {
@@ -390,12 +428,12 @@ const stopExecution = () => {
   if (timer) clearInterval(timer)
   
   if (currentStatus.value === 'Executing') {
-    reportStore.addReport({
+    await reportStore.addReport({
       name: toolName.value,
       type: isDramaCheck ? '业务自动化' : 'K6 压测',
       status: 'Failed',
       duration: formatTime(duration.value),
-      author: 'Current User',
+      author: 'tester',
     })
   }
 
@@ -413,6 +451,10 @@ const closePage = () => {
   }
   router.push('/')
 }
+
+onMounted(() => {
+  reportStore.fetchReports()
+})
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
@@ -760,6 +802,9 @@ onUnmounted(() => {
 
 .log-line {
   margin-bottom: 4px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ==================== 报告展现区 ==================== */

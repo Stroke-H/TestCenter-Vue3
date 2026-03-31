@@ -4,8 +4,12 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -29,20 +33,53 @@ func RunLighthouseHandler(c *gin.Context) {
 	ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("[INFO] 准备开始 Lighthouse 分析: %s", targetURL)))
 	ws.WriteMessage(websocket.TextMessage, []byte("--------------------------------------------------"))
 
-	// Ensure reports directory exists
-	reportDir := filepath.Join("..", "k6-scripts", "reports")
-	reportName := "lighthouse_report.html"
-	reportPath := filepath.Join(reportDir, reportName)
+	// Ensure reports directory exists at project root (relative to server/ dir is ../report)
+	reportDir := filepath.Join("..", "report")
+	if _, err := os.Stat(reportDir); os.IsNotExist(err) {
+		os.MkdirAll(reportDir, 0755)
+	}
+
+	// Extract filename from URL (e.g., 'example' from 'https://example.com')
+	hostname := "report"
+	u, err := url.Parse(targetURL)
+	if err == nil {
+		host := u.Hostname()
+		if host == "" {
+			// If parse fails or protocol missing, try a simpler split
+			host = strings.Split(targetURL, "/")[0]
+		}
+		
+		// Remove 'www.' if present and take the main segment
+		host = strings.TrimPrefix(host, "www.")
+		parts := strings.Split(host, ".")
+		if len(parts) > 0 {
+			hostname = parts[0]
+		}
+	}
+	
+	// Sanitize hostname for filename
+	hostname = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, hostname)
+
+	// 使用时间戳确保文件唯一性，防止不同次测试报告重名覆盖
+	timestamp := time.Now().Format("20060102150405")
+	reportBaseName := fmt.Sprintf("%s_%s", hostname, timestamp)
+	reportPath := filepath.Join(reportDir, reportBaseName)
 	absReportPath, _ := filepath.Abs(reportPath)
 
-	// Execute Lighthouse command
-	// chrome-flags: --no-sandbox is essential for many server environments
+	// Execute Lighthouse command with HTML and JSON outputs
+	// Lighthouse will append '.report.html' and '.report.json' to the output-path
 	cmd := exec.Command("lighthouse", 
 		targetURL, 
 		"--output", "html", 
+		"--output", "json", 
 		"--output-path", absReportPath, 
 		"--chrome-flags=--no-sandbox --headless --disable-gpu",
-		"--quiet", // Avoid too much noise if not needed, but bufio will catch it anyway
+		"--quiet",
 	)
 
 	stdout, _ := cmd.StdoutPipe()
@@ -53,7 +90,7 @@ func RunLighthouseHandler(c *gin.Context) {
 		return
 	}
 
-	// Stream logs from both stdout and stderr (Lighthouse often logs to stderr)
+	// Stream logs from both stdout and stderr
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
@@ -73,6 +110,8 @@ func RunLighthouseHandler(c *gin.Context) {
 	ws.WriteMessage(websocket.TextMessage, []byte("\n--------------------------------------------------"))
 	ws.WriteMessage(websocket.TextMessage, []byte("[SUCCESS] Lighthouse 分析任务执行完成。"))
 	
-	// Special token for frontend to identify report completion
-	ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("REPORT_READY:%s", reportName)))
+	// Notification for frontend with the dynamic filename
+	// Lighthouse adds .report.html
+	finalHtmlReport := fmt.Sprintf("%s.report.html", reportBaseName)
+	ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("REPORT_READY:%s", finalHtmlReport)))
 }

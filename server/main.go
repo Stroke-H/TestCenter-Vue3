@@ -26,6 +26,8 @@ func main() {
 
 	// Serve static files for K6 reports
 	r.StaticFS("/reports", http.Dir("../k6-scripts/reports"))
+	// Serve static files for Lighthouse performance reports
+	r.StaticFS("/performance-reports", http.Dir("../report"))
 
 	// API Routes
 	services.StartMatchmaker() // Start the matching worker
@@ -91,6 +93,21 @@ func main() {
 		{
 			reports.GET("/list", services.GetAcceptanceReportsHandler)
 			reports.POST("/save", services.SaveAcceptanceReportHandler)
+		}
+
+		// Performance Monitoring Routes
+		performance := api.Group("/performance")
+		{
+			performance.GET("/reports", services.ListLighthouseReportsHandler)
+			performance.POST("/analyze", services.AnalyzeLighthouseHandler)
+		}
+
+		// Execution Reports (Persistent)
+		execReports := api.Group("/execution-reports")
+		{
+			execReports.GET("", services.GetExecutionReportsHandler)
+			execReports.POST("", services.AddExecutionReportHandler)
+			execReports.DELETE("", services.ClearExecutionReportsHandler)
 		}
 	}
 
