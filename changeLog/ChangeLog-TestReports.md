@@ -1,6 +1,13 @@
 # ChangeLog - Test Reports
 
+## 2026-03-30
+
+### Added
+- **AI Intelligence Summary**: 深度集成了 AI 报告分析面板。当测试报告具备 `analysisResult` 时，会在详情弹窗下方自动渲染由 AI 生成的性能指引与优化建议。
+- **Lighthouse File Verification**: 增强了 Web 性能分析报告的显示逻辑。系统现在会实时校验后端 `report` 目录下是否存在对应的 HTML 文件，仅显示真实有效的报告记录。
+
 ## 2026-03-24
+
 
 ### Added
 - **AI-Powered Report Assistant**: 实现了基于 AI 简写（如 `swa, 2.58.0`）自动填充复杂报告模版的功能。

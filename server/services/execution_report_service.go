@@ -22,6 +22,7 @@ type ExecutionReport struct {
 	Status         string `json:"status"`
 	Duration       string `json:"duration"`
 	CreatedAt      string `json:"createdAt"`
+	Author         string `json:"author,omitempty"`
 	ReportURL      string `json:"reportUrl,omitempty"`
 	AnalysisResult string `json:"analysisResult,omitempty"`
 }

@@ -250,13 +250,21 @@ func init() {
 				if app == "com.shortswave.android" || app == "com.company.shortsdrama.wave" || strings.Contains(strings.ToLower(app), "shortwave") || strings.Contains(strings.ToLower(app), "shortsdrama") {
 					projectName = "ShortsWave"
 				}
+				operatorID := senderID
+				operatorName := ""
+				if boundUser, err := services.FindUserByFeishuOpenID(senderID); err == nil && boundUser != nil {
+					operatorID = boundUser.ID
+					if boundUser.Username != "" {
+						operatorName = boundUser.Username
+					}
+				}
 				AddOperationLog(model.AIOperationLog{
 					ID:        fmt.Sprintf("OP_%d", time.Now().UnixNano()),
 					ToolName:  "delete_account",
 					Project:   projectName,
 					Env:       args.Env,
-					UserID:    loginData.Data.UserID,
-					UserName:  "", // Optional: Could fetch from a previous step if needed
+					UserID:    operatorID,
+					UserName:  operatorName,
 					Status:    "success",
 					Detail:    fmt.Sprintf("Account %s deleted in %s env", loginData.Data.UserID, args.Env),
 					Timestamp: time.Now(),
@@ -334,7 +342,7 @@ func init() {
 					for _, s := range suggestions {
 						names = append(names, fmt.Sprintf("- %s (%s / %s)", s.ProjectName, s.ProjectCode, s.ShortCode))
 					}
-					return fmt.Sprintf("⚠️ 未在现有库中精确匹配到项目 '%s'。您是指以下项目之一吗？\n%s\n\n如果以上都不是，请问这是否是一个【新项目】？如果是，请直接提供项目全称和 ID (如 A1200)，我将为您创建记录并生成报告。", 
+					return fmt.Sprintf("⚠️ 未在现有库中精确匹配到项目 '%s'。您是指以下项目之一吗？\n%s\n\n如果以上都不是，请问这是否是一个【新项目】？如果是，请直接提供项目全称和 ID (如 A1200)，我将为您创建记录并生成报告。",
 						args.ProjectCode, strings.Join(names, "\n")), nil
 				}
 				return fmt.Sprintf("❌ 未找到项目代号 '%s'，且没有找到相似的现有项目。请确认项目代号是否正确。\n若这是一个您需要新增的项目，请提供：【项目全称】和【项目 ID】。", args.ProjectCode), nil
@@ -349,7 +357,7 @@ func init() {
 				version = "2.58.0" // Default/Fallback
 			}
 			displayVersion := "v" + version
-			
+
 			// 3. Date Formatting
 			year := time.Now().Year()
 			formattedPeriod := args.Period
@@ -370,7 +378,7 @@ func init() {
 			// 4. Test Environment (Filter by OS suffix)
 			envStr := "正式服务器"
 			devices, _ := services.ConfigServiceInstance.GetDevicesByProjectCode(projectActualCode)
-			
+
 			// Detect target OS from project name suffix
 			targetOS := ""
 			if strings.Contains(strings.ToLower(projectName), "- ios") {
@@ -441,6 +449,15 @@ func init() {
 				"版本更新测试需求点：\n%s",
 				projectActualCode, projectName, displayVersion, testOwner, formattedPeriod, envStr, formattedUnfixed, formattedFixed, formattedStories)
 
+			operatorName := testOwner
+			operatorID := senderID
+			if boundUser, err := services.FindUserByFeishuOpenID(senderID); err == nil && boundUser != nil {
+				operatorID = boundUser.ID
+				if boundUser.Username != "" {
+					operatorName = boundUser.Username
+				}
+			}
+
 			// 7. Persist (Only for non-Web sessions, Web will handle it via confirmation dialog)
 			if !strings.HasPrefix(chatID, "WEB_") {
 				newReport := services.AcceptanceReport{
@@ -462,6 +479,18 @@ func init() {
 				}
 				services.SaveAcceptanceReport(newReport)
 			}
+
+			AddOperationLog(model.AIOperationLog{
+				ID:        fmt.Sprintf("OP_%d", time.Now().UnixNano()),
+				ToolName:  "generate_acceptance_report",
+				Project:   projectActualCode,
+				Env:       envStr,
+				UserID:    operatorID,
+				UserName:  operatorName,
+				Status:    "success",
+				Detail:    fmt.Sprintf("Acceptance report generated for %s %s", projectName, displayVersion),
+				Timestamp: time.Now(),
+			})
 
 			// 8. Return structured JSON for web frontend
 			type ReportOutput struct {
@@ -533,7 +562,7 @@ func init() {
 			if err != nil {
 				return fmt.Sprintf("❌ 新增项目失败: %v", err), nil
 			}
-			return fmt.Sprintf("✅ 已成功入库新项目：\n项目 ID: %s\n项目全称: %s\n缩写: %s\n您可以立即重新生成该项目的验收报告了。", 
+			return fmt.Sprintf("✅ 已成功入库新项目：\n项目 ID: %s\n项目全称: %s\n缩写: %s\n您可以立即重新生成该项目的验收报告了。",
 				args.ProjectCode, args.ProjectName, args.ShortCode), nil
 		},
 	})

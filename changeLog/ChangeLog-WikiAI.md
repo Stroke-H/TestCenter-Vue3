@@ -13,10 +13,8 @@
 - **[OPTIMIZE] 气泡换行显示**: 优化了聊天气泡的 CSS，支持长链接、长日志的自动换行，避免 UI 撑破。
 - **[FIX] 身份识别对齐**: 修复了 Web 端助手无法识别已登录用户身份的 Bug，改为直接通过平台 ID 进行免绑定校验。
 
-## 3. 验收报告逻辑修复
-- **[FIX] 预览数据展示**: 修复了预览弹窗中“已修复”与“未修复”缺陷只能择一显示的逻辑错误。
-- **[FIX] 字段映射一致性**: 统一了前端 `period`/`environment` 与后端 `test_time`/`test_env` 的字段命名，解决预览数据丢失问题。
-- **[OPTIMIZE] 存储结构分离**: 飞书端生成的报告现在会正确隔离存储已修复逻辑与未修复逻辑。
+## 3. 相关模块联动 (Module Synergy)
+- **验收报告联动**: 飞书端生成的报告逻辑已迁移并整合至专有的 [AcceptanceReport](file:///Users/apple/TestCenter_Vue3/changeLog/ChangeLog-AcceptanceReport.md) 记录中，确保存储结构的隔离与一致性。
 
 ---
 *Status: Verified & Ready for Deployment*

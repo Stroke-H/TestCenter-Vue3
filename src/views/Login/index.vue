@@ -99,7 +99,7 @@ const goToRegister = () => {
 
       <div class="login-footer">
         <span>还没有账号？</span>
-        <el-link type="primary" :underline="false" @click="goToRegister">立即注册</el-link>
+        <el-link type="primary" underline="never" @click="goToRegister">立即注册</el-link>
       </div>
     </div>
   </div>

@@ -18,6 +18,7 @@ import {
   Collection,
   Iphone
 } from '@element-plus/icons-vue'
+import { User as UserMenuIcon } from '@element-plus/icons-vue'
 
 // 路由实例
 const router = useRouter()
@@ -51,6 +52,11 @@ const menuItems = [
     ]
   }
 ]
+
+const settingsMenu = menuItems.find(item => item.path === '/settings')
+if (settingsMenu && settingsMenu.children) {
+  settingsMenu.children.push({ path: '/settings/accounts', title: '账号管理', icon: UserMenuIcon })
+}
 
 // 菜单点击导航
 const handleMenuSelect = (path: string) => {

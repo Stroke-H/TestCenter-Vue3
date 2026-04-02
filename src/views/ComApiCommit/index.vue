@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useReportStore } from '@/stores'
+import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Warning,
@@ -16,6 +17,7 @@ import {
 const route = useRoute()
 const router = useRouter()
 const reportStore = useReportStore()
+const authStore = useAuthStore()
 
 // 从路由参数获取工具信息
 const toolName = ref((route.query.name as string) || '测试剧集是否重复')
@@ -410,7 +412,7 @@ const startExecution = async () => {
           type: reportType,
           status: 'Passed',
           duration: formatTime(duration.value),
-          author: 'tester',
+          author: authStore.user?.username || 'tester',
           reportUrl: reportUrl.value || '',
           analysisResult: analysisResult.value || ''
         })
@@ -433,7 +435,7 @@ const stopExecution = async () => {
       type: isDramaCheck ? '业务自动化' : 'K6 压测',
       status: 'Failed',
       duration: formatTime(duration.value),
-      author: 'tester',
+      author: authStore.user?.username || 'tester',
     })
   }
 

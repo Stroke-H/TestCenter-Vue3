@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed, watch, markRaw } from 'vue'
 import { Plus, Search, Calendar, User, Money } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 
 defineOptions({ name: 'AcceptanceReport' })
@@ -9,21 +10,57 @@ defineOptions({ name: 'AcceptanceReport' })
 const API_BASE = 'http://localhost:8080/api'
 const authStore = useAuthStore()
 
+interface ProjectOption {
+  id: string
+  project_code: string
+  project_name: string
+  short_code?: string
+}
+
+interface DeviceOption {
+  id: string
+  device_name: string
+  os: string
+  model: string
+  allowed_app: string
+}
+
 // ===== State =====
 const stats = ref([
-  { title: 'Total Report', value: 0, icon: Calendar, color: '#3b82f6', bgColor: '#eff6ff' },
-  { title: 'Tester', value: 1, icon: User, color: '#eab308', bgColor: '#fefce8' },
-  { title: 'Coming Soon', value: 'N/A', icon: Money, color: '#f97316', bgColor: '#fff7ed' }
+  { title: 'Total Report', value: 0, icon: markRaw(Calendar), color: '#3b82f6', bgColor: '#eff6ff' },
+  { title: 'Tester', value: 0, icon: markRaw(User), color: '#eab308', bgColor: '#fefce8' },
+  { title: 'Total Project', value: 0, icon: markRaw(Money), color: '#f97316', bgColor: '#fff7ed' }
 ])
 
 const recentReports = ref<any[]>([])
 const historyProjects = ref<any[]>([])
 const searchQuery = ref('')
 const categoryFilter = ref('')
+const projects = ref<ProjectOption[]>([])
+const devices = ref<DeviceOption[]>([])
+const testTimeRange = ref<string[]>([])
+const selectedTestDevices = ref<string[]>([])
 
 // --- Preview State ---
 const previewVisible = ref(false)
 const currentPreview = ref<any>(null)
+const previewMode = ref<'view' | 'create'>('view')
+const sendingToFeishu = ref(false)
+const reportForm = ref<any>({
+  project_name: '',
+  project_code: '',
+  version: '',
+  reporter: '',
+  test_owner: '',
+  test_time: '',
+  test_env: '',
+  test_devices: '',
+  test_conclusion: 'Pass',
+  update_requirements: '',
+  bug_submission_status: '',
+  bug_fix_status: '',
+  status: 'Completed'
+})
 
 // --- Fetch Logic ---
 const fetchReports = async () => {
@@ -38,7 +75,7 @@ const fetchReports = async () => {
       recentReports.value = data.map(r => ({
         ...r, // Keep original data for preview
         avatar: r.reporter ? r.reporter.charAt(0).toUpperCase() : 'R',
-        reporter: `${r.reporter} | ${r.project_name}`,
+        reporter_display: `${r.reporter} | ${r.project_name}`,
         date: r.created_at ? new Date(r.created_at).toISOString().split('T')[0] : '-',
         status: r.status || 'Completed'
       }))
@@ -47,6 +84,14 @@ const fetchReports = async () => {
       if (stats.value[0]) {
         stats.value[0].value = data.length
       }
+      if (stats.value[1]) {
+        const uniqueReporters = new Set(
+          data
+            .map((r: any) => (r.reporter || '').trim())
+            .filter((reporter: string) => reporter)
+        )
+        stats.value[1].value = uniqueReporters.size
+      }
       
       // Update History Projects (Count per Code)
       const counts: Record<string, number> = {}
@@ -54,19 +99,231 @@ const fetchReports = async () => {
         counts[r.project_code] = (counts[r.project_code] || 0) + 1
       })
       historyProjects.value = Object.entries(counts).map(([id, count]) => ({ id, count }))
+      if (stats.value[2]) {
+        stats.value[2].value = historyProjects.value.length
+      }
     }
   } catch (err) {
     console.error('Failed to fetch reports', err)
   }
 }
 
+const fetchProjects = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/config/projects`)
+    const data = await res.json()
+    projects.value = Array.isArray(data) ? data : []
+  } catch (err) {
+    console.error('Failed to fetch projects', err)
+  }
+}
+
+const fetchDevices = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/config/devices`)
+    const data = await res.json()
+    devices.value = Array.isArray(data) ? data : []
+  } catch (err) {
+    console.error('Failed to fetch devices', err)
+  }
+}
+
+const selectedProject = computed(() => {
+  if (reportForm.value.project_code) {
+    return projects.value.find(item => item.project_code === reportForm.value.project_code) || null
+  }
+  if (reportForm.value.project_name) {
+    return projects.value.find(item => item.project_name === reportForm.value.project_name) || null
+  }
+  return null
+})
+
+const filteredDevices = computed(() => {
+  if (!reportForm.value.project_code) return []
+  return devices.value.filter((item) => {
+    const allowedApps = (item.allowed_app || '').split(',').map(app => app.trim()).filter(Boolean)
+    return allowedApps.includes(reportForm.value.project_code)
+  })
+})
+
+const syncProjectByCode = (code: string) => {
+  const matched = projects.value.find(item => item.project_code === code)
+  if (matched) {
+    reportForm.value.project_name = matched.project_name
+  }
+}
+
+const syncProjectByName = (name: string) => {
+  const matched = projects.value.find(item => item.project_name === name)
+  if (matched) {
+    reportForm.value.project_code = matched.project_code
+  }
+}
+
 const handleRowClick = (row: any) => {
+  previewMode.value = 'view'
   currentPreview.value = row
   previewVisible.value = true
 }
 
+const canSendToFeishu = computed(() => {
+  return previewMode.value === 'view' &&
+    !!currentPreview.value?.id &&
+    !!authStore.user?.username &&
+    authStore.user.username === currentPreview.value?.reporter
+})
+
+const openCreateReport = () => {
+  previewMode.value = 'create'
+  currentPreview.value = null
+  reportForm.value = {
+    project_name: '',
+    project_code: '',
+    version: '',
+    reporter: authStore.user?.username || '',
+    test_owner: authStore.user?.username || '',
+    test_time: '',
+    test_env: '',
+    test_devices: '',
+    test_conclusion: 'Pass',
+    update_requirements: '',
+    bug_submission_status: '',
+    bug_fix_status: '',
+    status: 'Completed'
+  }
+  testTimeRange.value = []
+  selectedTestDevices.value = []
+  previewVisible.value = true
+}
+
+const saveNewReport = async () => {
+  if (!reportForm.value.project_name || !reportForm.value.project_code || !reportForm.value.version) {
+    ElMessage.warning('请至少填写项目名称、项目代码和版本号')
+    return
+  }
+
+  try {
+    const payload = {
+      ...reportForm.value,
+      id: `AR_${Date.now()}`,
+      reporter: reportForm.value.reporter || authStore.user?.username || 'Manual Report',
+      test_owner: reportForm.value.test_owner || reportForm.value.reporter || authStore.user?.username || 'Manual Report',
+      test_devices: selectedTestDevices.value.join('、'),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      status: reportForm.value.status || 'Completed'
+    }
+
+    const res = await fetch(`${API_BASE}/acceptance-reports/save`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authStore.token
+      },
+      body: JSON.stringify(payload)
+    })
+
+    if (!res.ok) {
+      throw new Error('Save failed')
+    }
+
+    ElMessage.success('验收报告创建成功')
+    previewVisible.value = false
+    fetchReports()
+  } catch (err) {
+    console.error('Failed to save acceptance report', err)
+    ElMessage.error('保存验收报告失败')
+  }
+}
+
+const sendReportToFeishu = async () => {
+  if (!currentPreview.value?.id) return
+
+  sendingToFeishu.value = true
+  try {
+    const res = await fetch(`${API_BASE}/acceptance-reports/send-feishu`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authStore.token
+      },
+      body: JSON.stringify({ id: currentPreview.value.id })
+    })
+
+    const rawText = await res.text()
+    let data: any = null
+    try {
+      data = rawText ? JSON.parse(rawText) : null
+    } catch {
+      data = { error: rawText || 'Unexpected response format' }
+    }
+
+    if (!res.ok) {
+      throw new Error(data?.error || 'Send failed')
+    }
+
+    ElMessage.success('已发送到飞书群')
+  } catch (err: any) {
+    console.error('Failed to send acceptance report to Feishu', err)
+    ElMessage.error(err?.message || '发送到飞书失败')
+  } finally {
+    sendingToFeishu.value = false
+  }
+}
+
+const getPreviewTestEnv = (report: any) => {
+  const rawEnv = (report?.test_env || '').trim()
+  if (!rawEnv) return 'N/A'
+
+  const knownEnvs = ['测试服务器', '正式服务器']
+  const matchedEnv = knownEnvs.find(item => rawEnv.includes(item))
+  if (!matchedEnv) return rawEnv
+
+  return matchedEnv
+}
+
+const getPreviewTestDevices = (report: any) => {
+  const explicitDevices = (report?.test_devices || '').trim()
+  if (explicitDevices) return explicitDevices
+
+  const rawEnv = (report?.test_env || '').trim()
+  if (!rawEnv) return 'N/A'
+
+  const knownEnvs = ['测试服务器', '正式服务器']
+  for (const env of knownEnvs) {
+    if (rawEnv.includes(env)) {
+      const cleaned = rawEnv
+        .replace(env, '')
+        .replace(/^[：:、,\s/-]+/, '')
+        .trim()
+      return cleaned || 'N/A'
+    }
+  }
+
+  return 'N/A'
+}
+
+watch(testTimeRange, (range) => {
+  if (!Array.isArray(range) || range.length !== 2) {
+    reportForm.value.test_time = ''
+    return
+  }
+  reportForm.value.test_time = `${range[0]}～${range[1]}`
+})
+
+watch(selectedTestDevices, (list) => {
+  reportForm.value.test_devices = list.join('、')
+})
+
+watch(() => reportForm.value.project_code, () => {
+  const allowedNames = new Set(filteredDevices.value.map(item => item.device_name))
+  selectedTestDevices.value = selectedTestDevices.value.filter(name => allowedNames.has(name))
+})
+
 onMounted(() => {
   fetchReports()
+  fetchProjects()
+  fetchDevices()
 })
 </script>
 
@@ -79,7 +336,7 @@ onMounted(() => {
         <div class="breadcrumb">Acceptance Report <span class="divider">/</span> Report</div>
       </div>
       <div class="header-right">
-        <el-button type="primary" :icon="Plus" class="new-report-btn">
+        <el-button type="primary" :icon="Plus" class="new-report-btn" @click="openCreateReport">
           New Report
         </el-button>
       </div>
@@ -140,9 +397,9 @@ onMounted(() => {
                   <div class="avatar-circle">{{ row.avatar }}</div>
                 </template>
               </el-table-column>
-              <el-table-column prop="reporter" label="Reporter/Project" min-width="250">
+              <el-table-column prop="reporter_display" label="Reporter/Project" min-width="250">
                 <template #default="{ row }">
-                  <span class="reporter-text">{{ row.reporter }}</span>
+                  <span class="reporter-text">{{ row.reporter_display }}</span>
                 </template>
               </el-table-column>
               <el-table-column prop="date" label="Report Date" width="150" />
@@ -183,12 +440,12 @@ onMounted(() => {
     <!-- Preview Dialog -->
     <el-dialog
       v-model="previewVisible"
-      :title="`Report Preview - ${currentPreview?.project_name || 'Detail'}`"
+      :title="previewMode === 'create' ? 'Create New Acceptance Report' : `Report Preview - ${currentPreview?.project_name || 'Detail'}`"
       width="600px"
       destroy-on-close
       class="preview-dialog"
     >
-      <div v-if="currentPreview" class="preview-content">
+      <div v-if="previewMode === 'view' && currentPreview" class="preview-content">
         <div class="preview-section">
           <div class="preview-item">
             <span class="label">Project Code:</span>
@@ -214,8 +471,15 @@ onMounted(() => {
         <div class="preview-section">
           <div class="preview-item">
             <span class="label">Test Env:</span>
-            <span class="value">{{ currentPreview.test_env || 'N/A' }}</span>
+            <span class="value">{{ getPreviewTestEnv(currentPreview) }}</span>
           </div>
+          <div class="preview-item">
+            <span class="label">Test Devices:</span>
+            <span class="value">{{ getPreviewTestDevices(currentPreview) }}</span>
+          </div>
+        </div>
+
+        <div class="preview-section">
           <div class="preview-item">
             <span class="label">Conclusion:</span>
             <el-tag :type="currentPreview.test_conclusion === 'Pass' ? 'success' : 'danger'" size="small" effect="dark">
@@ -238,9 +502,162 @@ onMounted(() => {
           </div>
         </div>
       </div>
+      <div v-else class="preview-content">
+        <div class="preview-section">
+          <div class="preview-item">
+            <span class="label">Project Name:</span>
+            <el-select
+              v-model="reportForm.project_name"
+              filterable
+              placeholder="请选择项目名称"
+              style="width: 100%"
+              @change="syncProjectByName"
+            >
+              <el-option
+                v-for="project in projects"
+                :key="project.id || project.project_code"
+                :label="project.project_name"
+                :value="project.project_name"
+              />
+            </el-select>
+          </div>
+          <div class="preview-item">
+            <span class="label">Project Code:</span>
+            <el-select
+              v-model="reportForm.project_code"
+              filterable
+              placeholder="请选择项目代码"
+              style="width: 100%"
+              @change="syncProjectByCode"
+            >
+              <el-option
+                v-for="project in projects"
+                :key="project.id || project.project_code"
+                :label="project.project_code"
+                :value="project.project_code"
+              />
+            </el-select>
+          </div>
+        </div>
+
+        <div class="preview-section">
+          <div class="preview-item">
+            <span class="label">Version:</span>
+            <el-input v-model="reportForm.version" placeholder="例如 2.58.0" />
+          </div>
+          <div class="preview-item">
+            <span class="label">Test Time:</span>
+            <el-date-picker
+              v-model="testTimeRange"
+              type="daterange"
+              range-separator="~"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              style="width: 100%"
+            />
+          </div>
+        </div>
+
+        <div class="preview-section">
+          <div class="preview-item">
+            <span class="label">Reporter:</span>
+            <el-input v-model="reportForm.reporter" placeholder="请输入报告人" />
+          </div>
+          <div class="preview-item">
+            <span class="label">Test Owner:</span>
+            <el-input v-model="reportForm.test_owner" placeholder="请输入测试负责人" />
+          </div>
+        </div>
+
+        <div class="preview-section">
+          <div class="preview-item">
+            <span class="label">Test Env:</span>
+            <el-select v-model="reportForm.test_env" placeholder="请选择测试环境" style="width: 100%">
+              <el-option label="测试服务器" value="测试服务器" />
+              <el-option label="正式服务器" value="正式服务器" />
+            </el-select>
+          </div>
+          <div class="preview-item">
+            <span class="label">Test Devices:</span>
+            <el-select
+              v-model="selectedTestDevices"
+              multiple
+              filterable
+              collapse-tags
+              collapse-tags-tooltip
+              placeholder="请选择测试设备"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="device in filteredDevices"
+                :key="device.id"
+                :label="`${device.device_name}${device.model ? ` (${device.model})` : ''}`"
+                :value="device.device_name"
+              />
+            </el-select>
+          </div>
+        </div>
+
+        <div class="preview-section">
+          <div class="preview-item">
+            <span class="label">Conclusion:</span>
+            <el-select v-model="reportForm.test_conclusion" style="width: 100%">
+              <el-option label="Pass" value="Pass" />
+              <el-option label="Fail" value="Fail" />
+              <el-option label="Blocked" value="Blocked" />
+            </el-select>
+          </div>
+          <div class="preview-item">
+            <span class="label">Project Match:</span>
+            <span class="value">{{ selectedProject?.project_name && selectedProject?.project_code ? `${selectedProject.project_name} / ${selectedProject.project_code}` : '请选择项目' }}</span>
+          </div>
+        </div>
+
+        <el-divider border-style="dashed" />
+
+        <div class="preview-grid">
+          <div class="preview-detail">
+            <h4 class="detail-title">测试需求点 (Acceptance Requirements)</h4>
+            <el-input
+              v-model="reportForm.update_requirements"
+              type="textarea"
+              :rows="6"
+              placeholder="请输入测试需求点、需求链接或验收范围"
+            />
+          </div>
+
+          <div class="preview-detail">
+            <h4 class="detail-title">缺陷提交情况 (Bug Submission Status)</h4>
+            <el-input
+              v-model="reportForm.bug_submission_status"
+              type="textarea"
+              :rows="3"
+              placeholder="请输入未修复缺陷、提单链接或说明"
+            />
+
+            <h4 class="detail-title detail-title--spaced">缺陷修复情况 (Bug Fix Status)</h4>
+            <el-input
+              v-model="reportForm.bug_fix_status"
+              type="textarea"
+              :rows="3"
+              placeholder="请输入已修复缺陷、验证结果或说明"
+            />
+          </div>
+        </div>
+      </div>
       <template #footer>
         <span class="dialog-footer">
-          <el-button type="primary" @click="previewVisible = false">Close</el-button>
+          <el-button @click="previewVisible = false">{{ previewMode === 'create' ? '取消' : 'Close' }}</el-button>
+          <el-button
+            v-if="canSendToFeishu"
+            type="success"
+            :loading="sendingToFeishu"
+            @click="sendReportToFeishu"
+          >
+            发送到飞书
+          </el-button>
+          <el-button v-if="previewMode === 'create'" type="primary" @click="saveNewReport">保存报告</el-button>
         </span>
       </template>
     </el-dialog>
@@ -526,10 +943,20 @@ onMounted(() => {
   margin-bottom: 8px;
 }
 
+.detail-title--spaced {
+  margin-top: 16px;
+}
+
 .preview-grid {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.preview-detail :deep(.el-textarea__inner),
+.preview-item :deep(.el-input__wrapper),
+.preview-item :deep(.el-select__wrapper) {
+  border-radius: 10px;
 }
 
 .detail-text {

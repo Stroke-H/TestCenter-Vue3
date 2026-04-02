@@ -54,6 +54,15 @@ func ProcessChat(ctx context.Context, chatID string, senderID string, userMessag
 		return "⚠️ DeepSeek API Key 未配置或为空，请先 ... "
 	}
 
+	bypassConstraints := IsDTeacherMode(userMessage)
+	normalizedMessage := userMessage
+	if bypassConstraints {
+		normalizedMessage = StripDTeacherPrefix(userMessage)
+		if normalizedMessage == "" {
+			normalizedMessage = "请和我自然聊聊，不要调用工具。"
+		}
+	}
+
 	// 1. Get Session
 	session := GetOrCreateSession(chatID)
 
@@ -88,7 +97,7 @@ func ProcessChat(ctx context.Context, chatID string, senderID string, userMessag
 			session.PendingTool = nil
 
 			// Call LLM again for final answer
-			return callDeepSeek(ctx, senderID, session)
+			return callDeepSeek(ctx, senderID, session, false)
 		} else {
 			// Treat as cancellation or new topic
 			log.Printf("[Bot Brain] User did not confirm, canceling %s safely", session.PendingTool.Function.Name)
@@ -105,22 +114,22 @@ func ProcessChat(ctx context.Context, chatID string, senderID string, userMessag
 			// Process this message as a NORMAL turn
 			session.AppendMessage(openai.ChatCompletionMessage{
 				Role:    openai.ChatMessageRoleUser,
-				Content: userMessage,
+				Content: normalizedMessage,
 			})
-			return callDeepSeek(ctx, senderID, session)
+			return callDeepSeek(ctx, senderID, session, bypassConstraints)
 		}
 	}
 
 	// 3. Normal turn
 	session.AppendMessage(openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
-		Content: userMessage,
+		Content: normalizedMessage,
 	})
 
-	return callDeepSeek(ctx, senderID, session)
+	return callDeepSeek(ctx, senderID, session, bypassConstraints)
 }
 
-func callDeepSeek(ctx context.Context, senderID string, session *SessionContext) string {
+func callDeepSeek(ctx context.Context, senderID string, session *SessionContext, bypassConstraints bool) string {
 	config := model.GlobalAIConfig
 
 	transport := &http.Transport{
@@ -138,7 +147,7 @@ func callDeepSeek(ctx context.Context, senderID string, session *SessionContext)
 
 	// Resolve Identity Context
 	systemContext := "【系统状态报告】未在库中找到当前用户的绑定信息。如果用户尝试执行需要权限的操作，请引导其发送“绑定 用户名”。"
-	
+
 	// Try Feishu lookup first
 	platformUser, _ := services.FindUserByFeishuOpenID(senderID)
 	if platformUser == nil {
@@ -158,23 +167,40 @@ func callDeepSeek(ctx context.Context, senderID string, session *SessionContext)
 			channelMsg = "平台 Web 端已登录用户"
 		}
 
-		systemContext = fmt.Sprintf("【系统状态报告】当前对话用户已验证身份 (%s)。其平台用户名为: %s，昵称是: %s。你已拥有完整执行权限，请直接协助其完成任务，严禁再次询问其是否已完成绑定。", 
+		systemContext = fmt.Sprintf("【系统状态报告】当前对话用户已验证身份 (%s)。其平台用户名为: %s，昵称是: %s。你已拥有完整执行权限，请直接协助其完成任务，严禁再次询问其是否已完成绑定。",
 			channelMsg, platformUser.Username, name)
 	}
 
+	activeSystemPrompt := GetSystemPrompt()
+	if bypassConstraints {
+		activeSystemPrompt = GetRelaxedSystemPrompt()
+	}
+
+	history := session.History
+	if len(history) > 0 && history[0].Role == openai.ChatMessageRoleSystem {
+		history = history[1:]
+	}
+	history = normalizeMessagesForDeepSeek(history)
+
 	// Build temporary messages including identity context
-	messages := make([]openai.ChatCompletionMessage, 0, len(session.History)+1)
+	messages := make([]openai.ChatCompletionMessage, 0, len(history)+2)
 	messages = append(messages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleSystem,
 		Content: systemContext,
 	})
-	messages = append(messages, session.History...)
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleSystem,
+		Content: activeSystemPrompt,
+	})
+	messages = append(messages, history...)
 
 	req := openai.ChatCompletionRequest{
 		Model:       config.Model,
 		Messages:    messages,
-		Tools:       GetAvailableTools(),
 		Temperature: 0.1,
+	}
+	if !bypassConstraints {
+		req.Tools = GetAvailableTools()
 	}
 
 	var resp openai.ChatCompletionResponse
@@ -240,10 +266,26 @@ func callDeepSeek(ctx context.Context, senderID string, session *SessionContext)
 				ToolCallID: toolCall.ID,
 			})
 			// Recursive call to get the final text response
-			return callDeepSeek(ctx, senderID, session)
+			return callDeepSeek(ctx, senderID, session, false)
 		}
 	}
 
 	// Normal text reply
 	return msg.Content
+}
+
+func normalizeMessagesForDeepSeek(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	normalized := make([]openai.ChatCompletionMessage, 0, len(messages))
+	for _, msg := range messages {
+		fixed := msg
+		if fixed.Role == openai.ChatMessageRoleAssistant && fixed.Content == "" {
+			// DeepSeek's compatibility layer is stricter than OpenAI here and requires assistant content to exist.
+			fixed.Content = " "
+		}
+		if fixed.Role == openai.ChatMessageRoleTool && fixed.Content == "" {
+			fixed.Content = " "
+		}
+		normalized = append(normalized, fixed)
+	}
+	return normalized
 }

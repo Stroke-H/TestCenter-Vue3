@@ -176,6 +176,12 @@ const confirmClear = () => {
           </template>
         </el-table-column>
 
+        <el-table-column prop="author" label="测试人" width="140">
+          <template #default="{ row }">
+            <span>{{ row.author || '-' }}</span>
+          </template>
+        </el-table-column>
+
         <!-- 测试类型 -->
         <el-table-column prop="type" label="类型" width="140">
           <template #default="{ row }">
@@ -304,24 +310,54 @@ const confirmClear = () => {
 /* 覆写 Radio 样式使其更贴合现代化质感 */
 :deep(.el-radio-button__inner) {
   border-radius: 8px !important;
-  border: none !important;
+  border: 0 !important;
   background: transparent;
   color: #64748b;
   font-weight: 600;
   box-shadow: none !important;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 :deep(.filter-group) {
-  background: #ffffff;
-  padding: 4px;
+  display: flex;
+  align-items: stretch;
+  background: #f8fafc;
+  height: 32px;
+  padding: 2px;
   border-radius: 10px;
   border: 1px solid #e2e8f0;
+  box-sizing: border-box;
+}
+
+:deep(.filter-group .el-radio-button) {
+  margin-right: 2px;
+  height: 100%;
+}
+
+:deep(.filter-group .el-radio-button:last-child) {
+  margin-right: 0;
+}
+
+:deep(.filter-group .el-radio-button__inner:hover) {
+  color: #334155;
+  background: rgba(226, 232, 240, 0.7);
+}
+
+:deep(.filter-group .el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  border-left-color: transparent !important;
+}
+
+:deep(.filter-group .el-radio-button__inner) {
+  height: 100%;
+  line-height: 26px;
+  padding: 0 14px;
+  background: transparent;
 }
 
 :deep(.el-radio-button.is-active .el-radio-button__inner) {
-  background: #f1f5f9;
+  background: #ffffff;
   color: #0f172a;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08) !important;
 }
 
 /* 主体表格卡片 */

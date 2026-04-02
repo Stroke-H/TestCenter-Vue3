@@ -21,6 +21,8 @@ import (
 	larkwiki "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
 )
 
+const feishuBotDisplayName = "TesterByClaw"
+
 // NewEventDispatcher creates a dispatcher for handle events
 func NewEventDispatcher(verifyToken, encryptKey string) *dispatcher.EventDispatcher {
 	return dispatcher.NewEventDispatcher(verifyToken, encryptKey).
@@ -83,6 +85,20 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 
 	// 0. Handle Multi-turn Confirmation States
 	session := GetOrCreateSession(stdMsg.ChatID)
+
+	if stdMsg.ChatType == "group" {
+		cleanContent := stripAllMentions(stdMsg)
+		isTriggered := hasBotMention(stdMsg) || IsDTeacherMode(cleanContent)
+		if isTriggered {
+			session.ActivateGroupConversation(stdMsg.SenderID, 2)
+			session.ConsumeGroupConversationTurn()
+		} else if session.CanContinueGroupConversation(stdMsg.SenderID) {
+			session.ConsumeGroupConversationTurn()
+		} else {
+			return
+		}
+	}
+
 	if session.State == StateWaitBindConfirm {
 		cleanMsg := strings.TrimSpace(stripAllMentions(stdMsg))
 		if isConfirmation(cleanMsg) {
@@ -119,9 +135,9 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 		cleanContent = strings.ReplaceAll(cleanContent, "：", ":")
 		cleanContent = strings.ReplaceAll(cleanContent, "　", " ")
 		cleanContent = strings.TrimSpace(cleanContent)
-		
+
 		log.Printf("[Feishu Command] Intercepted binding command: %s", cleanContent)
-		
+
 		// 1. Check uniqueness first
 		existingUser, err := services.FindUserByFeishuOpenID(stdMsg.SenderID)
 		if err == nil && existingUser != nil {
@@ -135,10 +151,10 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 		} else {
 			targetName = strings.TrimSpace(strings.TrimPrefix(cleanContent, "绑定"))
 		}
-		
+
 		targetName = strings.TrimPrefix(targetName, ":")
 		targetName = strings.TrimSpace(targetName)
-		
+
 		if targetName == "" {
 			replyText(ctx, stdMsg.MsgID, "⚠️ 请输入要绑定的用户名，例如：绑定 minghong")
 			return
@@ -186,6 +202,15 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 			}()
 		}
 	}
+}
+
+func hasBotMention(stdMsg *model.StandardizedMessage) bool {
+	for _, mention := range stdMsg.Mentions {
+		if strings.TrimSpace(mention.Name) == feishuBotDisplayName {
+			return true
+		}
+	}
+	return false
 }
 
 // stripAllMentions removes legacy <at> tags AND modern @_user_1 style mentions from content

@@ -7,7 +7,17 @@
     - 针对 Web 压测场景，实现了“测试链接”输入框的可编辑模式，支持用户自定义目标 URL。
     - 精简了 UI 界面，隐藏了不相关的“测试服务器”和“项目”选择器，使流程更聚焦。
     - 实现了前端 URL 基础特征校验逻辑。
-    - 深度集成了 Lighthouse 引擎，通过 WebSocket 实时推送到控制台日志，并在执行完成后自动加载 Chrome 原生 HTML 报告。
+    - 深度集成了 Lighthouse 引擎（通过 WebSocket 实时推送日志），并在执行完成后调用 **AI 分析引擎** 产出性能指引。
+- **Interactive Report Integration**: 在控制台任务完成后，自动通过 Iframe 加载后端的 HTML 报告，并支持 AI 智能总结的展示。
+
+## 2026-03-19
+
+### Added
+- **账号注销辅助工具 (Delete Account Tool)**:
+    - **Anonymous Login Proxy**: 实现了账号删除工具的匿名登录代理，支持全量 Header 透传。
+    - **Contextual Matching**: 实现了对传入参数中 `app` 标识的正则表达式解析，支持自动切换项目环境（ShortsWave / NovelNova）。
+    - **Security Confirmation**: 设计并实现了高端的二次确认弹窗，高亮显示解析出的 `user_id` 和 `user_name`。
+    - **Real-time Log Execution**: 登录后自动获取 `session_token` 并流式展示注销请求过程。
 
 ## 2026-03-13
 

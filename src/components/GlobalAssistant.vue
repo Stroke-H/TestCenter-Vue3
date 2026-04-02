@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -35,6 +35,12 @@ const assistantMessages = ref<Message[]>([
   { role: 'assistant', text: '你好！我是你的智能助手，有什么可以帮你的吗？' }
 ])
 const messageContainer = ref<HTMLElement | null>(null)
+const fabPosition = ref({ top: 0, left: 0 })
+const isDraggingFab = ref(false)
+let dragOffsetX = 0
+let dragOffsetY = 0
+let dragMoved = false
+let dragStarted = false
 
 // --- Report Dialog State ---
 const showReportDialog = ref(false)
@@ -186,17 +192,100 @@ const handleEnter = (e: KeyboardEvent) => {
   e.preventDefault()
   sendAssistantMessage()
 }
+
+const syncFabPositionWithinViewport = () => {
+  const buttonWidth = 140
+  const buttonHeight = 52
+  const margin = 24
+  const maxLeft = Math.max(margin, window.innerWidth - buttonWidth - margin)
+  const maxTop = Math.max(margin, window.innerHeight - buttonHeight - margin)
+
+  if (fabPosition.value.top === 0 && fabPosition.value.left === 0) {
+    fabPosition.value = {
+      top: Math.max(margin, window.innerHeight - buttonHeight - 100),
+      left: maxLeft
+    }
+    return
+  }
+
+  fabPosition.value = {
+    top: Math.min(Math.max(fabPosition.value.top, margin), maxTop),
+    left: Math.min(Math.max(fabPosition.value.left, margin), maxLeft)
+  }
+}
+
+const handleFabPointerMove = (event: PointerEvent) => {
+  if (!dragStarted) return
+
+  const nextLeft = event.clientX - dragOffsetX
+  const nextTop = event.clientY - dragOffsetY
+  const distance = Math.abs(nextLeft - fabPosition.value.left) + Math.abs(nextTop - fabPosition.value.top)
+
+  if (distance > 3) {
+    dragMoved = true
+    isDraggingFab.value = true
+  }
+
+  fabPosition.value = { top: nextTop, left: nextLeft }
+  syncFabPositionWithinViewport()
+}
+
+const stopFabDrag = () => {
+  if (!dragStarted) return
+
+  window.removeEventListener('pointermove', handleFabPointerMove)
+  window.removeEventListener('pointerup', stopFabDrag)
+
+  const shouldToggle = !dragMoved
+  dragStarted = false
+  isDraggingFab.value = false
+  dragOffsetX = 0
+  dragOffsetY = 0
+
+  window.setTimeout(() => {
+    dragMoved = false
+  }, 0)
+
+  if (shouldToggle) {
+    toggleAssistant()
+  }
+}
+
+const startFabDrag = (event: PointerEvent) => {
+  dragStarted = true
+  dragMoved = false
+  dragOffsetX = event.clientX - fabPosition.value.left
+  dragOffsetY = event.clientY - fabPosition.value.top
+
+  window.addEventListener('pointermove', handleFabPointerMove)
+  window.addEventListener('pointerup', stopFabDrag)
+}
+
+onMounted(() => {
+  syncFabPositionWithinViewport()
+  window.addEventListener('resize', syncFabPositionWithinViewport)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncFabPositionWithinViewport)
+  window.removeEventListener('pointermove', handleFabPointerMove)
+  window.removeEventListener('pointerup', stopFabDrag)
+})
 </script>
 
 <template>
   <div class="global-assistant">
     <!-- FAB Button -->
-    <div class="fab-container">
+    <div
+      class="fab-container"
+      :class="{ 'is-dragging': isDraggingFab }"
+      :style="{ top: `${fabPosition.top}px`, left: `${fabPosition.left}px` }"
+      @pointerdown.prevent="startFabDrag"
+    >
       <el-button
         type="primary"
         size="large"
         class="fab-btn"
-        @click="toggleAssistant"
       >
         <el-icon class="mr-2"><component :is="Icons.ChatLineRound" /></el-icon>
         智能助手
@@ -321,9 +410,12 @@ const handleEnter = (e: KeyboardEvent) => {
 <style scoped>
 .fab-container {
   position: fixed;
-  bottom: 40px;
-  right: 40px;
   z-index: 3000;
+  touch-action: none;
+}
+
+.fab-container.is-dragging {
+  cursor: grabbing;
 }
 
 .fab-btn {
@@ -336,11 +428,19 @@ const handleEnter = (e: KeyboardEvent) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  cursor: grab;
+  user-select: none;
 }
 
 .fab-btn:hover {
   transform: scale(1.05) translateY(-2px);
   box-shadow: 0 6px 16px rgba(99, 102, 241, 0.5);
+}
+
+.fab-container.is-dragging .fab-btn,
+.fab-container.is-dragging .fab-btn:hover {
+  transform: none;
+  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.35);
 }
 
 .mr-2 { margin-right: 8px; }

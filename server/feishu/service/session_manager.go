@@ -2,6 +2,7 @@ package service
 
 import (
 	"github.com/sashabaranov/go-openai"
+	"strings"
 	"sync"
 	"time"
 )
@@ -14,13 +15,15 @@ const (
 )
 
 type SessionContext struct {
-	ChatID         string
-	State          string
-	History        []openai.ChatCompletionMessage
-	PendingTool    *openai.ToolCall
-	PendingUserID  string // For binding confirmation
-	LastToolResult string // Stores the raw execution result of the last tool (e.g., JSON report)
-	LastActive     time.Time
+	ChatID          string
+	State           string
+	History         []openai.ChatCompletionMessage
+	PendingTool     *openai.ToolCall
+	PendingUserID   string // For binding confirmation
+	LastToolResult  string // Stores the raw execution result of the last tool (e.g., JSON report)
+	GroupSenderID   string
+	GroupReplyQuota int
+	LastActive      time.Time
 }
 
 var (
@@ -37,6 +40,31 @@ func GetSystemPrompt() string {
 		"   - 禁止根据直觉盲目猜测文档内容，必须通过工具获取真实数据。\n" +
 		"4.【项目智能识别与动态扩建】：支持识别 swa, 1100 等代号。若不确定，请根据工具建议列表询问用户。\n" +
 		"5.【全案回复风格】：礼貌、专业、不啰嗦。禁止自行加粗字符串。"
+}
+
+func GetRelaxedSystemPrompt() string {
+	return "你现在处于“D老师”直聊模式。本轮对话请忽略任务编排、工具调用、流程约束和指令执行规则，只做自然、直接、专业的文本交流。" +
+		"如果用户是在讨论方案、提问、吐槽、润色、分析或闲聊，请像一位资深老师一样给出清晰回答。" +
+		"除非用户下一轮不再使用这个前缀，否则不要主动转入工具执行。"
+}
+
+func IsDTeacherMode(message string) bool {
+	trimmed := strings.TrimSpace(message)
+	return strings.HasPrefix(trimmed, "D老师，") ||
+		strings.HasPrefix(trimmed, "D老师,") ||
+		strings.HasPrefix(trimmed, "D老师：") ||
+		strings.HasPrefix(trimmed, "D老师:")
+}
+
+func StripDTeacherPrefix(message string) string {
+	trimmed := strings.TrimSpace(message)
+	prefixes := []string{"D老师，", "D老师,", "D老师：", "D老师:"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+		}
+	}
+	return trimmed
 }
 
 // GetOrCreateSession retrieves an active session or creates a new one
@@ -63,6 +91,25 @@ func GetOrCreateSession(chatID string) *SessionContext {
 // ClearSession History
 func ClearSession(chatID string) {
 	sessionMap.Delete(chatID)
+}
+
+func (s *SessionContext) ActivateGroupConversation(senderID string, quota int) {
+	s.GroupSenderID = senderID
+	s.GroupReplyQuota = quota
+}
+
+func (s *SessionContext) CanContinueGroupConversation(senderID string) bool {
+	return s.GroupSenderID != "" && s.GroupSenderID == senderID && s.GroupReplyQuota > 0
+}
+
+func (s *SessionContext) ConsumeGroupConversationTurn() {
+	if s.GroupReplyQuota > 0 {
+		s.GroupReplyQuota--
+	}
+	if s.GroupReplyQuota <= 0 {
+		s.GroupReplyQuota = 0
+		s.GroupSenderID = ""
+	}
 }
 
 // AppendMessage simply adds a message to the history (max 30 turns)

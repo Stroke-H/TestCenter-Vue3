@@ -286,6 +286,11 @@ const formatTime = (ts: string) => {
              </template>
           </el-table-column>
           <el-table-column prop="detail" label="Result Summary" min-width="300" />
+          <el-table-column prop="user_id" label="Operator" width="180">
+            <template #default="scope">
+              <span>{{ scope.row.user_name || scope.row.user_id || '-' }}</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="status" label="Status" width="100" align="center">
             <template #default="scope">
               <el-icon color="#67C23A" v-if="scope.row.status === 'success'"><component :is="Icons.CircleCheckFilled" /></el-icon>

@@ -43,6 +43,21 @@ type RegisterRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+type AccountProfile struct {
+	ID           string `json:"id"`
+	Username     string `json:"username"`
+	Nickname     string `json:"nickname"`
+	Email        string `json:"email"`
+	CreatedAt    string `json:"created_at"`
+	FeishuOpenID string `json:"feishu_open_id,omitempty"`
+}
+
+type AccountUpdateRequest struct {
+	ID       string `json:"id" binding:"required"`
+	Nickname string `json:"nickname"`
+	Email    string `json:"email"`
+}
+
 // --- Service Logic ---
 
 var (
@@ -215,6 +230,98 @@ func GetUserByID(id string) (*User, error) {
 		}
 	}
 	return nil, errors.New("用户不存在")
+}
+
+// ListAccountProfiles returns all platform accounts without exposing password hashes.
+func ListAccountProfiles() ([]AccountProfile, error) {
+	userLock.RLock()
+	defer userLock.RUnlock()
+
+	f, err := os.Open(userFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []AccountProfile{}, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	profiles := make([]AccountProfile, 0)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var user User
+		if err := json.Unmarshal(scanner.Bytes(), &user); err == nil {
+			profiles = append(profiles, AccountProfile{
+				ID:           user.ID,
+				Username:     user.Username,
+				Nickname:     user.Nickname,
+				Email:        user.Email,
+				CreatedAt:    user.CreatedAt,
+				FeishuOpenID: user.FeishuOpenID,
+			})
+		}
+	}
+
+	return profiles, scanner.Err()
+}
+
+// UpdateAccountProfile updates editable account fields while preserving login credentials.
+func UpdateAccountProfile(req AccountUpdateRequest) (*AccountProfile, error) {
+	userLock.Lock()
+	defer userLock.Unlock()
+
+	f, err := os.Open(userFile)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	users := make([]User, 0)
+	updatedIndex := -1
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var user User
+		if err := json.Unmarshal(scanner.Bytes(), &user); err == nil {
+			if user.ID == req.ID {
+				user.Nickname = req.Nickname
+				user.Email = req.Email
+				updatedIndex = len(users)
+			}
+			users = append(users, user)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	if updatedIndex < 0 {
+		return nil, errors.New("用户不存在")
+	}
+
+	file, err := os.Create(userFile)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	for _, user := range users {
+		b, _ := json.Marshal(user)
+		if _, err := file.Write(append(b, '\n')); err != nil {
+			return nil, err
+		}
+	}
+
+	updatedUser := users[updatedIndex]
+	return &AccountProfile{
+		ID:           updatedUser.ID,
+		Username:     updatedUser.Username,
+		Nickname:     updatedUser.Nickname,
+		Email:        updatedUser.Email,
+		CreatedAt:    updatedUser.CreatedAt,
+		FeishuOpenID: updatedUser.FeishuOpenID,
+	}, nil
 }
 
 // FindUserByFuzzyName searches for a user and returns if it was an exact match

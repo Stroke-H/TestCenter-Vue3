@@ -37,8 +37,10 @@ func main() {
 		api.GET("/ws/k6", services.RunK6TestHandler)
 		// WebSocket endpoint for Lighthouse execution
 		api.GET("/ws/lighthouse", services.RunLighthouseHandler)
-		// WebSocket endpoint for Jungle Chess multiplayer
-		api.GET("/ws/jungle", services.JungleChessWSHandler)
+		// WebSocket endpoint for Playwright execution
+		api.GET("/ws/playwright", services.PlaywrightWSHandler)
+		// WebSocket endpoint for UI Inspector
+		api.GET("/ws/inspector", services.ServeInspectorWS)
 		// Generic HTTP proxy to avoid CORS for external APIs
 		api.POST("/proxy", services.ProxyHandler)
 
@@ -53,6 +55,9 @@ func main() {
 			configGroup.GET("/devices", services.GetDevicesHandler)
 			configGroup.POST("/devices", services.SaveDeviceHandler)
 			configGroup.DELETE("/devices/:id", services.DeleteDeviceHandler)
+
+			configGroup.GET("/accounts", services.GetAccountsHandler)
+			configGroup.POST("/accounts", services.SaveAccountHandler)
 		}
 
 		// Mind Map Processes
@@ -93,6 +98,7 @@ func main() {
 		{
 			reports.GET("/list", services.GetAcceptanceReportsHandler)
 			reports.POST("/save", services.SaveAcceptanceReportHandler)
+			reports.POST("/send-feishu", services.SendAcceptanceReportToFeishuHandler)
 		}
 
 		// Performance Monitoring Routes
@@ -108,6 +114,26 @@ func main() {
 			execReports.GET("", services.GetExecutionReportsHandler)
 			execReports.POST("", services.AddExecutionReportHandler)
 			execReports.DELETE("", services.ClearExecutionReportsHandler)
+		}
+
+		// Playwright UI Automation
+		playwright := api.Group("/playwright")
+		{
+			playwright.GET("/suites", services.ListPlaywrightSuitesHandler)
+			playwright.GET("/suites/:id", services.GetPlaywrightSuiteHandler)
+			playwright.POST("/suites", services.SavePlaywrightSuiteHandler)
+			playwright.DELETE("/suites/:id", services.DeletePlaywrightSuiteHandler)
+
+			playwright.GET("/cases", services.ListPlaywrightCasesHandler)
+			playwright.GET("/cases/:id", services.GetPlaywrightCaseHandler)
+			playwright.POST("/cases", services.SavePlaywrightCaseHandler)
+			playwright.DELETE("/cases/:id", services.DeletePlaywrightCaseHandler)
+
+			playwright.GET("/keywords", services.ListUserKeywordsHandler)
+			playwright.POST("/keywords", services.SaveUserKeywordHandler)
+			playwright.DELETE("/keywords/:id", services.DeleteUserKeywordHandler)
+
+			playwright.GET("/builtin-keywords", services.GetBuiltinKeywordsHandler)
 		}
 	}
 

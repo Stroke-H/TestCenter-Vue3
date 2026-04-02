@@ -123,7 +123,7 @@ const goToLogin = () => {
 
       <div class="login-footer">
         <span>已有账号？</span>
-        <el-link type="primary" :underline="false" @click="goToLogin">立即登录</el-link>
+        <el-link type="primary" underline="never" @click="goToLogin">立即登录</el-link>
       </div>
     </div>
   </div>

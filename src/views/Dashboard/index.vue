@@ -318,18 +318,32 @@ const perfTools = ref<ToolDef[]>([
       </div>
     </div>
 
-    <!-- ========== UI Automation ========== -->
+    <!-- ========== UI Automation Workspace ========== -->
     <div class="section">
       <div class="section-header">
         <div class="section-title-row">
-          <div class="section-icon section-icon--teal">
+          <div class="section-icon section-icon--purple">
             <el-icon :size="14"><component :is="Icons.Monitor" /></el-icon>
           </div>
           <h2 class="section-title">UI 自动化</h2>
         </div>
       </div>
-
+ 
       <div class="card-grid card-grid--4">
+        <div class="tool-card">
+          <div class="tool-card__top">
+            <div class="tool-card__icon" style="background: rgba(139, 92, 246, 0.1)">
+              <el-icon :size="20" color="#8b5cf6"><component :is="Icons.Monitor" /></el-icon>
+            </div>
+          </div>
+          <h3 class="tool-card__name">UI 自动化工作台</h3>
+          <p class="tool-card__desc">基于 Playwright 引擎的可视化 UI 自动化编排与执行平台</p>
+          <div class="tool-card__footer">
+            <span class="ready-text">V1.0</span>
+            <a href="#" class="open-link" @click.prevent="router.push('/ui_auto')">打开</a>
+          </div>
+        </div>
+        <!-- Existng Jungle Chess Card -->
         <div class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(139, 92, 246, 0.1)">

@@ -72,6 +72,26 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '斗兽棋', hidden: true }
       },
       {
+        path: 'ui_auto',
+        name: 'UIAutoTest',
+        component: () => import('@/views/UIAutoTest/index.vue'),
+        meta: { title: 'UI 自动化', icon: 'Monitor' }
+      },
+      {
+        path: 'ui_auto/edit/:id?',
+        name: 'UIAutoEditor',
+        component: () => import('@/views/UIAutoTest/Editor.vue'),
+        meta: { title: '编辑用例', hidden: true },
+        props: true
+      },
+      {
+        path: 'ui_auto/run/:id',
+        name: 'UIAutoRunner',
+        component: () => import('@/views/UIAutoTest/Runner.vue'),
+        meta: { title: '执行用例', hidden: true },
+        props: true
+      },
+      {
         path: 'settings',
         name: 'Settings',
         redirect: '/settings/projects',
@@ -94,6 +114,16 @@ const routes: RouteRecordRaw[] = [
     ]
   }
 ]
+
+const settingsRoute = routes.find((route) => route.name === 'Root')?.children?.find((route) => route.name === 'Settings')
+if (settingsRoute && settingsRoute.children) {
+  settingsRoute.children.push({
+    path: 'accounts',
+    name: 'AccountConfig',
+    component: () => import('@/views/Settings/AccountConfig.vue'),
+    meta: { title: '账号管理', icon: 'User' }
+  })
+}
 
 // 创建路由实例
 const router = createRouter({
