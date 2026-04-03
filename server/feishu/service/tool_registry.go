@@ -478,6 +478,77 @@ func init() {
 					Status:              "Completed",
 				}
 				services.SaveAcceptanceReport(newReport)
+
+				// [NEW] Automatic Sync to Wiki Documentation Link
+				if project.WikiURL != "" {
+					go func() {
+						log.Printf("[WikiLinkage] Syncing report for %s to %s", projectActualCode, project.WikiURL)
+						// 1. Extract node token
+						parts := strings.Split(project.WikiURL, "/")
+						nodeToken := ""
+						for i, p := range parts {
+							if p == "wiki" && i+1 < len(parts) {
+								nodeToken = strings.Split(parts[i+1], "?")[0]
+								break
+							}
+						}
+						if nodeToken == "" {
+							return
+						}
+
+						// 2. Map Wiki Node to Doc Token
+						objToken, objType, err := FeishuClientInstance.GetWikiNode(nodeToken)
+						if err != nil || objType != "docx" {
+							return
+						}
+
+						// 3. Clean Report Text
+						lines := strings.Split(report, "\n")
+						var filtered []string
+						for _, line := range lines {
+							lineTrim := strings.TrimSpace(line)
+							if strings.HasSuffix(lineTrim, "项目验收报告") {
+								continue
+							}
+							if strings.HasPrefix(lineTrim, "项目名称：") {
+								continue
+							}
+							filtered = append(filtered, line)
+						}
+						cleanedReport := strings.Join(filtered, "\n")
+
+						// 4. Prepare Blocks (H2 for Version + Text for Body)
+						h2Block := map[string]interface{}{
+							"block_type": 4, // Heading 2
+							"heading2": map[string]interface{}{
+								"style": map[string]interface{}{},
+								"elements": []map[string]interface{}{
+									{
+										"text_run": map[string]interface{}{
+											"content": strings.ToUpper(displayVersion), // V2.58.0
+										},
+									},
+								},
+							},
+						}
+						textBlock := map[string]interface{}{
+							"block_type": 2, // Text
+							"text": map[string]interface{}{
+								"style": map[string]interface{}{},
+								"elements": []map[string]interface{}{
+									{
+										"text_run": map[string]interface{}{
+											"content": cleanedReport + "\n",
+										},
+									},
+								},
+							},
+						}
+
+						// 5. Prepend to Docx
+						FeishuClientInstance.AddBlocksToDocx(objToken, 0, []map[string]interface{}{h2Block, textBlock})
+					}()
+				}
 			}
 
 			AddOperationLog(model.AIOperationLog{

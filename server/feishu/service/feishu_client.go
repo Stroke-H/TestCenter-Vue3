@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -103,8 +104,8 @@ func (c *FeishuClient) DoRequest(method, url string, body interface{}) ([]byte, 
 
 // GetWikiNode maps a Wiki node token to its object token and type
 func (c *FeishuClient) GetWikiNode(nodeToken string) (string, string, error) {
-	url := fmt.Sprintf("https://open.feishu.cn/open-apis/wiki/v2/spaces/nodes/%s", nodeToken)
-	resBody, err := c.DoRequest("GET", url, nil)
+	apiURL := fmt.Sprintf("https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=%s", url.QueryEscape(nodeToken))
+	resBody, err := c.DoRequest("GET", apiURL, nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -130,22 +131,29 @@ func (c *FeishuClient) GetWikiNode(nodeToken string) (string, string, error) {
 
 // PrependToDocx inserts content at the top of a Docx document
 func (c *FeishuClient) PrependToDocx(docID string, text string) error {
-	// 1. Get document kids to ensure it's a valid doc and maybe find insertion point
-	// Actually for "prepend", we can just add to index 0 of the root block.
-	// The root block ID for a docx is the docID itself.
-	
-	url := fmt.Sprintf("https://open.feishu.cn/open-apis/docx/v1/documents/%s/blocks/%s/children", docID, docID)
-	payload := map[string]interface{}{
-		"index": 0,
-		"children": []map[string]interface{}{
-			{
-				"block_type": 2, // Text block
-				"text": map[string]interface{}{
-					"content": text + "\n",
-					"style": map[string]interface{}{},
+	block := map[string]interface{}{
+		"block_type": 2, // Text block
+		"text": map[string]interface{}{
+			"style": map[string]interface{}{},
+			"elements": []map[string]interface{}{
+				{
+					"text_run": map[string]interface{}{
+						"content": text + "\n",
+					},
 				},
 			},
 		},
+	}
+	return c.AddBlocksToDocx(docID, 0, []map[string]interface{}{block})
+}
+
+// AddBlocksToDocx adds multiple blocks to a Docx document at a specific index (pre-root)
+func (c *FeishuClient) AddBlocksToDocx(docID string, index int, children []map[string]interface{}) error {
+	// The root block ID for a docx is the docID itself.
+	url := fmt.Sprintf("https://open.feishu.cn/open-apis/docx/v1/documents/%s/blocks/%s/children", docID, docID)
+	payload := map[string]interface{}{
+		"index":    index,
+		"children": children,
 	}
 	_, err := c.DoRequest("POST", url, payload)
 	return err

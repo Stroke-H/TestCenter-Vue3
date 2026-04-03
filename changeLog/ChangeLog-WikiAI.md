@@ -1,20 +1,26 @@
-# ChangeLog: 飞书 Wiki 集成与智能助手体验优化 (2026-03-25)
+# ChangeLog: 飞书 Wiki 集成与自动验收报告联动 (2026-04-03)
 
-## 1. 飞书 Wiki & 文档交互能力 (Core Feature)
-- **[NEW] Feishu API Client**: 封装了 `feishu_client.go`，支持 `tenant_access_token` 自动维护及 Docx 块级增量操作。
-- **[NEW] 文档读写工具**:
-    - `write_to_feishu_wiki`: 支持解析 Wiki Node Token 并将内容增量插入文档最上方。
-    - `read_feishu_wiki`: 支持读取文档正文内容，供 AI 决策使用。
-- **[FIX] 消息拦截器重构**: 移除了 `event_service.go` 中对 Wiki 链接的硬编码拦截，将控制权完全交还 AI 意图引擎。
-- **[OPTIMIZE] 意图识别增强**: 重构 `session_manager.go` 中的 System Prompt，明确区分“写意图”与“读意图”的工具调用触发点。
+## 1. 自动同步逻辑 (Automation)
+- **[NEW] 报告自动同步**: 更新 `generate_acceptance_report` 工具，支持在生成报告后，自动将其同步至项目关联的飞书文档中。
+- **[NEW] 智能格式化**: 
+    - 自动根据版本号生成 H2 标题（如 `V2.58.0`）。
+    - 自动剔除文档中的冗余信息（如项目名称、报告标题行），保持 Wiki 内容精简。
+- **[OPTIMIZE] 并行处理**: 执行同步操作时采用 Goroutine 异步处理，确保助手回复速度不受网络波动影响。
 
-## 2. 智能助手界面交互 (Web UI)
-- **[OPTIMIZE] 输入框自适应**: 给助手输入框增加了 `autosize` 支持，可随输入内容行数自动增高。
-- **[OPTIMIZE] 气泡换行显示**: 优化了聊天气泡的 CSS，支持长链接、长日志的自动换行，避免 UI 撑破。
-- **[FIX] 身份识别对齐**: 修复了 Web 端助手无法识别已登录用户身份的 Bug，改为直接通过平台 ID 进行免绑定校验。
+## 2. 基础能力增强 (Foundation)
+- **[NEW] 多块写入支持**: 在 `feishu_client.go` 中新增 `AddBlocksToDocx` 方法，支持单次 API 调用写入多个 Docx 块（H2 + 正文）。
+- **[NEW] 项目模型扩展**: 在 `Project` 模型中新增 `WikiURL` 字段，支持为每个项目独立配置文档关联。
 
-## 3. 相关模块联动 (Module Synergy)
-- **验收报告联动**: 飞书端生成的报告逻辑已迁移并整合至专有的 [AcceptanceReport](file:///Users/apple/TestCenter_Vue3/changeLog/ChangeLog-AcceptanceReport.md) 记录中，确保存储结构的隔离与一致性。
+## 3. 系统设置优化 (UI/UX)
+- **[NEW] 项目文档关联配置**: 
+    - 在“项目代码”设置中增加“项目文档关联”列表显示及编辑功能。
+    - 在新增/编辑项目弹窗中增加文档链接输入框（非必选项）。
+- **[OPTIMIZE] 快速跳转**: 在项目列表中可直接点击链接图标跳转至对应的飞书 Wiki 或文档。
 
 ---
-*Status: Verified & Ready for Deployment*
+*Status: Verified & Deployed*
+
+[Previous entries preserved below...]
+
+# ChangeLog: 飞书 Wiki 集成与智能助手体验优化 (2026-03-25)
+...

@@ -5,5 +5,6 @@ type Project struct {
 	ProjectCode string `json:"project_code"`
 	ProjectName string `json:"project_name"`
 	ShortCode   string `json:"short_code"`
+	WikiURL     string `json:"wiki_url"`
 	CreatedAt   string `json:"created_at"`
 }

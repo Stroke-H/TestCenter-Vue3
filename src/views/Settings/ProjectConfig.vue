@@ -9,6 +9,7 @@ interface Project {
   project_code: string
   project_name: string
   short_code: string
+  wiki_url?: string
   created_at?: string
 }
 
@@ -21,7 +22,8 @@ const form = ref<Project>({
   id: '',
   project_code: '',
   project_name: '',
-  short_code: ''
+  short_code: '',
+  wiki_url: ''
 })
 
 const fetchProjects = async () => {
@@ -38,7 +40,7 @@ const fetchProjects = async () => {
 
 const handleAdd = () => {
   dialogType.value = 'add'
-  form.value = { id: '', project_code: '', project_name: '', short_code: '' }
+  form.value = { id: '', project_code: '', project_name: '', short_code: '', wiki_url: '' }
   dialogVisible.value = true
 }
 
@@ -105,6 +107,14 @@ onMounted(fetchProjects)
       <el-table-column prop="project_code" label="项目代码" width="150" />
       <el-table-column prop="project_name" label="项目名称" min-width="150" />
       <el-table-column prop="short_code" label="项目缩写" width="100" />
+      <el-table-column prop="wiki_url" label="项目文档关联" min-width="200">
+        <template #default="{ row }">
+          <el-link v-if="row.wiki_url" type="primary" :href="row.wiki_url" target="_blank" style="font-size: 13px;">
+            点击查看文档
+          </el-link>
+          <span v-else style="color: #999; font-size: 13px;">未关联</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="created_at" label="创建时间" width="180">
       </el-table-column>
       <el-table-column label="操作" width="180" fixed="right">
@@ -130,6 +140,9 @@ onMounted(fetchProjects)
       </el-form-item>
       <el-form-item label="项目缩写">
         <el-input v-model="form.short_code" placeholder="例如: swa, swi" />
+      </el-form-item>
+      <el-form-item label="项目文档">
+        <el-input v-model="form.wiki_url" placeholder="请输入飞书文档或 Wiki 链接" />
       </el-form-item>
     </el-form>
       <template #footer>
