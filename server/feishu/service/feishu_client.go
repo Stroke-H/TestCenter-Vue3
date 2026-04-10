@@ -182,3 +182,32 @@ func (c *FeishuClient) GetDocxRawContent(docID string) (string, error) {
 	}
 	return res.Data.Content, nil
 }
+
+// SendChatText sends a plain text message directly to a chat_id
+func (c *FeishuClient) SendChatText(chatID string, text string) error {
+	url := "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+	contentStr, _ := json.Marshal(map[string]string{"text": text})
+
+	payload := map[string]interface{}{
+		"receive_id": chatID,
+		"msg_type":   "text",
+		"content":    string(contentStr),
+	}
+
+	resBody, err := c.DoRequest("POST", url, payload)
+	if err != nil {
+		return err
+	}
+
+	var res struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.NewDecoder(bytes.NewBuffer(resBody)).Decode(&res); err != nil {
+		return err
+	}
+	if res.Code != 0 {
+		return fmt.Errorf("send chat text failed: %s", res.Msg)
+	}
+	return nil
+}

@@ -387,3 +387,66 @@ func DeleteUserKeywordHandler(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "User keyword deleted"})
 }
+
+func RenameUserKeywordSuiteHandler(c *gin.Context) {
+	oldName := c.Param("name")
+	if oldName == "未归类套件" {
+		oldName = ""
+	}
+	var req struct {
+		NewName string `json:"new_name" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "New name is required"})
+		return
+	}
+
+	keywords, _ := loadJSONL[models.UserKeyword](keywordLogPath)
+	changed := false
+	for i, kw := range keywords {
+		if kw.SuiteName == oldName {
+			keywords[i].SuiteName = req.NewName
+			changed = true
+		}
+	}
+
+	if !changed {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+		return
+	}
+
+	if err := saveAllJSONL(keywordLogPath, keywords); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Suite renamed successfully"})
+}
+
+func DeleteUserKeywordSuiteHandler(c *gin.Context) {
+	name := c.Param("name")
+	if name == "未归类套件" {
+		name = ""
+	}
+	keywords, _ := loadJSONL[models.UserKeyword](keywordLogPath)
+
+	newKeywords := []models.UserKeyword{}
+	deleted := false
+	for _, kw := range keywords {
+		if kw.SuiteName == name {
+			deleted = true
+			continue
+		}
+		newKeywords = append(newKeywords, kw)
+	}
+
+	if !deleted {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Suite not found"})
+		return
+	}
+
+	if err := saveAllJSONL(keywordLogPath, newKeywords); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Suite deleted successfully"})
+}

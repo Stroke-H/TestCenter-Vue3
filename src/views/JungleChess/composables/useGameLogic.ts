@@ -1,5 +1,5 @@
 import { ref } from 'vue';
-import type { Piece, PieceRank, PlayerColor, GameStatus } from '../types';
+import type { Piece, PieceRank, PlayerColor, GameStatus, GameMode, RobotDifficulty } from '../types';
 
 export function useGameLogic() {
   const ROWS = 4;
@@ -10,6 +10,8 @@ export function useGameLogic() {
   const status = ref<GameStatus>('waiting');
   const winner = ref<PlayerColor | null>(null);
   const firstRevealerRole = ref<'host' | 'guest' | null>(null);
+  const gameMode = ref<GameMode>('local');
+  const difficulty = ref<RobotDifficulty>('medium');
 
   // 棋子職级与名称映射
   const rankNames: Record<PieceRank, string> = {
@@ -17,7 +19,14 @@ export function useGameLogic() {
   };
 
   // 初始化棋盘
-  function initGame(externalBoard?: (Piece | null)[][]) {
+  function initGame(
+    externalBoard?: (Piece | null)[][], 
+    mode: GameMode = 'local', 
+    diff: RobotDifficulty = 'medium'
+  ) {
+    gameMode.value = mode;
+    difficulty.value = diff;
+
     if (externalBoard) {
       board.value = JSON.parse(JSON.stringify(externalBoard));
       currentPlayer.value = null;
@@ -172,6 +181,8 @@ export function useGameLogic() {
     status,
     winner,
     firstRevealerRole,
+    gameMode,
+    difficulty,
     initGame,
     revealPiece,
     movePiece,

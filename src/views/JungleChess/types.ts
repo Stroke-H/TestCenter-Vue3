@@ -16,6 +16,9 @@ export interface Cell {
   piece: Piece | null;
 }
 
+export type GameMode = 'local' | 'online' | 'robot';
+export type RobotDifficulty = 'easy' | 'medium' | 'hard';
+
 export type GameStatus = 'waiting' | 'playing' | 'ended';
 
 export interface GameState {
@@ -24,4 +27,6 @@ export interface GameState {
   status: GameStatus;
   winner: PlayerColor | null;
   history: string[];
+  mode: GameMode;
+  difficulty?: RobotDifficulty;
 }

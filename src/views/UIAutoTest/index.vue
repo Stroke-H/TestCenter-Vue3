@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import axios from 'axios'
 import { usePlaywrightStore } from '@/stores/modules/playwright'
-import { Plus, Delete, Edit, Monitor, Collection } from '@element-plus/icons-vue'
+import { Plus, Delete, Edit, Monitor, Collection, CollectionTag } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
@@ -13,11 +14,29 @@ const showSuiteDialog = ref(false)
 const suiteForm = ref({
   id: '',
   name: '',
-  description: ''
+  description: '',
+  skill_suites: [] as string[]
 })
+
+const allSkillSuites = ref<string[]>([])
+
+const fetchSkillSuites = async () => {
+  try {
+    const res = await axios.get('/api/playwright/keywords')
+    const keywords = res.data || []
+    const suites = new Set<string>()
+    keywords.forEach((kw: any) => {
+      if (kw.suite_name) suites.add(kw.suite_name)
+    })
+    allSkillSuites.value = Array.from(suites)
+  } catch (err) {
+    console.error('获取技能套件失败', err)
+  }
+}
 
 onMounted(async () => {
   await pwStore.fetchSuites()
+  await fetchSkillSuites()
   const firstSuite = pwStore.suites[0]
   if (firstSuite?.id) {
     selectSuite(firstSuite.id)
@@ -30,12 +49,15 @@ const selectSuite = async (id: string) => {
 }
 
 const handleAddSuite = () => {
-  suiteForm.value = { id: '', name: '', description: '' }
+  suiteForm.value = { id: '', name: '', description: '', skill_suites: [] }
   showSuiteDialog.value = true
 }
 
 const handleEditSuite = (suite: any) => {
-  suiteForm.value = { ...suite }
+  suiteForm.value = { 
+    ...suite, 
+    skill_suites: suite.skill_suites || [] 
+  }
   showSuiteDialog.value = true
 }
 
@@ -176,6 +198,27 @@ const confirmDeleteCase = (id: string) => {
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="suiteForm.description" type="textarea" placeholder="简介..." />
+        </el-form-item>
+        <el-form-item label="关联套件库 (Skills)">
+          <el-select
+            v-model="suiteForm.skill_suites"
+            multiple
+            placeholder="选择关联的技能套件"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="s in allSkillSuites"
+              :key="s"
+              :label="s"
+              :value="s"
+            >
+              <div class="suite-option">
+                <el-icon><CollectionTag /></el-icon>
+                <span>{{ s }}</span>
+              </div>
+            </el-option>
+          </el-select>
+          <div class="form-tip">关联后可在编辑器中优先使用这些套件内的技能</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -324,5 +367,17 @@ const confirmDeleteCase = (id: string) => {
 
 .empty-state p {
   margin-top: 20px;
+}
+
+.suite-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
 }
 </style>

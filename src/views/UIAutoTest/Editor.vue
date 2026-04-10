@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import axios from 'axios'
 import { usePlaywrightStore, type TestStep } from '@/stores/modules/playwright'
 import { ArrowLeft, VideoPlay, Files, Aim } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -26,6 +27,18 @@ const currentCase = ref<any>({
   steps: [] as TestStep[]
 })
 
+const currentSuite = ref<any>(null)
+
+const fetchSuite = async (id: string) => {
+  if (!id) return
+  try {
+    const res = await axios.get(`http://localhost:8080/api/playwright/suites/${id}`)
+    currentSuite.value = res.data
+  } catch (err) {
+    console.error('Failed to fetch suite', err)
+  }
+}
+
 const selectedStepIndex = ref<number>(-1)
 const isRecording = ref(false)
 const recordingSocket = ref<WebSocket | null>(null)
@@ -38,7 +51,12 @@ onMounted(async () => {
     const found = pwStore.cases.find(c => c.id === caseId)
     if (found) {
       currentCase.value = JSON.parse(JSON.stringify(found))
+      if (currentCase.value.suite_id) {
+        await fetchSuite(currentCase.value.suite_id)
+      }
     }
+  } else if (suiteId) {
+    await fetchSuite(suiteId)
   }
 })
 
@@ -269,7 +287,10 @@ const selectedStep = computed(() => {
     <div class="editor-main">
       <!-- Left: Keywords -->
       <div class="panel keywords-panel">
-        <KeywordPanel @add-step="handleAddStep" />
+        <KeywordPanel 
+          :associated-suites="currentSuite?.skill_suites || []" 
+          @add-step="handleAddStep" 
+        />
       </div>
 
       <!-- Center: Steps -->

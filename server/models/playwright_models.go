@@ -9,6 +9,7 @@ type PlaywrightSuite struct {
 	Setup       []TestStep        `json:"setup"`       // Global setup steps for the suite
 	Teardown    []TestStep        `json:"teardown"`    // Global teardown steps for the suite
 	CaseIDs     []string          `json:"case_ids"`    // List of test case IDs included in this suite
+	SkillSuites []string          `json:"skill_suites"` // Associated skill library suites
 	CreatedAt   string            `json:"created_at"`
 	UpdatedAt   string            `json:"updated_at"`
 }
@@ -43,6 +44,8 @@ type UserKeyword struct {
 	Description string     `json:"description"`
 	Args        []ArgDef   `json:"args"`          // Arguments definition for the user keyword
 	Steps       []TestStep `json:"steps"`         // Sequence of steps
+	SuiteName   string     `json:"suite_name"`    // Grouping for Skills
+	SourceURL   string     `json:"source_url"`    // Origin page
 	CreatedAt   string     `json:"created_at"`
 }
 

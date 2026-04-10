@@ -1,24 +1,81 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { usePlaywrightStore } from '@/stores/modules/playwright'
-import { Search, Plus } from '@element-plus/icons-vue'
+import { Search, Plus, CollectionTag } from '@element-plus/icons-vue'
+
+const props = defineProps({
+  associatedSuites: {
+    type: Array as () => string[],
+    default: () => []
+  }
+})
 
 const pwStore = usePlaywrightStore()
 const searchQuery = ref('')
 
+onMounted(async () => {
+  await pwStore.fetchUserKeywords()
+})
+
 const groups = computed(() => {
-  const all = [...pwStore.builtinKeywords]
+  // 1. Builtin Keywords
+  const builtin = [...pwStore.builtinKeywords]
   const grouped: Record<string, any[]> = {}
   
-  all.forEach(kw => {
+  builtin.forEach(kw => {
     if (searchQuery.value && !kw.name.includes(searchQuery.value) && !kw.keyword.includes(searchQuery.value)) {
       return
     }
     const groupItems = grouped[kw.group] || (grouped[kw.group] = [])
     groupItems.push(kw)
   })
+
+  const finalGroups = Object.entries(grouped).map(([name, items]) => ({ 
+    name, 
+    items, 
+    type: 'builtin' 
+  }))
+
+  // 2. Associated User Keywords (Skills)
+  if (props.associatedSuites.length > 0) {
+    const userKws = (pwStore.userKeywords || []).filter(kw => 
+      props.associatedSuites.includes(kw.suite_name)
+    )
+
+    const userGrouped: Record<string, any[]> = {}
+    userKws.forEach(kw => {
+      const groupName = `套件库-${kw.suite_name}`
+      if (searchQuery.value && !kw.name.includes(searchQuery.value) && !kw.description.includes(searchQuery.value)) {
+        return
+      }
+      const groupItems = userGrouped[groupName] || (userGrouped[groupName] = [])
+      // Map UserKeyword to the format expected by the editor
+      groupItems.push({
+        name: kw.name,
+        keyword: kw.name, // Use name as the keyword identifier for execution
+        group: groupName,
+        description: kw.description,
+        args: (kw.args || []).map((a: any) => a.name || a),
+        type: 'skill'
+      })
+    })
+
+    const skillGroups = Object.entries(userGrouped).map(([name, items]) => ({
+      name,
+      items,
+      type: 'skill'
+    }))
+
+    // Find index of '断言' to insert after
+    const assertionIndex = finalGroups.findIndex(g => g.name === '断言')
+    if (assertionIndex !== -1) {
+      finalGroups.splice(assertionIndex + 1, 0, ...skillGroups)
+    } else {
+      finalGroups.push(...skillGroups)
+    }
+  }
   
-  return Object.entries(grouped).map(([name, items]) => ({ name, items }))
+  return finalGroups
 })
 
 const emit = defineEmits(['add-step'])
@@ -26,7 +83,6 @@ const emit = defineEmits(['add-step'])
 const addStep = (keyword: any) => {
   emit('add-step', keyword)
 }
-
 </script>
 
 <template>
@@ -43,11 +99,15 @@ const addStep = (keyword: any) => {
     <div class="keyword-list">
       <el-scrollbar>
         <div v-for="group in groups" :key="group.name" class="keyword-group">
-          <div class="group-title">{{ group.name }}</div>
+          <div class="group-title">
+            <el-icon v-if="group.type === 'skill'"><CollectionTag /></el-icon>
+            {{ group.name }}
+          </div>
           <div 
             v-for="kw in group.items" 
             :key="kw.keyword" 
             class="keyword-item"
+            :class="{ 'skill-item': kw.type === 'skill' }"
             @click="addStep(kw)"
           >
             <div class="kw-info">
@@ -90,6 +150,9 @@ const addStep = (keyword: any) => {
   font-weight: 600;
   margin-bottom: 10px;
   letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .keyword-item {
@@ -108,6 +171,15 @@ const addStep = (keyword: any) => {
   background: #fdfdfd;
   border-color: #dcdfe6;
   box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.skill-item {
+  background: #f0f7ff33;
+}
+
+.skill-item:hover {
+  background: #f0f7ff;
+  border-color: #a0cfff;
 }
 
 .kw-info {

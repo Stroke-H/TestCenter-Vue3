@@ -546,7 +546,12 @@ func init() {
 						}
 
 						// 5. Prepend to Docx
-						FeishuClientInstance.AddBlocksToDocx(objToken, 0, []map[string]interface{}{h2Block, textBlock})
+						err = FeishuClientInstance.AddBlocksToDocx(objToken, 0, []map[string]interface{}{h2Block, textBlock})
+						if err != nil {
+							log.Printf("[WikiLinkage] Error syncing report to %s: %v", project.WikiURL, err)
+						} else {
+							log.Printf("[WikiLinkage] Successfully synced report to %s", project.WikiURL)
+						}
 					}()
 				}
 			}
@@ -710,7 +715,7 @@ func init() {
 
 	RegisterTool(ToolDef{
 		Name:        "read_feishu_wiki",
-		Description: "读取飞书 Wiki 或文档的正文内容。适用于查看文档状态、核对现有信息等场景。",
+		Description: "读取飞书 Wiki 或文档的正文内容。警告：如果用户要求根据该文档生成【测试用例】，严禁调用此方法！必须强制调用 generate_smart_test_cases_from_doc 工具！",
 		Parameters: &jsonschema.Definition{
 			Type: jsonschema.Object,
 			Properties: map[string]jsonschema.Definition{
@@ -764,6 +769,173 @@ func init() {
 			}
 
 			return fmt.Sprintf("--- 文档正文 (Token: %s) ---\n%s", objToken, content), nil
+		},
+	})
+
+	RegisterTool(ToolDef{
+		Name:        "generate_smart_test_cases_from_doc",
+		Description: "根据指定的飞书文档链接，提取内容并利用 AI 深度融合技术自动生成全套测试用例。这包括首轮解析、AI增强边缘用例捕捉等。遇到生成测试用例的指令请第一时间调用该工具。",
+		Parameters: &jsonschema.Definition{
+			Type: jsonschema.Object,
+			Properties: map[string]jsonschema.Definition{
+				"wiki_url": {
+					Type:        jsonschema.String,
+					Description: "包含原始测试功能的飞书 Wiki 或文档链接",
+				},
+			},
+			Required: []string{"wiki_url"},
+		},
+		Execute: func(ctx context.Context, chatID string, senderID string, argsJSON string) (string, error) {
+			var args struct {
+				WikiURL string `json:"wiki_url"`
+			}
+			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+				return "", err
+			}
+
+			// 1. Initial Msg
+			FeishuClientInstance.SendChatText(chatID, "🕒 [云测智能引擎] 收到文档，正在从云盘抓取需求正文...")
+
+			// 2. Extract Document
+			parts := strings.Split(args.WikiURL, "/")
+			nodeToken := ""
+			for i, p := range parts {
+				if p == "wiki" && i+1 < len(parts) {
+					nodeToken = strings.Split(parts[i+1], "?")[0]
+					break
+				}
+				if (p == "docx" || p == "docs") && i+1 < len(parts) {
+					nodeToken = strings.Split(parts[i+1], "?")[0]
+					break
+				}
+			}
+			if nodeToken == "" {
+				return "❌ 无法解析文档地址。", nil
+			}
+
+			objToken := nodeToken
+			if strings.Contains(args.WikiURL, "/wiki/") {
+				ot, _, err := FeishuClientInstance.GetWikiNode(nodeToken)
+				if err != nil {
+					return fmt.Sprintf("❌ 获取节点失败: %v", err), nil
+				}
+				objToken = ot
+			}
+
+			content, err := FeishuClientInstance.GetDocxRawContent(objToken)
+			if err != nil {
+				return fmt.Sprintf("❌ 文档正文抓取失败: %v", err), nil
+			}
+
+			title := "未命名智能需求"
+			for _, line := range strings.Split(content, "\n") {
+				trim := strings.TrimSpace(line)
+				if len(trim) > 0 {
+					if len(trim) > 40 {
+						title = trim[:40] + "..."
+					} else {
+						title = trim
+					}
+					break
+				}
+			}
+
+			// Chunking logic to handle long documents
+			chunkSize := 8000
+			var chunks []string
+			runes := []rune(content)
+			if len(runes) > chunkSize {
+				FeishuClientInstance.SendChatText(chatID, fmt.Sprintf("⚠️ 文档内容较长（大约 %d 字），为了保证获取完全部需求特性，系统将为您分批提取与解析...", len(runes)))
+				for i := 0; i < len(runes); i += chunkSize {
+					end := i + chunkSize
+					if end > len(runes) {
+						end = len(runes)
+					}
+					chunks = append(chunks, string(runes[i:end]))
+				}
+			} else {
+				chunks = []string{content}
+				FeishuClientInstance.SendChatText(chatID, "✅ 文档读取完毕，正在执行基础需求拆解...")
+			}
+
+			// 3. Base Decompose (Batch)
+			var basePoints []models.RequirementPoint
+			for i, chunk := range chunks {
+				if len(chunks) > 1 {
+					FeishuClientInstance.SendChatText(chatID, fmt.Sprintf("🔄 正在进行分批内容解析 第 %d 批 (共 %d 批)...", i+1, len(chunks)))
+				}
+				pts, err := services.DecomposeRequirementCore(context.Background(), chunk)
+				if err != nil {
+					log.Printf("[Tool Gen] Batch %d failed: %v", i+1, err)
+					continue
+				}
+				basePoints = append(basePoints, pts...)
+			}
+
+			if len(basePoints) == 0 {
+				return "❌ 非常抱歉，分批解析后未能提取到任何有效的需求点，请检查文档内容。", nil
+			}
+
+			FeishuClientInstance.SendChatText(chatID, fmt.Sprintf("🔁 全部批次提取分析完成，共拆分锁定 %d 个功能点。正启动 AI 模型进行边缘条件交叉补充与智能重组，这会让测试用例健壮性提升3倍...", len(basePoints)))
+
+			// 4. Smart Decompose
+			smartPoints, err := services.SmartDecomposeCore(context.Background(), content, basePoints)
+			if err != nil {
+				FeishuClientInstance.SendChatText(chatID, fmt.Sprintf("⚠️ 智能增强失败或超时(%v)。回退到基础方案继续执行。", err))
+				smartPoints = basePoints
+			} else {
+				FeishuClientInstance.SendChatText(chatID, fmt.Sprintf("🔥 AI重组完成！需求广度已拓宽至 %d 个考量维度。正在生成极限测试集，预计 1~2 分钟...", len(smartPoints)))
+			}
+
+			// 5. Generate Loop
+			var allCases []models.TestCase
+			batchSize := 1
+			for i := 0; i < len(smartPoints); i += batchSize {
+				end := i + batchSize
+				if end > len(smartPoints) {
+					end = len(smartPoints)
+				}
+				batch := smartPoints[i:end]
+
+				FeishuClientInstance.SendChatText(chatID, fmt.Sprintf("⏳ AI 正在深度生成第 %d 批次 (共 %d 批)...", i/batchSize+1, (len(smartPoints)+batchSize-1)/batchSize))
+				
+				cases, err := services.GenerateBatchCore(context.Background(), batch)
+				if err != nil {
+					FeishuClientInstance.SendChatText(chatID, fmt.Sprintf("⚠️ 该批次数据结构复杂发生熔断跳过: %v", err))
+					continue
+				}
+				allCases = append(allCases, cases...)
+			}
+
+			// 6. Deduplicate
+			idMap := make(map[string]bool)
+			var finalCases []models.TestCase
+			for i, c := range allCases {
+				if idMap[c.ID] {
+					continue
+				}
+				idMap[c.ID] = true
+				c.ID = fmt.Sprintf("TC_%d", i+1)
+				finalCases = append(finalCases, c)
+			}
+
+			// 7. Save History
+			record := &models.GenerationRecord{
+				Title: title,
+				RequirementText: content,
+				Points: smartPoints,
+				Cases: finalCases,
+			}
+			err = services.SaveGenerationRecordCore(record)
+			if err != nil {
+				FeishuClientInstance.SendChatText(chatID, "⚠️ 虽然报告入库失败，但不影响结果返回！")
+			}
+
+			FeishuClientInstance.SendChatText(chatID, "🎉 所有维度测试集装盘完毕！请前往控制台审阅下载。")
+
+			url := fmt.Sprintf("http://strokeh.local:5173/testcase_gen/view/%s", record.ID)
+			downloadUrl := fmt.Sprintf("http://strokeh.local:8080/api/testcase-gen/records/%s/download", record.ID)
+			return fmt.Sprintf("✅ **测试用例已根据你的文档全量生成完毕**\n\n📌 目标范围: %s\n📈 覆盖指标: 智能扩展出 %d 个功能侧面\n📋 结果产出: 总计生成了 %d 条规范化测试用例\n\n👉 [点击在线预览验证用例](%s)\n👉 [📥 点击直接下载 Excel 格式文件](%s) \n\n(_如遇网络打不开，请确保处在内网环境_)", title, len(smartPoints), len(finalCases), url, downloadUrl), nil
 		},
 	})
 }

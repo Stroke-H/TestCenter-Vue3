@@ -32,6 +32,7 @@ export interface PlaywrightSuite {
   setup: TestStep[]
   teardown: TestStep[]
   case_ids: string[]
+  skill_suites: string[]
   created_at: string
   updated_at: string
 }
@@ -113,6 +114,15 @@ export const usePlaywrightStore = defineStore('playwright', {
         return res.data
       } finally {
         this.loading = false
+      }
+    },
+
+    async fetchUserKeywords() {
+      try {
+        const res = await axios.get(`${API_BASE}/keywords`)
+        this.userKeywords = res.data
+      } catch (err) {
+        console.error('Failed to fetch user keywords', err)
       }
     }
   }

@@ -132,8 +132,34 @@ func main() {
 			playwright.GET("/keywords", services.ListUserKeywordsHandler)
 			playwright.POST("/keywords", services.SaveUserKeywordHandler)
 			playwright.DELETE("/keywords/:id", services.DeleteUserKeywordHandler)
+			playwright.PUT("/keywords/suite/:name", services.RenameUserKeywordSuiteHandler)
+			playwright.DELETE("/keywords/suite/:name", services.DeleteUserKeywordSuiteHandler)
 
 			playwright.GET("/builtin-keywords", services.GetBuiltinKeywordsHandler)
+		}
+
+		// Node Skillify Tool
+		skillify := api.Group("/skillify")
+		{
+			skillify.POST("/scan", services.SkillifyScanHandler)
+			skillify.POST("/generate", services.SkillifyGenerateHandler)
+			skillify.POST("/save", services.SkillifySaveHandler)
+		}
+
+		// Test Case Generation
+		testcaseGen := api.Group("/testcase-gen")
+		{
+			testcaseGen.POST("/decompose", services.DecomposeRequirementHandler)
+			testcaseGen.POST("/smart-decompose", services.SmartDecomposeHandler)
+			testcaseGen.POST("/generate", services.GenerateTestCasesHandler)
+			testcaseGen.POST("/export", services.ExportTestCasesExcelHandler)
+
+			// History Management
+			testcaseGen.GET("/records", services.ListRecordsHandler)
+			testcaseGen.GET("/records/:id", services.GetRecordHandler)
+			testcaseGen.GET("/records/:id/download", services.DownloadRecordHandler)
+			testcaseGen.POST("/records", services.SaveRecordHandler)
+			testcaseGen.DELETE("/records/:id", services.DeleteRecordHandler)
 		}
 	}
 

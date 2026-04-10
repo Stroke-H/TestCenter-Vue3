@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import { useGameLogic } from './composables/useGameLogic';
 import { useWebSocket } from './composables/useWebSocket';
+import { useRobotAI } from './composables/useRobotAI';
 import ChessBoard from './components/ChessBoard.vue';
-import { Refresh, ArrowLeft, Trophy, Connection, Loading } from '@element-plus/icons-vue';
+import { Refresh, ArrowLeft, Trophy, Connection, Loading, Cpu } from '@element-plus/icons-vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import type { PlayerColor } from './types';
 
 const router = useRouter();
 const { 
@@ -13,11 +15,17 @@ const {
   currentPlayer, 
   status, 
   winner, 
+  gameMode,
+  difficulty,
   initGame, 
   revealPiece, 
   movePiece,
   firstRevealerRole
 } = useGameLogic();
+
+const { generateAction } = useRobotAI();
+const isRobotThinking = ref(false);
+const userColor = ref<PlayerColor | null>(null);
 
 const { 
   isMatching, 
@@ -83,9 +91,41 @@ onMounted(() => {
   });
 });
 
+// 监听回合变化触发机器人行动
+watch(currentPlayer, async (newPlayer) => {
+  if (status.value === 'playing' && gameMode.value === 'robot' && newPlayer && newPlayer !== userColor.value) {
+    if (isRobotThinking.value) return;
+    
+    isRobotThinking.value = true;
+    // 模拟思考延迟
+    const delay = 600 + Math.random() * 800;
+    setTimeout(() => {
+      const action = generateAction(board.value, newPlayer, difficulty.value);
+      if (action) {
+        if (action.type === 'reveal') {
+          revealPiece(action.row!, action.col!);
+        } else if (action.type === 'move') {
+          movePiece(action.fromR!, action.fromC!, action.toR!, action.toC!);
+        }
+      }
+      isRobotThinking.value = false;
+    }, delay);
+  }
+});
+
 function handleReveal(r: number, c: number) {
+  if (isRobotThinking.value) return;
+  
   const role = isOnline.value ? (myRole.value as 'host'|'guest') : undefined;
+  
+  // 如果是机器人模式且还未分配颜色，则当前点击者（用户）获得该颜色
+  const isFirstReveal = currentPlayer.value === null;
+  
   if (revealPiece(r, c, role)) {
+    if (gameMode.value === 'robot' && isFirstReveal) {
+      const piece = board.value[r]?.[c];
+      userColor.value = piece?.color || null;
+    }
     if (isOnline.value) {
       sendMessage('action', { type: 'reveal', row: r, col: c, role: role });
     }
@@ -93,11 +133,19 @@ function handleReveal(r: number, c: number) {
 }
 
 function handleMove(fR: number, fC: number, tR: number, tC: number) {
+  if (isRobotThinking.value) return;
+
   if (movePiece(fR, fC, tR, tC)) {
     if (isOnline.value) {
       sendMessage('action', { type: 'move', fromR: fR, fromC: fC, toR: tR, toC: tC, role: myRole.value });
     }
   }
+}
+
+function startRobotGame(diff: any) {
+  userColor.value = null;
+  initGame(undefined, 'robot', diff);
+  ElMessage.success(`人机对战开始！难度：${diff === 'easy' ? '入门' : diff === 'medium' ? '中级' : '专家'}`);
 }
 
 function handleRestart() {
@@ -111,7 +159,8 @@ function handleRestart() {
 function toggleOnline() {
   if (isOnline.value || isMatching.value) {
     disconnect();
-    initGame();
+    userColor.value = null;
+    initGame(undefined, 'local');
   } else {
     connect();
   }
@@ -137,6 +186,19 @@ function goBack() {
         >
           {{ isMatching ? '匹配中...' : isOnline ? '退出联机' : '联机匹配' }}
         </el-button>
+
+        <el-dropdown v-if="!isOnline && !isMatching" @command="startRobotGame" trigger="click">
+          <el-button type="warning" :icon="Cpu" round plain>
+            人机对战 <el-icon class="el-icon--right"><arrow-down /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="easy">入门难度</el-dropdown-item>
+              <el-dropdown-item command="medium">中级难度</el-dropdown-item>
+              <el-dropdown-item command="hard">专家难度</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
 
       <div class="turn-indicator">
@@ -179,6 +241,9 @@ function goBack() {
              ? '请你行动' : '等待对方行动...' }}
           <!-- 注意：斗兽棋阵营是动态决定的，这里简化逻辑 -->
           当前：{{ currentPlayer === 'blue' ? '蓝方' : '红方' }} 回合
+        </template>
+        <template v-else-if="gameMode === 'robot'">
+          {{ isRobotThinking ? '🤖 机器人正在思考...' : '请你行动' }}
         </template>
         <template v-else>
           当前为 {{ currentPlayer === 'blue' ? '蓝方' : '红方' }} 行动回合

@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Data files
+server/data/
+Skills/
+report/
+k6-scripts/reports/

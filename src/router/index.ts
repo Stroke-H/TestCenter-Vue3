@@ -60,6 +60,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '飞书助手', icon: 'Service' }
       },
       {
+        path: 'skillify',
+        name: 'NodeSkillify',
+        component: () => import('@/views/TestProcess/SkillifyTool/index.vue'),
+        meta: { title: '节点 Skill 化', icon: 'MagicStick' }
+      },
+      {
         path: 'acceptance_reports',
         name: 'AcceptanceReport',
         component: () => import('@/views/AcceptanceReport/index.vue'),
@@ -76,6 +82,34 @@ const routes: RouteRecordRaw[] = [
         name: 'UIAutoTest',
         component: () => import('@/views/UIAutoTest/index.vue'),
         meta: { title: 'UI 自动化', icon: 'Monitor' }
+      },
+      {
+        path: 'testcase_gen',
+        name: 'TestCaseGenRoot',
+        component: () => import('@/views/TestCaseGen/Layout.vue'),
+        meta: { title: '测试用例生成', icon: 'Notebook' },
+        redirect: '/testcase_gen/list',
+        children: [
+          {
+            path: 'list',
+            name: 'TestCaseGen',
+            component: () => import('@/views/TestCaseGen/List.vue'),
+            meta: { title: '用例生成历史' }
+          },
+          {
+            path: 'new',
+            name: 'TestCaseGenerator',
+            component: () => import('@/views/TestCaseGen/Generator.vue'),
+            meta: { title: '智能生成用例', hidden: true }
+          },
+          {
+            path: 'view/:id',
+            name: 'TestCaseView',
+            component: () => import('@/views/TestCaseGen/Generator.vue'),
+            meta: { title: '查看用例详情', hidden: true },
+            props: true
+          }
+        ]
       },
       {
         path: 'ui_auto/edit/:id?',
