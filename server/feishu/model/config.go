@@ -13,6 +13,13 @@ type FeishuConfig struct {
 	EncryptKey        string `json:"encrypt_key"`
 	Mode              string `json:"mode"`     // "long_conn" or "webhook"
 	GroupID           string `json:"group_id"` // Configured group ID for bot activity
+	MCP               *MCPConfig `json:"mcp"`
+}
+
+type MCPConfig struct {
+	Enabled   bool   `json:"enabled"`
+	ServerURL string `json:"server_url"`
+	Token     string `json:"token"`
 }
 
 var GlobalFeishuConfig *FeishuConfig
@@ -49,6 +56,24 @@ func LoadConfig(filePath string) (*FeishuConfig, error) {
 	}
 	if gid := os.Getenv("FEISHU_GROUP_ID"); gid != "" {
 		config.GroupID = gid
+	}
+	if mcpEnabled := os.Getenv("MCP_ENABLED"); mcpEnabled == "true" {
+        if config.MCP == nil {
+            config.MCP = &MCPConfig{}
+        }
+		config.MCP.Enabled = true
+	}
+	if mcpURL := os.Getenv("MCP_SERVER_URL"); mcpURL != "" {
+        if config.MCP == nil {
+            config.MCP = &MCPConfig{}
+        }
+		config.MCP.ServerURL = mcpURL
+	}
+	if mcpToken := os.Getenv("MCP_TOKEN"); mcpToken != "" {
+        if config.MCP == nil {
+            config.MCP = &MCPConfig{}
+        }
+		config.MCP.Token = mcpToken
 	}
 
 	return config, nil

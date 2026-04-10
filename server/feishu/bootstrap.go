@@ -24,6 +24,8 @@ func InitFeishuBridge(r *gin.Engine) {
 	}
 	model.GlobalFeishuConfig = config
 	model.LoadTestPhones() // Initialize migrated phone data
+    service.InitMCPClient() // Initialize MCP Client
+
 
 	if config.AppID == "" || config.AppSecret == "" {
 		log.Println("[Feishu] AppID or AppSecret is empty. Please check data/feishu_config.json")
