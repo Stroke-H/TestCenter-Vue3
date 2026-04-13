@@ -28,7 +28,7 @@ const handleRegister = async () => {
 
   loading.value = true
   try {
-    const data: any = await request.post('/auth/register', {
+    await request.post('/auth/register', {
       username: registerForm.username,
       nickname: registerForm.nickname,
       password: registerForm.password

@@ -42,6 +42,96 @@ var (
 	historyLock sync.RWMutex
 )
 
+var testcaseBoundaryKeywords = []string{
+	"边界", "极限", "最大", "最小", "超长", "过长", "上限", "下限", "空值", "为空",
+	"null", "nil", "超出", "临界", "最短", "最长", "大数据量", "边缘",
+}
+
+func normalizeTestCaseText(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	replacer := strings.NewReplacer(
+		" ", "",
+		"\n", "",
+		"\t", "",
+		"，", "",
+		",", "",
+		"。", "",
+		".", "",
+		"：", "",
+		":", "",
+		"（", "",
+		"）", "",
+		"(", "",
+		")", "",
+		"'", "",
+		"’", "",
+		"\"", "",
+	)
+	return replacer.Replace(text)
+}
+
+func inferTestCaseCategory(tc models.TestCase) string {
+	text := tc.Title + " " + tc.Precondition + " " + tc.ExpectedResult
+
+	switch strings.ToUpper(strings.TrimSpace(tc.Type)) {
+	case "CONCURRENCY":
+		return "稳定性并发测试"
+	case "EXCEPTION":
+		return "异常容错测试"
+	}
+
+	for _, keyword := range testcaseBoundaryKeywords {
+		if strings.Contains(text, keyword) {
+			return "边界极限测试"
+		}
+	}
+
+	return "常规功能测试"
+}
+
+func finalizeGeneratedCases(cases []models.TestCase) []models.TestCase {
+	seen := make(map[string]bool)
+	var unique []models.TestCase
+
+	for _, tc := range cases {
+		tc.ID = strings.TrimSpace(tc.ID)
+		tc.Type = strings.ToUpper(strings.TrimSpace(tc.Type))
+		tc.Title = strings.TrimSpace(tc.Title)
+		tc.Precondition = strings.TrimSpace(tc.Precondition)
+		tc.ExpectedResult = strings.TrimSpace(tc.ExpectedResult)
+		tc.Priority = strings.ToUpper(strings.TrimSpace(tc.Priority))
+		tc.Remark = strings.TrimSpace(tc.Remark)
+
+		if tc.Category == "" {
+			tc.Category = inferTestCaseCategory(tc)
+		}
+
+		cleanSteps := make([]string, 0, len(tc.Steps))
+		for _, step := range tc.Steps {
+			step = strings.TrimSpace(step)
+			if step != "" {
+				cleanSteps = append(cleanSteps, step)
+			}
+		}
+		tc.Steps = cleanSteps
+
+		key := strings.Join([]string{
+			tc.Category,
+			tc.Type,
+			normalizeTestCaseText(tc.Title),
+			normalizeTestCaseText(strings.Join(tc.Steps, "|")),
+			normalizeTestCaseText(tc.ExpectedResult),
+		}, "::")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, tc)
+	}
+
+	return deduplicateAndReindex(unique)
+}
+
 // DecomposeRequirementHandler 需求拆解处理器
 func DecomposeRequirementHandler(c *gin.Context) {
 	var req DecomposeReq
@@ -53,6 +143,12 @@ func DecomposeRequirementHandler(c *gin.Context) {
 	systemPrompt := `你是一名资深的业务分析师和需求工程师。
 用户的输入是一段原始的需求文档、功能描述或用户故事。
 你的任务是将其拆解为结构化的需求点。
+
+拆解原则：
+1. 默认聚焦 App 本身的业务功能、页面流程、状态变化、核心规则和必要边界。
+2. 只有当原始需求明确提到，或该功能属于高风险核心链路（如登录、支付、下单、账号、订阅、权限）时，才补充性能、安全、兼容性等非功能点。
+3. 不要为了“覆盖更全”而机械拆出浏览器兼容、无障碍、老旧设备适配等泛化需求，除非原文明确要求。
+4. feature 必须是适合落成功能测试用例的功能点，不要把同一断言拆成多个近义点。
 
 输出格式：必须严格输出一个 JSON 数组。
 - 不要包含任何解释性文字或 Markdown 标记之外的内容。
@@ -107,8 +203,8 @@ func SmartDecomposeHandler(c *gin.Context) {
 你的任务是进行第二轮深度拆解，重点关注：
 1. 发现初步拆解中遗漏的隐含需求、边界条件、异常场景。
 2. 将粒度过大的需求点拆分为更细的子功能点。
-3. 补充安全性、性能、兼容性等非功能性需求。
-4. 每个需求点应足够细粒度，使得对应的测试用例生成不会过长。
+3. 默认仍聚焦 App 功能测试；只有原始需求明确提到，或该点属于登录、支付、订单、账号、权限等高风险核心链路时，才补充安全性、性能、兼容性等非功能性需求。
+4. 每个需求点应足够细粒度，但要避免把同一功能拆成大量同义或近义点。
 
 输出格式：必须严格输出一个 JSON 数组。
 - 不要包含任何解释性文字。
@@ -254,7 +350,7 @@ func GenerateTestCasesHandler(c *gin.Context) {
 		batch := req.Points[i:end]
 
 		log.Printf("[INFO] 正在生成第 %d 批次用例 (需求点: %d/%d)", i/batchSize+1, end, totalPoints)
-		
+
 		cases, err := generateBatch(c.Request.Context(), batch)
 		if err != nil {
 			log.Printf("[ERROR] 第 %d 批次生成失败: %v", i/batchSize+1, err)
@@ -309,6 +405,8 @@ func ListRecordsHandler(c *gin.Context) {
 			records = append(records, gin.H{
 				"id":               record.ID,
 				"title":            record.Title,
+				"project_code":     record.ProjectCode,
+				"module":           record.Module,
 				"requirement_text": record.RequirementText,
 				"created_at":       record.CreatedAt,
 				"case_count":       len(record.Cases),
@@ -408,7 +506,7 @@ func DownloadRecordHandler(c *gin.Context) {
 	f.SetActiveSheet(index)
 	f.DeleteSheet("Sheet1")
 
-	headers := []string{"用例ID", "类型", "用例标题", "前置条件", "测试步骤", "测试数据", "预期结果", "优先级", "备注"}
+	headers := []string{"用例ID", "分类", "类型", "用例标题", "前置条件", "测试步骤", "测试数据", "预期结果", "优先级", "备注"}
 	for i, h := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 		f.SetCellValue(sheet, cell, h)
@@ -421,7 +519,7 @@ func DownloadRecordHandler(c *gin.Context) {
 		f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIdx), tc.Title)
 		f.SetCellValue(sheet, fmt.Sprintf("D%d", rowIdx), tc.Precondition)
 		f.SetCellValue(sheet, fmt.Sprintf("E%d", rowIdx), strings.Join(tc.Steps, "\n"))
-		
+
 		testDataStr := ""
 		if tc.TestData != nil {
 			switch v := tc.TestData.(type) {
@@ -441,7 +539,7 @@ func DownloadRecordHandler(c *gin.Context) {
 	fileName := fmt.Sprintf("TestCases_%s.xlsx", targetRecord.ID)
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", fileName))
 	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	
+
 	if err := f.Write(c.Writer); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "文件流写入失败"})
 	}
@@ -479,6 +577,72 @@ func SaveRecordHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, record)
+}
+
+// UpdateRecordHandler 更新已存在的历史记录
+func UpdateRecordHandler(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "需要提供记录 ID"})
+		return
+	}
+
+	var updatedRecord models.GenerationRecord
+	if err := c.ShouldBindJSON(&updatedRecord); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的记录数据"})
+		return
+	}
+	updatedRecord.ID = id // 确保 ID 保持不变
+
+	historyLock.Lock()
+	defer historyLock.Unlock()
+
+	f, err := os.Open(historyFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
+		return
+	}
+	defer f.Close()
+
+	var records []models.GenerationRecord
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 10*1024*1024)
+	scanner.Buffer(buf, len(buf))
+
+	found := false
+	for scanner.Scan() {
+		var record models.GenerationRecord
+		if err := json.Unmarshal(scanner.Bytes(), &record); err == nil {
+			if record.ID == id {
+				// 替换为更新后的数据，但保留创建时间
+				updatedRecord.CreatedAt = record.CreatedAt
+				records = append(records, updatedRecord)
+				found = true
+				continue
+			}
+			records = append(records, record)
+		}
+	}
+
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "记录不存在"})
+		return
+	}
+
+	// 重写文件
+	wf, err := os.Create(historyFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法更新历史记录文件"})
+		return
+	}
+	defer wf.Close()
+
+	for _, r := range records {
+		b, _ := json.Marshal(r)
+		wf.Write(append(b, '\n'))
+	}
+
+	c.JSON(http.StatusOK, updatedRecord)
 }
 
 // DeleteRecordHandler 删除历史记录
@@ -543,15 +707,32 @@ func generateBatch(ctx context.Context, points []models.RequirementPoint) ([]mod
 
 	systemPrompt := `你是一名资深的软件测试专家。
 用户提供了一组结构化的需求点。
-你的任务是根据这些需求点，生成对应的专业、详细的测试用例。
+你的任务是根据这些需求点，生成更聚焦于 App 功能测试、可直接执行的测试用例。
 
 核心规则（必须严格遵守）：
-1. 四维全覆盖：每个功能点必须生成至少包含 POSITIVE（正向）、NEGATIVE（逆向）、EXCEPTION（异常）、CONCURRENCY（并发）四个维度的用例。
-2. 用例结构：包含 id, type, title, precondition, steps, test_data, expected_result, priority, remark。
+1. 生成目标：优先覆盖用户主流程、核心业务规则、关键状态切换和直接影响体验的功能点。
+2. 不要机械地为每个功能点都生成四维用例。请按风险选择最有价值的维度：
+   - 默认至少生成 1 条“常规功能测试”。
+   - 只有存在明确输入校验、边界限制时，才增加“边界极限测试”。
+   - 只有存在失败恢复、异常返回、网络波动、权限拦截等场景时，才增加“异常容错测试”。
+   - 只有功能涉及重复点击、并发提交、状态竞争、库存/订单/支付争抢等风险时，才增加“稳定性并发测试”。
+3. 单个需求点通常生成 2-4 条高价值用例；只有高风险复杂功能才允许到 5 条。严禁堆砌同义、近义、换壳型用例。
+4. 默认聚焦 App 本身功能测试。除非需求明确提到，否则不要生成浏览器兼容性、无障碍、老旧设备、UI 像素级样式、纯安全渗透、纯性能压测类用例。
+5. 用例结构：包含 id, category, type, title, precondition, steps, test_data, expected_result, priority, remark。
    - steps：描述具体操作步骤的字符串数组。
    - test_data：测试所需的数据。可以是字符串，也可以是描述数据的 JSON 对象（如果是对象，请确保其结构清晰）。
-3. ID 命名规范：TC-{MODULE_NAME}-{TYPE_CHAR}-{SEQ}
-4. 优先级：P0, P1, P2, P3。
+   - category 只能使用：常规功能测试、边界极限测试、异常容错测试、稳定性并发测试。
+6. type 只能使用：POSITIVE、NEGATIVE、EXCEPTION、CONCURRENCY。
+7. ID 命名规范：TC-{MODULE_NAME}-{TYPE_CHAR}-{SEQ}
+8. 优先级：P0, P1, P2, P3。
+9. 每条用例应尽量短而准：
+   - 标题避免长句堆砌。
+   - steps 一般 3-5 步即可。
+   - expected_result 只写关键断言，不要把步骤再复述一遍。
+10. 去冗余要求：
+   - 不要输出仅改动措辞、但验证目标相同的重复用例。
+   - 不要把“空值、非法字符、超长”分别拆成多个低价值重复用例，除非它们对应不同业务结果。
+   - 如果多个校验本质一致，请合并成 1 条代表性用例。
 
 输出格式：必须严格输出一个 JSON 数组。
 - 【严禁指令】禁止在 JSON 中使用任何编程代码、方法或变量（如 .repeat(), .slice(), str.charAt 等）。
@@ -571,7 +752,7 @@ func generateBatch(ctx context.Context, points []models.RequirementPoint) ([]mod
 		log.Printf("[TestCaseGen] AI 原始响应 (前500字符): %.500s", aiResult)
 		return nil, err
 	}
-	return cases, nil
+	return finalizeGeneratedCases(cases), nil
 }
 
 // deduplicateAndReindex 去重并重新分配 ID 序号
@@ -580,8 +761,16 @@ func deduplicateAndReindex(cases []models.TestCase) []models.TestCase {
 	var unique []models.TestCase
 
 	for _, tc := range cases {
-		// 基于 ID + Title 进行简单去重
-		k := tc.ID + tc.Title
+		if tc.Category == "" {
+			tc.Category = inferTestCaseCategory(tc)
+		}
+
+		// 基于分类 + 标题 + 预期结果进行去重，避免同义重复
+		k := strings.Join([]string{
+			tc.Category,
+			normalizeTestCaseText(tc.Title),
+			normalizeTestCaseText(tc.ExpectedResult),
+		}, "::")
 		if !seen[k] {
 			seen[k] = true
 			unique = append(unique, tc)
@@ -632,8 +821,8 @@ func ExportTestCasesExcelHandler(c *gin.Context) {
 
 	// 设置表头样式
 	headerStyle, _ := f.NewStyle(&excelize.Style{
-		Fill: excelize.Fill{Type: "pattern", Color: []string{"#E0E0E0"}, Pattern: 1},
-		Font: &excelize.Font{Bold: true},
+		Fill:      excelize.Fill{Type: "pattern", Color: []string{"#E0E0E0"}, Pattern: 1},
+		Font:      &excelize.Font{Bold: true},
 		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 		Border: []excelize.Border{
 			{Type: "left", Color: "000000", Style: 1},
@@ -647,12 +836,16 @@ func ExportTestCasesExcelHandler(c *gin.Context) {
 	// 填充数据
 	for i, tc := range req.Cases {
 		rowIdx := i + 2
+		if tc.Category == "" {
+			tc.Category = inferTestCaseCategory(tc)
+		}
 		f.SetCellValue(sheet, fmt.Sprintf("A%d", rowIdx), tc.ID)
-		f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIdx), tc.Type)
-		f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIdx), tc.Title)
-		f.SetCellValue(sheet, fmt.Sprintf("D%d", rowIdx), tc.Precondition)
-		f.SetCellValue(sheet, fmt.Sprintf("E%d", rowIdx), strings.Join(tc.Steps, "\n"))
-		
+		f.SetCellValue(sheet, fmt.Sprintf("B%d", rowIdx), tc.Category)
+		f.SetCellValue(sheet, fmt.Sprintf("C%d", rowIdx), tc.Type)
+		f.SetCellValue(sheet, fmt.Sprintf("D%d", rowIdx), tc.Title)
+		f.SetCellValue(sheet, fmt.Sprintf("E%d", rowIdx), tc.Precondition)
+		f.SetCellValue(sheet, fmt.Sprintf("F%d", rowIdx), strings.Join(tc.Steps, "\n"))
+
 		// Stringify TestData if it's not already a string
 		testDataStr := ""
 		if tc.TestData != nil {
@@ -664,11 +857,11 @@ func ExportTestCasesExcelHandler(c *gin.Context) {
 				testDataStr = string(data)
 			}
 		}
-		f.SetCellValue(sheet, fmt.Sprintf("F%d", rowIdx), testDataStr)
-		
-		f.SetCellValue(sheet, fmt.Sprintf("G%d", rowIdx), tc.ExpectedResult)
-		f.SetCellValue(sheet, fmt.Sprintf("H%d", rowIdx), tc.Priority)
-		f.SetCellValue(sheet, fmt.Sprintf("I%d", rowIdx), tc.Remark)
+		f.SetCellValue(sheet, fmt.Sprintf("G%d", rowIdx), testDataStr)
+
+		f.SetCellValue(sheet, fmt.Sprintf("H%d", rowIdx), tc.ExpectedResult)
+		f.SetCellValue(sheet, fmt.Sprintf("I%d", rowIdx), tc.Priority)
+		f.SetCellValue(sheet, fmt.Sprintf("J%d", rowIdx), tc.Remark)
 	}
 
 	// 自动换行及边框
@@ -681,13 +874,14 @@ func ExportTestCasesExcelHandler(c *gin.Context) {
 			{Type: "bottom", Color: "000000", Style: 1},
 		},
 	})
-	f.SetCellStyle(sheet, "A2", fmt.Sprintf("I%d", len(req.Cases)+1), normalStyle)
+	f.SetCellStyle(sheet, "A2", fmt.Sprintf("J%d", len(req.Cases)+1), normalStyle)
 
 	// 列宽
 	f.SetColWidth(sheet, "A", "A", 20)
 	f.SetColWidth(sheet, "B", "B", 12)
-	f.SetColWidth(sheet, "C", "C", 30)
-	f.SetColWidth(sheet, "D", "I", 35)
+	f.SetColWidth(sheet, "C", "C", 12)
+	f.SetColWidth(sheet, "D", "D", 30)
+	f.SetColWidth(sheet, "E", "J", 35)
 
 	// 冻结首行
 	f.SetPanes(sheet, &excelize.Panes{
@@ -755,14 +949,14 @@ func callDeepSeek(ctx context.Context, systemPrompt, userPrompt string) (string,
 			break
 		}
 		log.Printf("[TestCaseGen] AI API 异常 (第 %d 次尝试): %v", i+1, err)
-		
+
 		// 检查是否为可重试错误
 		errMsg := strings.ToLower(err.Error())
-		isRetryable := strings.Contains(errMsg, "eof") || 
-					   strings.Contains(errMsg, "timeout") || 
-					   strings.Contains(errMsg, "connection reset") ||
-					   strings.Contains(errMsg, "broken pipe")
-		
+		isRetryable := strings.Contains(errMsg, "eof") ||
+			strings.Contains(errMsg, "timeout") ||
+			strings.Contains(errMsg, "connection reset") ||
+			strings.Contains(errMsg, "broken pipe")
+
 		if !isRetryable || i == maxRetries-1 {
 			break
 		}
@@ -1149,6 +1343,12 @@ func DecomposeRequirementCore(ctx context.Context, text string) ([]models.Requir
 用户的输入是一段原始的需求文档、功能描述或用户故事。
 你的任务是将其拆解为结构化的需求点。
 
+拆解原则：
+1. 默认聚焦 App 本身的业务功能、页面流程、状态变化、核心规则和必要边界。
+2. 只有当原始需求明确提到，或该功能属于高风险核心链路（如登录、支付、下单、账号、订阅、权限）时，才补充性能、安全、兼容性等非功能点。
+3. 不要为了“覆盖更全”而机械拆出浏览器兼容、无障碍、老旧设备适配等泛化需求，除非原文明确要求。
+4. feature 必须是适合落成功能测试用例的功能点，不要把同一断言拆成多个近义点。
+
 输出格式：必须严格输出一个 JSON 数组。
 - 不要包含任何解释性文字或 Markdown 标记之外的内容。
 - 不要输出多余的标点符号或在 JSON 结尾添加句号。
@@ -1185,8 +1385,8 @@ func SmartDecomposeCore(ctx context.Context, text string, existingPoints []model
 你的任务是进行第二轮深度拆解，重点关注：
 1. 发现初步拆解中遗漏的隐含需求、边界条件、异常场景。
 2. 将粒度过大的需求点拆分为更细的子功能点。
-3. 补充安全性、性能、兼容性等非功能性需求。
-4. 每个需求点应足够细粒度，使得对应的测试用例生成不会过长。
+3. 默认仍聚焦 App 功能测试；只有原始需求明确提到，或该点属于登录、支付、订单、账号、权限等高风险核心链路时，才补充安全性、性能、兼容性等非功能性需求。
+4. 每个需求点应足够细粒度，但要避免把同一功能拆成大量同义或近义点。
 
 输出格式：必须严格输出一个 JSON 数组。
 - 不要包含任何解释性文字。

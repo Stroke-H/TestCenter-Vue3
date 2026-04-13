@@ -1,5 +1,22 @@
 # ChangeLog: Recent Features Sync (2026-04)
 
+## 2026-04-13 补充同步
+
+### 测试用例生成收敛优化 (TestCase Generator)
+- **[OPTIMIZE] 生成策略收敛**: 调整 `testcase_gen_service.go` 的需求拆解与用例生成 Prompt，默认聚焦 App 本身功能测试，不再机械扩展兼容性/无障碍/纯性能类低相关测试点。
+- **[OPTIMIZE] 去除强制四维覆盖**: 取消“每个功能点必须 POSITIVE/NEGATIVE/EXCEPTION/CONCURRENCY 全覆盖”的硬约束，改为按风险选择维度，优先产出主流程与高价值功能用例。
+- **[NEW] 用例分类字段**: 为测试用例新增 `category` 字段，支持 `常规功能测试 / 边界极限测试 / 异常容错测试 / 稳定性并发测试` 四类展示与导出。
+- **[OPTIMIZE] 本地去重与收敛**: 后端新增标题/步骤/预期结果归一化去重逻辑，降低同义改写型重复用例落盘概率。
+
+### 测试用例历史与管理增强
+- **[NEW] 历史记录元信息**: `GenerationRecord` 增加 `project_code` 与 `module` 字段，用于后续分类归档与筛选。
+- **[NEW] 历史记录更新接口**: 后端新增 `PUT /api/testcase-gen/records/:id`，支持前端在查看模式下更新已保存的测试用例记录。
+- **[OPTIMIZE] 历史页体验**: `TestCaseGen/List.vue` 升级为统计卡片 + 项目/模块筛选 + 项目汇总侧栏的管理页布局。
+
+### 飞书机器人结果返回修复
+- **[FIX] 工具结果直通**: 对 `generate_acceptance_report` 与 `generate_smart_test_cases_from_doc` 增加结果直通逻辑，避免工具返回的完整文本、URL 或 Markdown 链接被 AI 二次压缩后丢失。
+- **[FIX] 测试用例生成链接保真**: 修复“在线预览 / 下载 Excel”在飞书回复中退化成普通文本的问题，确保最终消息保留原始可点击链接。
+
 ## 1. 飞书自动测试用例生成 (TestCase Generator)
 - **[NEW] 后端服务**: 新增 `testcase_gen_service.go` 和 `testcase_gen.go` 数据模型，支持基于 AI 的测试需求分解与用例多维生成。
 - **[NEW] 前端界面**: 添加 `TestCaseGen` 视图模块，配合飞书机器人实现多步生成进度实时反馈，并输出汇总测试用例表格。

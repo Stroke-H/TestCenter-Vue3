@@ -11,7 +11,8 @@ type RequirementPoint struct {
 // TestCase represents a generated test case
 type TestCase struct {
 	ID             string      `json:"id"`
-	Type           string      `json:"type"` // POSITIVE, NEGATIVE, EXCEPTION, CONCURRENCY
+	Category       string      `json:"category,omitempty"` // 常规功能测试 / 边界极限测试 / 异常容错测试 / 稳定性并发测试
+	Type           string      `json:"type"`               // POSITIVE, NEGATIVE, EXCEPTION, CONCURRENCY
 	Title          string      `json:"title"`
 	Precondition   string      `json:"precondition"`
 	Steps          []string    `json:"steps"`
@@ -25,6 +26,8 @@ type TestCase struct {
 type GenerationRecord struct {
 	ID              string             `json:"id"`
 	Title           string             `json:"title"`
+	ProjectCode     string             `json:"project_code"`
+	Module          string             `json:"module"`
 	RequirementText string             `json:"requirement_text"`
 	CreatedAt       string             `json:"created_at"` // ISO8601 string
 	Points          []RequirementPoint `json:"points"`

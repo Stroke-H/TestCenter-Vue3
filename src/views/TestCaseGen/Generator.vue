@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { Notebook, Edit, DocumentChecked, Download, ArrowLeft, ArrowRight, MagicStick, Refresh, Collection } from '@element-plus/icons-vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
@@ -11,10 +11,46 @@ const props = defineProps<{
 
 const router = useRouter()
 const isViewMode = ref(false)
+const projects = ref<any[]>([])
+const selectedProjectCode = ref('')
+const selectedModule = ref('')
+const existingModules = ref<string[]>([])
+
+const originalProjectCode = ref('')
+const originalModule = ref('')
+const recordTitle = ref('')
+
+const isModified = computed(() => {
+  return selectedProjectCode.value !== originalProjectCode.value || 
+         selectedModule.value !== originalModule.value
+})
 
 const activeStep = ref(0)
 const requirementDescription = ref('')
 const loading = ref(false)
+
+// --- 项目获取 ---
+const fetchProjects = async () => {
+  try {
+    const res = await axios.get('/api/config/projects')
+    projects.value = res.data || []
+  } catch (err) {
+    console.error('Failed to fetch projects:', err)
+  }
+}
+
+const fetchModules = async () => {
+  try {
+    const res = await axios.get(`${API_BASE}/records`)
+    const modules = new Set<string>()
+    res.data.forEach((r: any) => {
+      if (r.module) modules.add(r.module)
+    })
+    existingModules.value = Array.from(modules)
+  } catch (err) {
+    console.error('Failed to fetch modules:', err)
+  }
+}
 
 // Step 1: 需求点数据
 interface RequirementPoint {
@@ -29,6 +65,7 @@ const requirementPoints = ref<RequirementPoint[]>([])
 // Step 2: 测试用例数据
 interface TestCase {
   id: string
+  category?: string
   type: string
   title: string
   precondition: string
@@ -43,6 +80,18 @@ const rawAIResponse = ref('')
 const showRawDialog = ref(false)
 const currentBatch = ref(0)
 const totalBatches = ref(0)
+const categoryOrder = ['常规功能测试', '边界极限测试', '异常容错测试', '稳定性并发测试']
+const categoryStats = computed(() => {
+  const counters: Record<string, number> = {}
+  for (const category of categoryOrder) counters[category] = 0
+  for (const tc of generatedCases.value) {
+    const key = tc.category || '常规功能测试'
+    counters[key] = (counters[key] || 0) + 1
+  }
+  return categoryOrder
+    .filter(category => (counters[category] || 0) > 0)
+    .map(category => ({ category, count: counters[category] || 0 }))
+})
 
 // Smart Decompose 状态
 const smartLoading = ref(false)
@@ -194,6 +243,11 @@ const resetAll = () => {
   generatedCases.value = []
   activeStep.value = 0
   isViewMode.value = false
+  recordTitle.value = ''
+  selectedProjectCode.value = ''
+  selectedModule.value = ''
+  originalProjectCode.value = ''
+  originalModule.value = ''
 }
 
 // 保存到历史记录
@@ -204,6 +258,8 @@ const handleSave = async () => {
     const title = requirementPoints.value[0]?.feature || '未命名用例集'
     await axios.post(`${API_BASE}/records`, {
       title: title,
+      project_code: selectedProjectCode.value,
+      module: selectedModule.value,
       requirement_text: requirementDescription.value,
       points: requirementPoints.value,
       cases: generatedCases.value
@@ -218,11 +274,38 @@ const handleSave = async () => {
   }
 }
 
+const handleUpdate = async () => {
+  if (!props.id) return
+  loading.value = true
+  try {
+    const title = requirementPoints.value[0]?.feature || '未命名用例集'
+    await axios.put(`${API_BASE}/records/${props.id}`, {
+      title: title,
+      project_code: selectedProjectCode.value,
+      module: selectedModule.value,
+      requirement_text: requirementDescription.value,
+      points: requirementPoints.value,
+      cases: generatedCases.value
+    })
+    ElMessage.success('历史记录已更新')
+    originalProjectCode.value = selectedProjectCode.value
+    originalModule.value = selectedModule.value
+    router.push('/testcase_gen/list')
+  } catch (err: any) {
+    console.error(err)
+    ElMessage.error('更新失败')
+  } finally {
+    loading.value = false
+  }
+}
+
 const goBack = () => {
   router.push('/testcase_gen/list')
 }
 
 onMounted(async () => {
+  fetchProjects()
+  fetchModules()
   if (props.id) {
     loading.value = true
     isViewMode.value = true
@@ -231,6 +314,16 @@ onMounted(async () => {
       requirementDescription.value = res.data.requirement_text
       requirementPoints.value = res.data.points
       generatedCases.value = res.data.cases
+      
+      const pCode = res.data.project_code || ''
+      const mod = res.data.module || ''
+      
+      recordTitle.value = res.data.title || ''
+      selectedProjectCode.value = pCode
+      selectedModule.value = mod
+      originalProjectCode.value = pCode
+      originalModule.value = mod
+      
       activeStep.value = 2 // 直接跳到预览
     } catch (err) {
       ElMessage.error('获取记录详请失败')
@@ -257,6 +350,16 @@ const getTypeColor = (type: string) => {
     case 'EXCEPTION': return '#f59e0b'
     case 'CONCURRENCY': return '#8b5cf6'
     default: return '#64748b'
+  }
+}
+
+const getCategoryTagType = (category?: string) => {
+  switch (category) {
+    case '常规功能测试': return 'success'
+    case '边界极限测试': return 'warning'
+    case '异常容错测试': return 'danger'
+    case '稳定性并发测试': return 'primary'
+    default: return 'info'
   }
 }
 
@@ -287,14 +390,15 @@ const formatTestData = (data: any) => {
 // Excel 列头
 const excelColumns = [
   { label: 'A', prop: 'id', title: '用例ID', width: '180' },
-  { label: 'B', prop: 'type', title: '场景类型', width: '120' },
-  { label: 'C', prop: 'title', title: '用例标题', width: '220' },
-  { label: 'D', prop: 'precondition', title: '前置条件', width: '220' },
-  { label: 'E', prop: 'steps', title: '测试步骤', width: '300' },
-  { label: 'F', prop: 'test_data', title: '测试数据', width: '200' },
-  { label: 'G', prop: 'expected_result', title: '预期结果', width: '300' },
-  { label: 'H', prop: 'priority', title: '优先级', width: '100' },
-  { label: 'I', prop: 'remark', title: '备注', width: '150' },
+  { label: 'B', prop: 'category', title: '测试分类', width: '150' },
+  { label: 'C', prop: 'type', title: '场景类型', width: '120' },
+  { label: 'D', prop: 'title', title: '用例标题', width: '220' },
+  { label: 'E', prop: 'precondition', title: '前置条件', width: '220' },
+  { label: 'F', prop: 'steps', title: '测试步骤', width: '300' },
+  { label: 'G', prop: 'test_data', title: '测试数据', width: '200' },
+  { label: 'H', prop: 'expected_result', title: '预期结果', width: '300' },
+  { label: 'I', prop: 'priority', title: '优先级', width: '100' },
+  { label: 'J', prop: 'remark', title: '备注', width: '150' },
 ]
 </script>
 
@@ -304,16 +408,16 @@ const excelColumns = [
       <div class="title-row">
         <el-button :icon="ArrowLeft" circle @click="goBack" class="back-btn" />
         <el-icon :size="24" color="#8b5cf6"><Notebook /></el-icon>
-        <h2 class="page-title">{{ isViewMode ? '查看用例详情' : '智能测试用例生成' }}</h2>
+        <h2 class="page-title">{{ isViewMode ? recordTitle : '智能测试用例生成' }}</h2>
         <div class="header-actions">
            <el-button v-if="activeStep > 0 && !isViewMode" link @click="resetAll" :icon="Refresh">重新开始</el-button>
         </div>
       </div>
-      <p class="page-desc">基于行业前沿 AI 模型，自动完成需求拆解与多维覆盖用例生成。</p>
+      <p class="page-desc" v-if="!isViewMode">基于 AI 自动完成需求拆解，并生成更聚焦于 App 功能测试的高价值用例。</p>
     </div>
 
     <!-- 步骤条 -->
-    <div class="steps-wrapper">
+    <div class="steps-wrapper" v-if="!isViewMode">
       <el-steps :active="activeStep" finish-status="success" align-center>
         <el-step title="需求输入" :icon="Edit" />
         <el-step title="需求拆解" :icon="MagicStick" />
@@ -447,7 +551,7 @@ const excelColumns = [
                 :loading="loading" 
                 @click="handleGenerate"
               >
-                确认并生成多维用例
+                确认并生成聚焦用例
                 <el-icon class="el-icon--right"><MagicStick /></el-icon>
               </el-button>
               <el-button v-if="rawAIResponse" type="warning" @click="showRawDialog = true" style="margin-left: 12px">
@@ -463,10 +567,52 @@ const excelColumns = [
             <div class="spreadsheet-toolbar">
               <div class="toolbar-left">
                 <el-tag type="success" effect="dark" class="res-tag">生成成功: {{ generatedCases.length }} 条用例</el-tag>
+                <el-tag
+                  v-for="item in categoryStats"
+                  :key="item.category"
+                  :type="getCategoryTagType(item.category)"
+                  effect="plain"
+                  class="res-tag category-tag"
+                >
+                  {{ item.category }}: {{ item.count }}
+                </el-tag>
               </div>
               <div class="toolbar-right">
                 <el-button v-if="!isViewMode" @click="prevStep" :icon="ArrowLeft">回退修改</el-button>
                 <el-button v-if="!isViewMode" type="primary" @click="handleSave" :icon="Collection" :loading="loading">保存到历史</el-button>
+                <el-button v-if="isViewMode && isModified" type="primary" @click="handleUpdate" :icon="DocumentChecked" :loading="loading">更新记录</el-button>
+                
+                <el-select
+                  v-model="selectedModule"
+                  placeholder="功能模块"
+                  style="width: 140px; margin-right: 12px;"
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                >
+                  <el-option
+                    v-for="m in existingModules"
+                    :key="m"
+                    :label="m"
+                    :value="m"
+                  />
+                </el-select>
+
+                <el-select
+                  v-model="selectedProjectCode"
+                  placeholder="所属项目"
+                  style="width: 140px; margin-right: 12px;"
+                  clearable
+                >
+                  <el-option
+                    v-for="p in projects"
+                    :key="p.project_code"
+                    :label="p.project_name"
+                    :value="p.project_code"
+                  />
+                </el-select>
+
                 <el-button type="success" @click="handleExport" :icon="Download">下载 Excel 文件 (.xlsx)</el-button>
               </div>
             </div>
@@ -502,7 +648,12 @@ const excelColumns = [
                   </template>
                   <template #default="{ row }">
                     <!-- Type Column -->
-                    <div v-if="col.prop === 'type'" class="type-cell">
+                    <div v-if="col.prop === 'category'" class="prio-cell">
+                      <el-tag :type="getCategoryTagType(row.category)" size="small">{{ row.category || '常规功能测试' }}</el-tag>
+                    </div>
+
+                    <!-- Type Column -->
+                    <div v-else-if="col.prop === 'type'" class="type-cell">
                       <span :style="{ color: getTypeColor(row.type) }">{{ row.type }}</span>
                     </div>
                     
@@ -551,9 +702,9 @@ const excelColumns = [
     <div v-if="loading && activeStep === 1" class="loading-overlay">
        <el-icon class="is-loading" :size="40"><Refresh /></el-icon>
        <p class="loading-text">
-         {{ totalBatches > 1 ? `正在生成第 ${currentBatch}/${totalBatches} 批次用例...` : 'AI 正在深度思考并生成全维度测试用例...' }}
+         {{ totalBatches > 1 ? `正在生成第 ${currentBatch}/${totalBatches} 批次用例...` : 'AI 正在深度思考并生成聚焦功能测试用例...' }}
        </p>
-       <p class="loading-sub">由于涉及正向、逆向、异常、并发多个维度，生成较慢请稍候</p>
+       <p class="loading-sub">系统会优先收敛主流程与高风险场景，减少低价值重复用例</p>
     </div>
   </div>
 </template>

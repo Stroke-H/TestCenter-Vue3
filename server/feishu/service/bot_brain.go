@@ -14,6 +14,15 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+func shouldPassthroughToolResult(toolName string) bool {
+	switch toolName {
+	case "generate_acceptance_report", "generate_smart_test_cases_from_doc":
+		return true
+	default:
+		return false
+	}
+}
+
 func isConfirmation(msg string) bool {
 	m := strings.TrimSpace(strings.ToLower(msg))
 
@@ -95,6 +104,14 @@ func ProcessChat(ctx context.Context, chatID string, senderID string, userMessag
 			// Reset state
 			session.State = StateNormal
 			session.PendingTool = nil
+
+			if shouldPassthroughToolResult(toolCall.Function.Name) {
+				session.AppendMessage(openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: result,
+				})
+				return result
+			}
 
 			// Call LLM again for final answer
 			return callDeepSeek(ctx, senderID, session, false)
@@ -313,6 +330,14 @@ func callDeepSeek(ctx context.Context, senderID string, session *SessionContext,
 				Name:       toolCall.Function.Name,
 				ToolCallID: toolCall.ID,
 			})
+
+			if len(msg.ToolCalls) == 1 && shouldPassthroughToolResult(toolCall.Function.Name) {
+				session.AppendMessage(openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: result,
+				})
+				return result
+			}
 		}
 		
 		// Recursive call to get the final text response after ALL tool results are appended

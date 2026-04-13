@@ -159,6 +159,7 @@ func main() {
 			testcaseGen.GET("/records/:id", services.GetRecordHandler)
 			testcaseGen.GET("/records/:id/download", services.DownloadRecordHandler)
 			testcaseGen.POST("/records", services.SaveRecordHandler)
+			testcaseGen.PUT("/records/:id", services.UpdateRecordHandler)
 			testcaseGen.DELETE("/records/:id", services.DeleteRecordHandler)
 		}
 	}

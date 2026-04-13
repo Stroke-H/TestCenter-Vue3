@@ -1,5 +1,20 @@
 # ChangeLog - Backend (TestCenter Server)
 
+## 2026-04-13
+
+### Changed
+- **TestCase Generation Pipeline**:
+    - 调整需求拆解与智能增强策略，默认聚焦 App 核心功能与必要边界，减少泛化的兼容性/性能类需求点扩写。
+    - 更新测试用例生成 Prompt，取消对每个功能点强制四维全覆盖的要求，改为按风险选择测试维度并限制单点产出数量。
+    - 新增测试用例 `Category` 分类归并逻辑，并在导出 Excel 时同步输出分类列。
+    - 增加测试用例标题/步骤/预期结果归一化去重，降低冗余用例入库比例。
+- **TestCase Record APIs**:
+    - `GenerationRecord` 扩展 `project_code` 与 `module` 字段。
+    - `main.go` 新增 `PUT /api/testcase-gen/records/:id` 路由，支持更新历史用例记录。
+- **Feishu Bot Result Delivery**:
+    - 对 `generate_acceptance_report` 与 `generate_smart_test_cases_from_doc` 增加工具结果直通逻辑，避免工具返回文本被 AI 二次压缩。
+    - 修复飞书测试用例生成结果中的预览/下载链接丢失问题。
+
 ## 2026-03-31
 
 ### Added
