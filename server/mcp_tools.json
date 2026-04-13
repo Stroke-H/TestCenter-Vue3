@@ -1,0 +1,1564 @@
+[
+  {
+    "name": "add_comment",
+    "description": "在指定的实例的评论/备注页添加一条评论,支持简单文本以及markdown格式的输入，然后会获得添加评论的id",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "description": "要添加评论的相关url信息，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "要添加的评论的工作项所属的空间projectKey",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "要添加评论的工作项id或者名称",
+          "type": "string"
+        },
+        "comment_content": {
+          "description": "要添加评论的内容，支持markdown格式，针对用户的内容，可以转换成markdown试一下",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "create_fixed_view",
+    "description": "在指定空间和工作项类型下新增一个固定视图，创建成功后，会获得对应的视图ID和视图名称",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_type": {
+          "description": "工作项类型key",
+          "type": "string"
+        },
+        "work_item_id_list": {
+          "description": "需要添加入视图的工作项ID列表，上限200个",
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "cooperation_mode": {
+          "description": "协作模式，用于指定视图协作范围，默认值为1；1：指定人员或团队；2：全部空间管理员；3：全部空间成员",
+          "type": "number"
+        },
+        "cooperation_user_keys": {
+          "description": "协作人员user_key列表,cooperation_mode=1时生效",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cooperation_team_ids": {
+          "description": "协作团队ID列表,cooperation_mode=1时生效",
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "project_key": {
+          "description": "要创建视图的所属的空间projectKey",
+          "type": "string"
+        },
+        "name": {
+          "description": "固定视图名称",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "name",
+        "work_item_type",
+        "work_item_id_list"
+      ]
+    }
+  },
+  {
+    "name": "create_resource_work_item",
+    "description": "在指定项目空间内，指定启用了资源库（资源实例）的工作项类型，创建一个新的工作项资源库模板（一般也称为资源实例）。 调用成功时返回创建好的工作项资源链接。当工作项未开启资源库时，返回报错信息：工作项没有配置为资源库工作项；创建资源库实例（工作项资源库模板）仅能使用此工具。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "空间标识，支持 projectKey/simpleName；失败时先调 search_project_info",
+          "type": "string"
+        },
+        "work_item_type_key": {
+          "description": "工作项类型 key；失败时先调 list_workitem_types，尽量不要传描述以外的key",
+          "type": "string"
+        },
+        "template_id": {
+          "description": "传入工作流模板 ID 或名称；未传值时，会选取该工作项类型的第一个流程模版。",
+          "type": "string"
+        },
+        "fields": {
+          "description": "资源字段列表，每项包含字段 key 与字段值。",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field_key": {
+                "description": "字段 key，须先调 get_resource_work_item_type_conf 获取合法值；字段必须严格匹配，避免混淆相似字段；多个模糊结果时需询问用户确认。",
+                "type": "string"
+              },
+              "field_value": {
+                "description": "字段值，先通过get_resource_work_item_type_conf确认字段的类型（field_type）；任何格式（非json情况下，普通文本/数字/简单类型）都要转义成字符串，如果报错优先看下转义问题；不同类型(field_type)的传入格式：text/multi-pure-text/link/bool/number/owned_project/_business/_name -\u003e 字面值的转义而非字面值，如名称-\u003e\"名称\"、3 -\u003e \"3\"、true -\u003e \"true\"；user -\u003e 单个 userkey；multi-user -\u003e userkey 数组；select/radio/tree-select/_work_item_status/_work_item_template -\u003e 做key转换option_id-\u003evalue、option_name-\u003elabel后的json，示例：{\"option_id\":\"option_1\",\"option_name\":\"P0\"}转{\"value\":\"option_1\",\"label\":\"P0\"}；multi-select -\u003e 做key转换option_id-\u003evalue、option_name-\u003elabel后的json的list；workitem_related_select -\u003e 数字 ID；workitem_related_multi_select -\u003e 数字 ID 数组；multi-text -\u003e markdown；date -\u003e 毫秒时间戳(天精度)；schedule -\u003e [开始 ms, 结束 ms]；precise_date -\u003e {start_time,end_time}；template -\u003e 模板 ID（务必用 list_workitem_field_config 查询 template 枚举值匹配）。",
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_type_key"
+      ]
+    }
+  },
+  {
+    "name": "create_work_item_from_resource",
+    "description": "通过工作项资源库模版实例创建普通工作项实例。创建成功后返回成功信息和新创建的工作项实例链接。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "空间标识，支持 projectKey/simpleName；失败时先调 search_project_info",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "资源工作项 ID；若用户提供 URL 则自动解析；若提供名称则先获取资源实例 ID。",
+          "type": "string"
+        },
+        "name": {
+          "description": "工作项名称，当名称是资源字段时，会默认忽略该值。",
+          "type": "string"
+        },
+        "fields": {
+          "description": "要在新建实例上设置的字段列表，每项包含字段 key 与字段值。",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field_key": {
+                "description": "字段 key，须先调 list_workitem_field_config 和 list_workitem_role_config 获取合法值；字段必须严格匹配，避免混淆相似字段；多个模糊结果时需询问用户确认。",
+                "type": "string"
+              },
+              "field_value": {
+                "description": "字段值，先通过list_workitem_field_config确认字段的类型（field_type）；任何格式（非json情况下，普通文本/数字/简单类型）都要转义成字符串，如果报错优先看下转义问题；不同类型(field_type)的传入格式：text/multi-pure-text/link/bool/number/owned_project/_business/_name -\u003e 字面值的转义而非字面值，如名称-\u003e\"名称\"、3 -\u003e \"3\"、true -\u003e \"true\"；user -\u003e 单个 userkey；multi-user -\u003e userkey 数组；select/radio/tree-select/_work_item_status/_work_item_template -\u003e 做key转换option_id-\u003evalue、option_name-\u003elabel后的json，示例：{\"option_id\":\"option_1\",\"option_name\":\"P0\"}转{\"value\":\"option_1\",\"label\":\"P0\"}；multi-select -\u003e 做key转换option_id-\u003evalue、option_name-\u003elabel后的json的list；workitem_related_select -\u003e 数字 ID；workitem_related_multi_select -\u003e 数字 ID 数组；multi-text -\u003e markdown；date -\u003e 毫秒时间戳(天精度)；schedule -\u003e [开始 ms, 结束 ms]；precise_date -\u003e {start_time,end_time}；template -\u003e 模板 ID（务必用 list_workitem_field_config 查询 template 枚举值匹配）。",
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "create_workitem",
+    "description": "创建工作项实例。1.请务必先使用list_workitem_field_config工具来获取字段信息、list_workitem_role_config工具获取角色信息，来得到具体的创建属性信息。2.对于字段的匹配，切记要严格匹配，避免出现用户想要创建[硬件缺陷]字段，但是确传入了[关联缺陷]字段的key的情况 3.模板ID是必要的。可以使用list_workitem_field_config查询template来确定模板",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_type": {
+          "description": "工作项类型",
+          "type": "string"
+        },
+        "fields": {
+          "description": "要创建的实例具体的字段",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field_value": {
+                "description": "### 不同的传入格式对应的字段类型\n- 模板ID【必传！！！！！】：template\n    - 举例：145405865\n    - 特殊说明：对于template，务必使用list_workitem_field_config，传入field_keys=template找到所有模板的枚举值。并匹配到相应的模板ID以进行传入。\n- 单个字面值：text、multi-pure-text、link、bool、number\n  - 举例：测试工作项\n- 单个userkey: user\n  - 举例：7509072868295085608\n- userkey数组：multi-user\n  - 举例：[\"7509072868295085608\",\"7509072868295085608\"]\n- 单个枚举项的ID值：select、radio、radio、tree-select\n  - 统一先使用获取字段配置工具得到枚举值\n{\n  \"option_id\": \"437794\", // 枚举值ID\n  \"option_name\": \"功能需求-主工作流程\" // 对应用户语义\n}\n  - 然后传入相应的ID即可: 437794\n- 支持新增选项的多选：multi-select\n  - 举例1：复用现有的选项值\n[\n    {\n        \"option_id\": \"111\"\n    },\n    {\n        \"option_id\": \"222\"\n    }\n]\n  - 举例2：新建并使用一个选项值。需要随机生成一个小写加下划线的8位option_id填入，比如：gtxfhratx\n[\n    {\n        \"option_name\": \"新建选项值\",\n        \"free_add\": true,\n        \"option_id\":\"gtxfhratx\"\n    }\n]\n- 关联工作项的ID：workitem_related_select、workitem_related_multi_select\n  - workitem_related_select类型举例：145405865\n  - workitem_related_multi_select举例：[145405865,145405866]。注意，数组中的元素必须是数字类型，不能是字符串类型。\n- markdown格式：multi-text\n- 毫秒时间戳，天精度，64位：date\n- 时间区间：开始时间和结束时间是按照时区的00点00分00秒的毫秒级时间戳\n - schedule\n   - 举例：\n  [1722182400000,1722355199999]\n - precise_date\n   - 举例：\n{\n    \"start_time\":1722182400000,\n    \"end_time\":1722355199999\n}\n- 角色：字段keyrole_owners的专有逻辑\n  - 举例：\n[\n    {\n        \"role\": \"Data\", //角色\n        \"owners\": [\n            \"7311891981507100700\"\n        ] //成员user_key列表\n    },\n    {\n        \"role\": \"Server\",\n        \"owners\": [\n            \"7311891981507100700\"\n        ]\n    }\n]",
+                "type": "string"
+              },
+              "field_key": {
+                "description": "字段key。请使用list_workitem_field_config做用户输入语义中涉及字段的精确匹配。如果匹配不到，再使用模糊匹配，当模糊匹配的结果有多个时，可以要求用户来确认具体是哪个字段。",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "project_key": {
+          "description": "工作项类型所属的空间projectKey或simpleName",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_type"
+      ]
+    }
+  },
+  {
+    "name": "get_chart_detail",
+    "description": "查看指定的图表id包含的详情",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查看的图表的所属空间，可以是空间key和空间的simple name",
+          "type": "string"
+        },
+        "chart_id": {
+          "description": "要查看的图表id",
+          "type": "string"
+        },
+        "url": {
+          "description": "要查看的图表id的url，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        }
+      },
+      "required": [
+        "chart_id"
+      ]
+    }
+  },
+  {
+    "name": "get_node_detail",
+    "description": "获取指定节点的关键信息，包括节点信息、子项信息、节点自定义字段信息",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间projectKey或simpleName，非必填",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "要查询的工作项id或者名称，单值",
+          "type": "string"
+        },
+        "node_id_list": {
+          "description": "节点ID列表，传空或者_all代表获取所有节点",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "field_key_list": {
+          "description": "节点字段key，传空或者_all代表获取节点下的所有字段",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "need_sub_task": {
+          "description": "是否需要节点子项（子任务）",
+          "type": "boolean"
+        },
+        "page_num": {
+          "description": "节点信息一次只支持查询20个。从第1页开始，按页返回。",
+          "type": "number"
+        },
+        "url": {
+          "description": "url信息，可以从链接里解析出project_key，work_item_type_key,work_item_id,视图ID等信息。并回填到相应的一级属性。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "get_resource_work_item_type_conf",
+    "description": "在指定的项目空间中，针对已启用资源库功能的特定工作项类型，获取其资源库配置详情，其中涵盖已配置的资源字段信息，如字段标识、字段类型、字段名称等，以及已配置的资源角色信息。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "空间标识，支持 projectKey/simpleName；失败时先调 search_project_info",
+          "type": "string"
+        },
+        "work_item_type_key": {
+          "description": "工作项类型 key 或名称（story/issue 等）；失败时先调 list_workitem_types",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_type_key"
+      ]
+    }
+  },
+  {
+    "name": "get_transitable_states",
+    "description": "查询状态流工作项（比如缺陷）当前可合法流转到的目标状态列表。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "user_key": {
+          "description": "要查询的 userKey",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "空间key",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "要查询的状态流工作项id",
+          "type": "string"
+        },
+        "work_item_type": {
+          "description": "要查询的工作项所属工作项类型",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_type",
+        "user_key",
+        "project_key",
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "get_transition_required",
+    "description": "获取指定节点/状态流转所需必填信息",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间 projectKey",
+          "type": "string"
+        },
+        "mode": {
+          "description": "默认查询所有必填项。传入unfinished仅查询未完成的必填项。",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "要查询的工作项实例ID",
+          "type": "string"
+        },
+        "state_key": {
+          "description": "节点流的node_key。或者状态流的state_key",
+          "type": "string"
+        },
+        "url": {
+          "description": "url信息，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_id",
+        "state_key"
+      ]
+    }
+  },
+  {
+    "name": "get_view_detail",
+    "description": "获取指定视图",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "page_num": {
+          "description": "分页查询页数起点",
+          "type": "number"
+        },
+        "url": {
+          "description": "url信息，可以从链接里解析出project_key，work_item_type_key,work_item_id,视图ID等信息。并回填到相应的一级属性。",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间projectKey或simpleName，非必填",
+          "type": "string"
+        },
+        "view_id": {
+          "description": "传入要查询的视图id，单值",
+          "type": "string"
+        },
+        "fields": {
+          "description": "要查询的filed_key或field_name，多值",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "view_id"
+      ]
+    }
+  },
+  {
+    "name": "get_workitem_brief",
+    "description": "按ID/名称查询工作项概况。不传fields时仅返回固定基础字段；如需完整自定义字段数据，先调list_workitem_field_config获取字段key列表后传入fields",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_id": {
+          "description": "要查询的工作项id",
+          "type": "string"
+        },
+        "fields": {
+          "description": "传入要查询的filed_key，多值",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "url": {
+          "description": "url信息，可以从链接里解析出project_key，work_item_type_key,work_item_id,视图ID等信息。并回填到相应的一级属性",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "要查询的空间projectKey或simpleName",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "get_workitem_field_meta",
+    "description": "获取创建工作项元信息",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间projectKey",
+          "type": "string"
+        },
+        "work_item_type": {
+          "description": "要创建的工作项类型",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key"
+      ]
+    }
+  },
+  {
+    "name": "get_workitem_man_hour_records",
+    "description": "获取工作项的工时登记记录列表。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间 projectKey",
+          "type": "string"
+        },
+        "work_item_type": {
+          "description": "要查询的工作项类型",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "要查询的工作项实例ID",
+          "type": "string"
+        },
+        "page_num": {
+          "description": "分页页码，每页大小默认为20",
+          "type": "number"
+        },
+        "url": {
+          "description": "url信息，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_type",
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "get_workitem_op_record",
+    "description": "获取指定空间下一个工作项实例的操作记录",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "op_record_module": {
+          "description": "操作记录模块。可选值：work_item_mod、node_mod、sub_task_mod、field_mod、role_and_user_mod、baseline_mod。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operation_type": {
+          "description": "操作动作类型。可选值：modify、create、delete、terminate、restore、complete、rollback、add、remove。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "url": {
+          "description": "url信息，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        },
+        "source_type": {
+          "description": "操作渠道类型，用于标识操作记录的来源渠道。可选值：auto、plugin。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "operator": {
+          "description": "操作者的值，用于筛选实例下对应操作者的操作记录：操作者类型为 user 时，使用用户的 user_key；操作者类型为 auto 时，使用自动化规则的 ID。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {
+          "description": "操作渠道值，用于标识操作记录的具体来源。当 source_type 为 auto 时，使用自动化规则的 ID；当 source_type 为 plugin 时，使用插件的 ID。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "end": {
+          "description": "结束时间，毫秒级时间戳，与 start 参数配合使用以限定查询时间范围，最长支持 7 天。",
+          "type": "number"
+        },
+        "operator_type": {
+          "description": "操作者类型，用于标识操作记录的触发来源。可选值：user、auto、system、calc_field、plugin、others。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "project_key": {
+          "description": "空间 ID（project_key），在飞书项目空间双击空间名称获取。",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "需要查询的工作项 ID 列表，最大值 50。",
+          "type": "string"
+        },
+        "start": {
+          "description": "开始时间，毫秒级时间戳，与 end 参数配合使用以限定查询时间范围，最长支持 7 天。",
+          "type": "number"
+        },
+        "start_from": {
+          "description": "分页参数，初次请求无需设置，下次请求使用上次请求返回的 start_from。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "list_charts",
+    "description": "查询得到该空间指定视图下的所有度量图表，图表分页返回，默认每页50个",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "page_size": {
+          "description": "分页的条数，默认为 50，最大限制为 200",
+          "type": "number"
+        },
+        "url": {
+          "description": "url信息，https://meego.feishu-boe.cn/ 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "要查询的视图所属的空间projectKey",
+          "type": "string"
+        },
+        "view_id": {
+          "description": "要查询的视图 ID",
+          "type": "string"
+        },
+        "page_num": {
+          "description": "查询的页码，默认为 1",
+          "type": "number"
+        }
+      },
+      "required": [
+        "view_id",
+        "project_key"
+      ]
+    }
+  },
+  {
+    "name": "list_deliverables",
+    "description": "查询交付物详情优先调用此工具，通过交付物工作项ID或名称，批量查询交付物的基本信息以及根工作项和来源工作项信息。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_ids": {
+          "description": "工作项 ID；若用户提供 URL 则自动解析；若提供名称则先调 get_workitem_brief拿到工作项 ID",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "project_key": {
+          "description": "空间标识，支持 projectKey/simpleName；失败时先调 search_project_info",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key"
+      ]
+    }
+  },
+  {
+    "name": "list_finished_info",
+    "description": "根据项目空间、评审实例和节点列表，批量查询单个评审实例的多个节点当前评审状态、结论及评审意见，用于集中查看评审结果。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_id": {
+          "description": "工作项 ID；若用户提供 URL 则自动解析；若提供名称则先调 get_workitem_brief。",
+          "type": "string"
+        },
+        "node_ids": {
+          "description": "要查询的节点 ID 或名称列表，多值；最多传入 10 个。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "project_key": {
+          "description": "空间标识，支持 projectKey/simpleName；失败时先调 search_project_info",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_id",
+        "node_ids"
+      ]
+    }
+  },
+  {
+    "name": "list_node_field_config",
+    "description": "查看空间的工作项类型的节点字段配置",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "work_item_type": {
+          "description": "目标节点的工作项类型",
+          "type": "string"
+        },
+        "query": {
+          "description": "搜索的关键字，进行模糊搜索，可以是字段name 和 字段key",
+          "type": "string"
+        },
+        "field_keys": {
+          "description": "字段key，当用户要求通过字段key做筛选的时候添加",
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "field_types": {
+          "description": "字段类型，当用户要求通过字段类型做筛选的时候添加，text、multi-pure-text、link、bool、number等",
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "url": {
+          "description": "url信息，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "目标节点的所属空间，可以是空间key和空间的simple name",
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "list_project_team",
+    "description": "查看空间下的团队列表，团队列表分页返回，默认每页 20 个",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的团队所属空间，可以是空间key和空间的simple name",
+          "type": "string"
+        },
+        "url": {
+          "description": "要工作项类型的url，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，与独立参数冲突时询问用户",
+          "type": "string"
+        },
+        "query": {
+          "description": "团队名称中检索的关键字",
+          "type": "string"
+        },
+        "page_token": {
+          "description": "分页 token，首页不传",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key"
+      ]
+    }
+  },
+  {
+    "name": "list_related_workitem",
+    "description": "查询某个关联工作项字段所关联的工作项实例简要信息(包含了 id、name、work_item_type_key、project_key)",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "relation_id": {
+          "description": "关联关系id。两个工作项之间的关联关系, 可以从 list_workitem_relations 工具中获取到",
+          "type": "string"
+        },
+        "page_num": {
+          "description": "分页页码, 从 1 开始, 默认值为 1",
+          "type": "number"
+        },
+        "page_size": {
+          "description": "每页返回的工作项数量, 最大值为 50",
+          "type": "number"
+        },
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间 projectKey, 注意不要和 url 上解析出的空间 simple_name，或者是空间名混淆",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "源工作项实例的工作项实例 id",
+          "type": "string"
+        },
+        "relation_field_key": {
+          "description": "关联关系字段key。两个工作项之间通过某个关联字段绑定, 填入该字段 key 或对接标识即可",
+          "type": "string"
+        },
+        "node_id": {
+          "description": "工作项的节点id,当用户要查询某个节点下关系的时候传入",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "list_schedule",
+    "description": "获取指定空间（project_key）下指定人员（user_key）在指定时间区间内的个人排期与工作量明细，支持多用户、多工作项类型聚合展示。应用场景：团队人力分析、排期评审、识别超载/空闲成员、评估迭代与项目整体容量。典型示例：如“统计本周张三、李四、王五每个人的排期工时，谁已超过 80% 容量”。与 search_by_mql 需要精确入参查询语句才能返回工作项列表不同，本工具可以精确查询指定用户在节点/子任务/工作项上的排期和估分数据。返回说明：返回 user_workload_list+total，其中每个用户包含基础信息、排期任务明细（含状态、节点、子任务时间等）及总估分、未排期任务数量等汇总字段。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "start_time": {
+          "description": "传入查询排期的时间范围（最大不超过3个月）开始时间,请严格按照以下格式输入：2006-01-01",
+          "type": "string"
+        },
+        "end_time": {
+          "description": "传入查询排期的时间范围结束时间（最大不超过3个月）,请严格按照以下格式输入：2006-01-01",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "传入要查询的工作项所属空间标识。支持直接输入空间的 projectKey、空间名称或 simple_name",
+          "type": "string"
+        },
+        "user_keys": {
+          "description": "传入要查询排期的用户的唯一标识，支持输入名称、邮箱、userkey，支持传入多个，最多支持20个",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "work_item_type_keys": {
+          "description": "要查询的个人任务的唯一标识，支持输入名称、系统标识或work_item_type_key，如story、需求、issue、缺陷、子任务、sub_task等。查询所有工作项类型时可以传入_all",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "project_key",
+        "user_keys",
+        "start_time",
+        "end_time"
+      ]
+    }
+  },
+  {
+    "name": "list_team_members",
+    "description": "查询团队信息和成员列表，成员列表分页返回，默认每页 20 个",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "page_token": {
+          "description": "分页token，首页不传；每页20条，返回含page_token时继续翻页直到无token为止",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间projectKey",
+          "type": "string"
+        },
+        "team_id": {
+          "description": "团队 ID，不支持按名称直接查询，须先调list_project_team拉取全量列表后按名称匹配取得",
+          "type": "string"
+        },
+        "query": {
+          "description": "团队成员中姓名检索的关键字",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "team_id"
+      ]
+    }
+  },
+  {
+    "name": "list_todo",
+    "description": "按当前用户与工作类型（action）查询其相关工作项列表，支持查询我的待办/已办。应用场景：个人待办盘点、周报/工时统计、查看最近处理的需求、任务、缺陷等。典型示例：如“帮我查一下本周我负责的还没完成的需求和任务”“列一下今天所有指派给我的待办工作项”。 与 search_by_mql 需要精确入参查询语句才能返回工作项列表不同，本工具可以精确查询当前用户的待办和已办，返回数据包括待办/已办事项名称、状态值、排期等。结果采用分页返回。每页固定返回 50 条数据，通过 page_num 指定要查询的页码。当用户要求“全部工作项”“完整列表”“不要漏掉任何一条”等语义时，AI需从 page_num = 1 开始依次递增调用本工具（1, 2, 3, ...），直到某一页返回的数量少于 50 条或不再有数据。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "page_num": {
+          "description": "要查询的页码，从 1 开始递增，每页50条。当需要完整结果时，AI应从第 1 页开始连续查询直到没有更多数据为止。",
+          "type": "number"
+        },
+        "action": {
+          "description": "查询类型。todo为待办，done为已办,overdue为预期，this_week为本周待办",
+          "type": "string"
+        },
+        "asset_key": {
+          "description": "工作区key,格式为Asset_,默认不需要传递。仅在接口报错，需要根据报错内容选择时才需要传递",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "page_num"
+      ]
+    }
+  },
+  {
+    "name": "list_workitem_comments",
+    "description": "查询工作项评论列表",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "page_num": {
+          "description": " 页码，默认 1",
+          "type": "number"
+        },
+        "start_time": {
+          "description": "开始时间，如果用户给的是年月日，就按照时区取00时00分00秒毫秒时间戳，如果详细到小时或者分钟，就按照时区取对应的时间开始的毫秒级时间戳",
+          "type": "number"
+        },
+        "end_time": {
+          "description": "结束时间，如果用户给的是年月日，就按照时区取00时00分00秒毫秒时间戳，如果详细到小时或者分钟，就按照时区取对应的时间开始的毫秒级时间戳",
+          "type": "number"
+        },
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间 projectKey",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": " 要查询的工作项id或者名称,单值",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id",
+        "project_key"
+      ]
+    }
+  },
+  {
+    "name": "list_workitem_field_config",
+    "description": "查询空间下某个工作项类型的字段配置，以用于后续的查询和更新。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的字段所属的空间key。优先传递空间key（格式举例：68667786328581219ae53bd5）。也支持传递simpleName(url上携带的，比如project_ipd)或者空间名（可读的中英文）",
+          "type": "string"
+        },
+        "work_item_type": {
+          "description": "要查询的工作项类型。优先传入类型key(格式举例：story,issue)，以及工作项类型名（需求、缺陷、项目、迭代等）",
+          "type": "string"
+        },
+        "field_types": {
+          "description": "字段类型key，可以将固定类型的几种字段给筛选出来。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "field_keys": {
+          "description": "字段key(field_xxx)或者字段名（举例：工作项名称）。会按照输入进行精确匹配，返回具体的字段列表。可以使用该字段来筛选具体的，用户想更新或者创建的字段信息。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "field_query": {
+          "description": "当不确定要查询的字段是什么时，可以使用该字段进行模糊查询，将会模糊匹配字段key和字段名。",
+          "type": "string"
+        },
+        "page_num": {
+          "description": "页数。每页50条。页码从1开始。",
+          "type": "number"
+        }
+      },
+      "required": [
+        "page_num",
+        "project_key",
+        "work_item_type"
+      ]
+    }
+  },
+  {
+    "name": "list_workitem_relations",
+    "description": "查询某个空间下的所有工作项关联关系",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间 project_key, 注意不要和 url 上解析出的空间 simple_name，或者是空间名混淆",
+          "type": "string"
+        },
+        "work_item_type": {
+          "description": "要筛选的工作项关系中主工作项类型key",
+          "type": "string"
+        },
+        "relation_work_item_type": {
+          "description": "要筛选的工作项关系中从工作项类型key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key"
+      ]
+    }
+  },
+  {
+    "name": "list_workitem_role_config",
+    "description": "查询空间下某个工作项类型的角色配置，以用于后续的查询和更新。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "role_keys": {
+          "description": "角色key(role_keys)或者角色名（举例：技术评审负责人）。会按照输入进行精确匹配，返回具体的字段列表。",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "role_query": {
+          "description": "当不确定要查询的角色是什么时，可以使用该字段进行模糊查询，将会模糊匹配角色key和角色名。",
+          "type": "string"
+        },
+        "page_num": {
+          "description": "页数。每页50条。页码从1开始。",
+          "type": "number"
+        },
+        "url": {
+          "description": "要添加评论的相关url信息，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "要查询的字段所属的空间key。优先传递空间key（格式举例：68667786328581219ae53bd5）。也支持传递simpleName(url上携带的，比如project_ipd)或者空间名（可读的中英文）",
+          "type": "string"
+        },
+        "work_item_type": {
+          "description": "要查询的工作项类型。优先传入类型key(格式举例：story,issue)，以及工作项类型名（需求、缺陷、项目、迭代等）",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_type",
+        "page_num"
+      ]
+    }
+  },
+  {
+    "name": "list_workitem_types",
+    "description": "获取空间下的所有工作项类型列表",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间projectKey",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key"
+      ]
+    }
+  },
+  {
+    "name": "search_by_mql",
+    "description": "使用MQL进行Meego数据的查询。\n1. **理解意图**：从用户请求中提取**空间**和**工作项类型**，缺失则追问。**必须通过正确断句和语法分析，确定用户实际要查询的目标工作项类型**，FROM 对应的是目标类型，而非描述中附带提及的其他类型。\n2. **路由判断**：\n   - 语义为查**字段** → 用 `list_workitem_field_config` 查询字段类型与结构，查不到直接报错，不继续。\n   - 语义涉及**角色** → 用 `list_workitem_role_config` 获取角色类型与结构。\n   - 语义涉及**控件、关系、节点信息**等 → 走MQL特殊语法（详见MQL入参说明）。\n   - 输入含\"关系/关联\"字样 → 必须使用MQL高级语法的关系查询方法。关系名以用户输入的为准，不能模糊和猜测，禁止乱用list_workitem_relations查询关系做模糊匹配。\n3. **精简select**：按需查询，字段不宜过多；优先用字段key（如 `name` 而非 `任务名称`）。\n4. **翻页取全量**：用户要全量数据时，必须使用翻页参数逐页获取。\n5. **依报错精准微调**：根据报错定位出错位置，**只调整出错的部分**——SELECT字段报错则只改SELECT中的对应字段，WHERE字段报错则只改WHERE中的对应字段，**不要一次性大面积改动**。如 `attribute key or value error` 表示字段不存在，需核实对应字段名。\n6. **空结果≠错误**：查询无报错即成功，数据为空属正常，不要反复调整MQL",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "description": "sessionID，传sessionID时，不会解析MQL，直接根据sessionID查询之前的数据,该信息会在search_by_mql接口返回体里返回。主要用于分页查询。 ",
+          "type": "string"
+        },
+        "mql": {
+          "description": "## 基础语法\n\n```sql\nSELECT `字段1`, `字段2` FROM `空间名`.`工作项类型名` WHERE `条件字段` = '值' [ORDER BY `字段` [ASC|DESC]] [LIMIT [offset,] row_count]\n```\n\n**重要规则：**\n\n- **不支持 `SELECT *`，必须显式指定字段**\n- **所有字段名必须用反引号包裹**：SELECT 和 WHERE 中的字段都要写 `` `字段名` ``，如 ``SELECT `工作项ID`, `名称` FROM `空间`.`需求` WHERE `状态` = '进行中'``\n\n## 字段类型映射\n\n| MQL类型 | 工作项字段类型 |\n|---------|---------------|\n| long | work_item_id, auto_number |\n| double | 其他number类型 |\n| bool | bool |\n| varchar | text, multi-pure-text, select, tree-select, radio, user, link, signal, workitem_related_select |\n| array(varchar) | multi-select, tree-multi-select, multi-user, link_cloud_doc, workitem_related_multi_select, multi-file |\n| array(struct) | compound_field |\n| datetime | schedule, precise_date |\n| date | date |\n\n**特殊字段：**\n\n- 日期区间字段：使用 `__字段名_开始时间`、`__字段名_结束时间` 查询\n- 角色字段：使用 `__角色名` 查询，如 `__RD`、`__QA`\n\n**特殊表名（资源库/资源实例查询）：**\n当语义包含查询某工作项类型下的**资源库**实例时，表名格式为 `'_工作项类型key_resource'`。\n- 示例：查询「需求」类型（key=story）下的资源库 → `FROM `空间名`.`_story_resource``\n\n## 关键词映射（用户提到以下关键词时优先匹配）\n\n### 控件关键词 → 函数映射\n\n**重要：当用户输入中包含【控件】二字时，务必对照下表选择正确函数。**\n\n| 用户关键词 | 使用函数/语法 | 说明 |\n|-----------|-------------|------|\n| 参与人员、全部参与人员、全部人员 | `all_participate_persons()` | 当前工作项的全部参与人 |\n| 参与人员、当前参与人 | `participate_persons()` | 当前工作项的参与人 |\n| 流程节点、所有节点 | `all_nodes_name()` | 获取所有节点名称 |\n| 进行中节点 | `in_progress_nodes_name()` | 获取当前进行中的节点 |\n| 节点排期、节点时间、节点估分、所属节点信息 | `get_node_attribute('__ALL\\|__BELONGING','属性名')` | 获取节点具体属性，所属节点用`__BELONGING`。节点排期查开始/结束：`get_node_attribute('节点名','__排期_开始时间')`、`get_node_attribute('节点名','__排期_结束时间')` 节点时间查开始/完成：`get_node_attribute('节点名','__节点时间_开始时间')`、`get_node_attribute('节点名','__节点时间_完成时间')` |\n| 节点延期标识 | `risk_label()` | 获取节点延期状态标识 |\n| 关联工作项信息 | `relation_field_chain('关联字段1','关联字段2','关联字段3')` | 关联工作项链式查询（最多3跳），支持workitem_related_select和workitem_related_multi_select字段类型 |\n| 子任务父工作项 | `relation_field_chain('__父工作项')` | 子任务特有：获取父工作项 |\n| 关系 | `relation('关系名')` | 通过关系名称获取，关系名称从list_workitem_relations获取 |\n| 来源 | `linked_work_item()` | **子任务特有**，获取来源控件 |\n| 父工作项 | `parent_work_item(relation('关系名'))` | 获取父工作项 |\n| 状态时间窗口 | `status_time('状态名') between 'a' and 'b'` | 状态时间在区间内，如`status_time('开始') between '2025-03-10' and '2025-04-10'` |\n| 状态累计进行时间 | `status_time('__结束状态__结束时间') - status_time('__开始状态__开始时间')` | 计算状态累计持续时间 |\n\n### 操作符关键词 → 语法映射\n\n| 用户关键词 | MQL语法 | 示例 |\n|-----------|---------|------|\n| 存在选项属于 | `any_match(field, x -\u003e x in ('a','b'))` | 多选字段中存在任一选项 |\n| 全部选项均不属于 | `none_match(field, x -\u003e x in ('a','b'))` | 多选字段中不存在任何选项 |\n| 包含 | `array_contains(field, 'a','b')` | 数组包含指定值 |\n| 不包含 | `not array_contains(field, 'a','b')` | 数组不包含指定值 |\n| 等于 | `field = 'value'` | 等于指定值 |\n| 不等于 | `field != 'value'` | 不等于指定值 |\n| 为空 | `field is null` | 字段为空 |\n| 不为空 | `field is not null` | 字段不为空 |\n| 在区间 | `field between 'a' and 'b'` | 字段在区间内（日期/数字） |\n\n### 关系语境关键词 → 函数映射\n\n| 用户关键词 | 使用函数 | 说明 |\n|-----------|---------|------|\n| 每一个 | `all_relation_match(关系, x -\u003e expr)` | 所有关系对端都满足条件 |\n| 存在一个、存在一组 | `any_relation_match(关系, x -\u003e expr)` | 任意关系对端满足条件 |\n| 每一个不满足 | `none_relation_match(关系, x -\u003e expr)` | 所有关系对端都不满足条件 |\n| 存在一个不满足、存在一组不满足 | `not all_relation_match(关系, x -\u003e expr)` | 并非所有都满足（即至少有一个不满足） |\n\n## 函数详解\n\n### 数组函数\n\n- `array_contains(field, val1, val2...)` - 数组包含任意值\n- `array_intersect(field, arr)` - 数组有交集\n- `array_cardinality(field)` - 数组长度\n- `any_match(field, x -\u003e expr)` - 任意元素满足\n- `all_match(field, x -\u003e expr)` - 所有元素满足\n- `none_match(field, x -\u003e expr)` - 无元素满足\n- `array_filter(field, x -\u003e expr)` - 过滤数组\n\n### 时间函数\n\n- `RELATIVE_DATETIME_EQ/GT/LT/LE(field, 'today|tomorrow|yesterday|current_week|next_week|last_week|current_month|next_month|last_month|future|past')`\n- `RELATIVE_DATETIME_BETWEEN(field, 'past|future', 'Nd')` - N天内/前\n\n### 人员函数\n\n- `current_login_user()` - 当前登录用户\n- `team(true, '团队名')` - 团队成员（true含管理者）\n- `participate_persons()` - 当前工作项参与人\n- `all_participate_persons()` - 全部参与人员、全部人员\n\n### 节点函数\n\n- `all_nodes_name()` - 所有节点名称\n- `in_progress_nodes_name()` - 进行中节点\n- `risk_label()` - 节点延期标识（如 `[\"延期/开始\",\"今日到期/结束\"]`）\n- `get_node_attribute('节点名|__ALL|__BELONGING', '属性名')` - 获取节点属性\n  - 属性：排期、估分、节点时间、节点完成结论、节点完成意见、负责人、当前负责人、状态\n  - `__ALL`：全部节点，`__BELONGING`：所属节点（**当前工作项所在的节点**）\n  - **关键：语义中涉及\"所属节点\"时，必须使用`__BELONGING`**\n\n### 关系函数\n\n- `relation('关系名')` - 获取关系\n- `parent_work_item(relation('关系名'))` - 父工作项ID\n- `relation_field_chain('关系1','关系2','关系3')` - 关系链（最多3跳），正常一级关系使用 `relation_field_chain('关系1')` 或者 `relation_field_chain('字段1')` 即可。**注意：子任务的父工作项要写作 `'__父工作项'`（双下划线前缀）**\n- `association()` - 跨空间关联实例ID\n- `linked_work_item()` - 子任务的父工作项ID\n\n### 关系判断函数\n\n- `any_relation_match(关系, x -\u003e expr)` - 存在一个/存在一组满足\n- `all_relation_match(关系, x -\u003e expr)` - 每一个都满足\n- `none_relation_match(关系, x -\u003e expr)` - 每一个都不满足\n- `not all_relation_match(关系, x -\u003e expr)` - 存在一个不满足/存在一组不满足\n\n**嵌套筛选（关系对端属性的进一步筛选）：**\n对关系对端的属性进行进一步筛选时，使用关系函数（如`relation_field_chain`）获取关系后，外层必须嵌套关系判断函数（`all_relation_match`/`any_relation_match`/`none_relation_match`）。\n\n- 示例1：子任务其父工作项的当前负责人全部不属于小李\n- 正确写法：`all_relation_match(relation_field_chain('__父工作项'), x -\u003e none_match(x.`` `当前负责人\u003ctarget:all\u003e` `` , y -\u003e y in ('小李')))`\n\n- 示例2（多级关系）：孙工作项（通过两级关系）的\"开始\"节点负责人中包含小李\n- 场景：需求-二级工作项-子任务三级结构，查询子任务，要求子任务关联的任务所关联的需求的\"开始\"节点负责人包含小李\n- 正确写法：`all_relation_match(relation_field_chain('需求-二级工作项关联','二级工作项-子任务关联'), x -\u003e any_match(get_node_attribute('开始','负责人'), y -\u003e y in ('小李')))`\n- 说明：`relation_field_chain('需求-二级工作项关联','二级工作项-子任务关联')` 表示通过两级工作项关系，支持最多3跳\n\n**关系参数三种形式：**\n\n1. **关联字段**：`` `字段key` `` - 如 ``any_relation_match(`关联需求`, x -\u003e x.`` `优先级` `` = 'P0')``\n2. **relation函数**：`relation('关系名')` - 如 `any_relation_match(relation('父-子'), x -\u003e x.`` `名称` `` like '%需求%')`\n3. **relation_field_chain函数**：`relation_field_chain('关系1','关系2')` - 如 `any_relation_match(relation_field_chain('需求-缺陷','缺陷-版本'), x -\u003e x.`` `状态` `` = '已上线')`\n\n**多级关系关系名处理规则（重要）：**\n对于多级关系中的关系名，**默认按照用户的输入直接进行查询**。如果找不到匹配的关系，可让用户二次输入确认。\n\n**特别注意：子任务的父工作项**\n- 子任务的父工作项关系名固定为 `'__父工作项'`（双下划线前缀），不是 `'父工作项'`\n- 多级关系示例：`relation_field_chain('__父工作项', '需求关联软件')` 表示 子任务→父工作项→软件\n\n**常见报错处理：**\n- 报错：`object[父工作项-关联XXX]: relation chain err:relationNode not found, label:父工作项`\n- 原因：父工作项写法错误，缺少双下划线前缀\n- **修复：仅将 `'父工作项'` 改为 `'__父工作项'`**，其他部分（如 `'关联XXX'`）保持不变\n- 修正后：`relation_field_chain('__父工作项','关联XXX')`\n\n**处理原则：**\n- 不主动猜测或转换用户输入的关系名\n- 如果查询失败，提示用户确认关系名称是否正确，或请用户提供准确的关系名\n\n**跨空间/多端字段引用：** ``x.`字段名\u003ctarget:空间key::工作项类型key\u003e` `` 或 `` x.`字段名\u003ctarget:all\u003e` ``（通用字段）\n\n**关联工作项信息通用字段：** 查询关联工作项信息时，以下属性必须使用 `\u003ctarget:all\u003e`\n\n- 通用属性：标题、创建人、创建时间、业务线、优先级、当前负责人、所属工作项、所属空间、工作项ID、工作项类型、状态\n- 示例：``any_relation_match(relation_field_chain('__父工作项'), x -\u003e x.`` `创建时间\u003ctarget:all\u003e` `` \u003e= '2026-03-24')``\n\n### 状态函数\n\n- `status_time('状态名')` - 进入状态的时间\n- `status_time('__状态名__开始时间')` - 状态开始时间\n- `status_time('__状态名__结束时间')` - 状态结束时间\n\n## 查询示例\n\n### 节点查询\n\n```sql\n-- 流程节点包含开始\nWHERE array_contains(all_nodes_name(), '开始')\n-- 进行中节点不为空\nWHERE in_progress_nodes_name() is not null\n-- 开始节点已延期且结束节点今日到期\nWHERE risk_label() = '[\"延期/开始\",\"今日到期/结束\"]'\n-- 开始节点排期在过去30天内\nWHERE RELATIVE_DATETIME_BETWEEN(get_node_attribute('开始','__排期_开始时间'), 'past','30d')\n-- 全部节点估分大于10\nWHERE get_node_attribute('__ALL','估分') \u003e 10\n-- 调研节点负责人等于小李（等于语法也适用于节点属性）\nWHERE get_node_attribute('调研','负责人') = '小李'\n-- 所属节点当前负责人（必须使用__BELONGING）\nWHERE any_match(get_node_attribute('__BELONGING','当前负责人'), x -\u003e x in ('张三'))\n-- 所属节点状态为进行中\nWHERE any_match(get_node_attribute('__BELONGING','状态'), x -\u003e x in ('进行中'))\n-- 所属节点排期在未来7天内\nWHERE RELATIVE_DATETIME_BETWEEN(get_node_attribute('__BELONGING','排期'), 'future','7d')\n```\n\n### 关系查询\n\n```sql\n-- 单选关联字段等于某值\nWHERE `关联字段` = '实例名'\n-- 单选关联字段满足条件（对端优先级=P0）\nWHERE any_relation_match(`关联字段`, x -\u003e x.`优先级` = 'P0')\n-- 多选关联字段存在满足条件的\nWHERE any_relation_match(`多选关联字段`, x -\u003e x.`优先级\u003ctarget:all\u003e` = 'P0')\n-- 多选关联字段全部满足条件\nWHERE all_relation_match(`多选关联字段`, x -\u003e x.`描述\u003ctarget:空间key::类型key\u003e` like '%123%')\n-- 关系链查询（3跳）\nWHERE any_relation_match(relation_field_chain('关系1','关系2','关系3'), x -\u003e x.`名称` like '%xxx%')\n-- 多级关系：子任务的父工作项关联的软件（__父工作项是子任务特有字段）\nWHERE any_relation_match(relation_field_chain('__父工作项','需求关联软件'), x -\u003e x.`名称` = '为空测试')\n-- 多级关系结合节点属性：二级关联工作项的开始节点负责人包含小李（以子任务举例，__父工作项要指明target才可以串起来关系）\nWHERE all_relation_match(relation_field_chain('__父工作项\u003ctarget:681b228d7401707f87414afa::story\u003e','关联字段2'), x -\u003e any_match(get_node_attribute('开始','负责人'), y -\u003e y in ('小李')))\n-- 多级关系结合通用字段：二级关联工作项的优先级为P0\nWHERE any_relation_match(relation_field_chain('__父工作项','关联字段2'), x -\u003e x.`优先级` = 'P0')\n-- 关联工作项的节点属性：XX关联的实例，其AA节点负责人不包含小李\nWHERE any_relation_match(`XX关联`, x -\u003e not array_contains(get_node_attribute('AA', '负责人'), '小李'))\n```\n\n### 人员查询\n\n```sql\n-- 负责人包含当前用户\nWHERE array_contains(`负责人`, current_login_user())\n-- 处理人属于某团队\nWHERE any_match(`处理人`, x -\u003e x in (team(true, '开放平台团队')))\n-- 开始节点负责人包含某人\nWHERE array_contains(get_node_attribute('开始','负责人'), '李应凡')\n-- 全部参与人员/全部人员 等于小王、小李（数组也可用等于语法）\nWHERE all_participate_persons() = '[\"小王\", \"小李\"]'\n-- 全部参与人员/全部人员 不等于小王、小李\nWHERE all_participate_persons() != '[\"小王\", \"小李\"]'\n```\n\n### 时间查询\n\n```sql\n-- 创建时间在未来3天内\nWHERE RELATIVE_DATETIME_BETWEEN(`创建时间`, 'future', '3d')\n-- 创建时间大于今天\nWHERE RELATIVE_DATETIME_GT(`创建时间`, 'today')\n-- 状态时间在区间内\nWHERE status_time('开始') between '2025-03-10' and '2025-04-10'\n```\n\n## 标识符规则\n\n- 字段名、表名用反引号包裹：`` `字段名` ``，**带target修饰符时必须包裹整个字段**：`` `name\u003ctarget:all\u003e` ``，不要写成 `x.name\u003ctarget:all\u003e`\n- 字符串用单引号：`'value'`\n- 数组用JSON格式：`'[\"a\",\"b\"]'`\n- 枚举值优先用label（如`'通过'`），不要用id\n- **如需用id/key匹配选项枚举值或userkey：写成`\u003cid:xxx\u003e`格式**\n  - 枚举值示例：``x.`` `priority` `` = '\u003cid:option_2\u003e'``\n  - userkey示例：`x = '\u003cid:7290442683267497985\u003e'`\n",
+          "type": "string"
+        },
+        "group_pagination_list": {
+          "description": "分页信息，目前只支持传入一组分页数据。首次查询时可不传。默认反馈结果的第一页(最多50条数据)。",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "group_id": {
+                "description": "分组ID,会在接口返回体里返回，路径是list.group_infos.group_id",
+                "type": "string"
+              },
+              "page_num": {
+                "description": "页码，从1开始，每页50条。可以根据返回体的list.count里知道当前一共匹配了多少条数据",
+                "type": "number"
+              }
+            }
+          }
+        },
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间projectKey或simpleName或空间名",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key"
+      ]
+    }
+  },
+  {
+    "name": "search_project_info",
+    "description": "查询空间基础信息",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间projectKey、simpleName 或空间名称",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key"
+      ]
+    }
+  },
+  {
+    "name": "search_user_info",
+    "description": "批量查询用户基础信息。用于将姓名/邮箱转换为create_workitem/update_field等工具所需的userkey。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "user_keys": {
+          "description": "要查询的 userKey、Email 或名字，限制 20 个。userkey支持传入current_login_user()，代表当前人（我）",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "project_key": {
+          "description": "空间Key",
+          "type": "string"
+        }
+      },
+      "required": [
+        "user_keys"
+      ]
+    }
+  },
+  {
+    "name": "search_view_by_title",
+    "description": "通过视图名称模糊查询视图ID，最多限制查询 20 个",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询视图所属的空间 projectKey",
+          "type": "string"
+        },
+        "view_scope": {
+          "description": "要查询视图所属的工作项类型, 需求为 stroyView, 缺陷为 issueView, 版本为 version, 其他自定义的工作项类型则为对应的工作项类型key",
+          "type": "string"
+        },
+        "key_word": {
+          "description": "要查询视图的名字关键字",
+          "type": "string"
+        },
+        "url": {
+          "description": "url信息，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key_word",
+        "project_key",
+        "view_scope"
+      ]
+    }
+  },
+  {
+    "name": "transition_node",
+    "description": "操作节点完成流转/回滚",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "操作类型。流转：confirm 或 回滚：rollback",
+          "type": "string"
+        },
+        "rollback_reason": {
+          "description": "回滚原因。action等于rollback时需填写",
+          "type": "string"
+        },
+        "node_ids": {
+          "description": "传入要查询的节点名称或节点id列表",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "project_key": {
+          "description": "空间Key",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "工作项id",
+          "type": "string"
+        },
+        "node_id": {
+          "description": "节点ID",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "transition_state",
+    "description": "流转状态流工作项的状态。比如缺陷。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "transition_id": {
+          "description": "要操作的状态流转ID。可以通过get_transitable_states来获取",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "空间Key",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "工作项id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "update_field",
+    "description": "修改指定实例的字段值，支持一次修改多个字段的值，修改成功后，会获得修改结果对应的详情页url",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要查询的工作项类型所属的空间projectKey",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "要修改的工作项id或者名称",
+          "type": "string"
+        },
+        "role_operate": {
+          "description": "角色操作",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "user_keys": {
+                "description": "userkey。当用户输入只有用户名的时候，先使用search_user_info来换取userkey。",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "op": {
+                "description": "操作类型。add为添加、remove为删除",
+                "type": "string"
+              },
+              "role_key": {
+                "description": "角色key。可以使用list_workitem_role_config工具获取角色信息，务必精确匹配。如果有模糊的情况，可以询问用户进行确认。",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "fields": {
+          "description": "要更新的实例具体的字段",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field_key": {
+                "description": "字段key",
+                "type": "string"
+              },
+              "field_value": {
+                "description": "### 不同的传入格式对应的字段类型\n- 模板ID：template\n    - 举例：145405865\n    - 特殊说明：传入模版ID的语义是要切换模版。对于template，务必使用list_workitem_field_config，传入field_keys=template找到所有模板的枚举值。并匹配到相应的模板ID以进行传入。\n- 单个字面值：text、multi-pure-text、link、bool、number\n  - 举例：测试工作项\n- 单个userkey: user\n  - 举例：7509072868295085608\n- userkey数组：multi-user\n  - 举例：[\"7509072868295085608\",\"7509072868295085608\"]\n- 单个枚举项的ID值：select、radio、radio、tree-select\n  - 统一先使用获取字段配置工具得到枚举值\n{\n  \"option_id\": \"437794\", // 枚举值ID\n  \"option_name\": \"功能需求-主工作流程\" // 对应用户语义\n}\n  - 然后传入相应的ID即可: 437794\n- 支持新增选项的多选：multi-select\n  - 举例1：复用现有的选项值\n    \n[\n    {\n        \"option_id\": \"111\"\n    },\n    {\n        \"option_id\": \"222\"\n    }\n]\n  - 举例2：新建并使用一个选项值。需要随机生成一个小写加下划线的8位option_id填入，比如：gtxfhratx\n[\n    {\n        \"option_name\": \"新建选项值\",\n        \"free_add\": true,\n        \"option_id\":\"gtxfhratx\"\n    }\n]\n- 关联工作项的ID：workitem_related_select、workitem_related_multi_select\n  - workitem_related_select类型举例：145405865\n  - workitem_related_multi_select举例：[145405865,145405866]。注意，数组中的元素必须是数字类型，不能是字符串类型。\n- markdown格式：multi-text\n- 毫秒时间戳，天精度，64位：date\n- 时间区间：schedule\n  - 举例：传入一个数组，数组中的元素为2个，均为毫秒时间戳。第一个元素为开始时间，第二个元素为结束时间。\n  [1722182400000,1722355199999]\n- 时间区间：precise_date\n  - 举例：\n{\n    \"start_time\": 1722182400000, \n    \"end_time\": 1722355199999 \n}\n- 角色：字段key为role_owners的专有逻辑。只支持创建时传入。更新时请使用role_operate来操作。\n ",
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "update_finished_info",
+    "description": "在指定项目空间内，更新一个评审实例中多个节点的评审结论和评审意见。修改评审结论时可先用list_conclusion_option工具查询可用的评审结论选项",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "opinion": {
+          "description": "要写入的评审意见，传入空字符串表示删除，不传则不做处理。",
+          "type": "string"
+        },
+        "finished_conclusion_option_key": {
+          "description": "要写入的评审结论 label key，通过 list_conclusion_option 工具获取，如果查询空就提示没开启评审结论；传入空字符串表示删除，不传则不做处理。",
+          "type": "string"
+        },
+        "operation_type": {
+          "description": "操作更新类型，用于指定当前操作是针对节点评审信息还是个人评论。支持的取值：`node` 表示操作整体评审信息（仅节点负责人可操作）；`owner` 表示操作个人评审信息，当 reset 为 false 时该字段为必填。",
+          "type": "string"
+        },
+        "reset": {
+          "description": "是否置空当前评审信息，不填写默认为 false。只有流转人可执行置空操作；当设置为 true 时，允许 opinion、finished_conclusion_option_key 和 operation_type 字段为空。",
+          "type": "boolean"
+        },
+        "project_key": {
+          "description": "传空间标识，支持 projectKey/simpleName；失败时先调 search_project_info",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "工作项 ID；若用户提供 URL 则自动解析；若提供名称则先调 get_workitem_brief。",
+          "type": "string"
+        },
+        "node_id": {
+          "description": "要更新评审信息的节点ID，如果是名称先通过search_by_mql获取节点id。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_key",
+        "work_item_id",
+        "node_id"
+      ]
+    }
+  },
+  {
+    "name": "update_fixed_view",
+    "description": "在指定空间和工作项类型下更新一个固定视图的工作项列表，更新成功后会返回是否成功的标识",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_key": {
+          "description": "要创建视图的所属的空间projectKey",
+          "type": "string"
+        },
+        "view_id": {
+          "description": "固定视图ID",
+          "type": "string"
+        },
+        "work_item_type": {
+          "description": "工作项类型key",
+          "type": "string"
+        },
+        "add_work_item_ids": {
+          "description": "需要添加入视图的工作项ID列表，上限200个，不能和删除同时进行操作",
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "remove_work_item_ids": {
+          "description": "需要对视图进行删除的工作项ID列表，上限200个，不能和新增同时进行操作",
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "required": [
+        "project_key",
+        "view_id",
+        "work_item_type"
+      ]
+    }
+  },
+  {
+    "name": "update_node",
+    "description": "修改节点,节点排期，差异化排期，节点负责人不要同时修改，可以进行多次调用更新",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "schedules": {
+          "description": "按人差异化排期，详细到每个人的排期信息，如果用户要求清空这个人，则owners传user key，estimate_end_date 和 estimate_start_date 传 null ，例如：{}，如果不需要变更，不传此字段",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "planned_construction_period": {
+                "description": "计划工期",
+                "type": "number"
+              },
+              "points": {
+                "description": "估分,排期所消耗的时间天，如果清空估分，直接传 null",
+                "type": "number"
+              },
+              "estimate_start_date": {
+                "description": "排期开始时间，按照时区转换为00时00分00秒的毫秒级时间戳",
+                "type": "number"
+              },
+              "estimate_end_date": {
+                "description": "排期结束时间，按照时区转换为00时00分00秒的毫秒级时间戳",
+                "type": "number"
+              },
+              "owners": {
+                "description": "节点排期负责人，用户的user key",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "is_auto": {
+                "description": "传入排期未传入估分时，自动补充估分；不传IsAuto，默认未true",
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "fields": {
+          "description": "要更新的实例具体的字段",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field_key": {
+                "description": "字段key",
+                "type": "string"
+              },
+              "field_value": {
+                "description": "### 不同的传入格式对应的字段类型\n- 模板ID：template\n    - 举例：145405865\n    - 特殊说明：传入模版ID的语义是要切换模版。对于template，务必使用list_workitem_field_config，传入field_keys=template找到所有模板的枚举值。并匹配到相应的模板ID以进行传入。\n- 单个字面值：text、multi-pure-text、link、bool、number\n  - 举例：测试工作项\n- 单个userkey: user\n  - 举例：7509072868295085608\n- userkey数组：multi-user\n  - 举例：[\"7509072868295085608\",\"7509072868295085608\"]\n- 单个枚举项的ID值：select、radio、radio、tree-select\n  - 统一先使用获取字段配置工具得到枚举值\n{\n  \"option_id\": \"437794\", // 枚举值ID\n  \"option_name\": \"功能需求-主工作流程\" // 对应用户语义\n}\n  - 然后传入相应的ID即可: 437794\n- 支持新增选项的多选：multi-select\n  - 举例1：复用现有的选项值\n    \n[\n    {\n        \"option_id\": \"111\"\n    },\n    {\n        \"option_id\": \"222\"\n    }\n]\n  - 举例2：新建并使用一个选项值。需要随机生成一个小写加下划线的8位option_id填入，比如：gtxfhratx\n[\n    {\n        \"option_name\": \"新建选项值\",\n        \"free_add\": true,\n        \"option_id\":\"gtxfhratx\"\n    }\n]\n- 关联工作项的ID：workitem_related_select、workitem_related_multi_select\n  - workitem_related_select类型举例：145405865\n  - workitem_related_multi_select举例：[145405865,145405866]。注意，数组中的元素必须是数字类型，不能是字符串类型。\n- markdown格式：multi-text\n- 毫秒时间戳，天精度，64位：date\n- 时间区间：schedule\n  - 举例：传入一个数组，数组中的元素为2个，均为毫秒时间戳。第一个元素为开始时间，第二个元素为结束时间。\n  [1722182400000,1722355199999]\n- 时间区间：precise_date\n  - 举例：\n{\n    \"start_time\": 1722182400000, \n    \"end_time\": 1722355199999 \n}\n- 角色：字段key为role_owners的专有逻辑。只支持创建时传入。更新时请使用role_operate来操作。\n ",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "url": {
+          "description": "url信息，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "要修改的节点所属的空间projectKey",
+          "type": "string"
+        },
+        "work_item_id": {
+          "description": "要修改的节点所属的工作项id或者名称",
+          "type": "string"
+        },
+        "node_id": {
+          "description": "要修改的state_key，所属工作项对应的模板state_key",
+          "type": "string"
+        },
+        "node_owners": {
+          "description": "节点负责人，用户的user key",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "node_schedule": {
+          "description": "节点排期, 如果用户要求清空，则直接传空对象，例如：{}，如果不需要变更，不传此字段",
+          "type": "object",
+          "properties": {
+            "points": {
+              "description": "估分,排期所消耗的时间天,如果清空估分，直接传null",
+              "type": "number"
+            },
+            "estimate_start_date": {
+              "description": "排期开始时间，按照时区转换为00时00分00秒的毫秒级时间戳",
+              "type": "number"
+            },
+            "estimate_end_date": {
+              "description": "排期结束时间，按照时区转换为00时00分00秒的毫秒级时间戳",
+              "type": "number"
+            },
+            "owners": {
+              "description": "节点排期负责人，用户的user key",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "is_auto": {
+              "description": "传入排期未传入估分时，自动补充估分；不传IsAuto，默认未true",
+              "type": "boolean"
+            },
+            "planned_construction_period": {
+              "description": "计划工期",
+              "type": "number"
+            }
+          }
+        }
+      },
+      "required": [
+        "work_item_id"
+      ]
+    }
+  },
+  {
+    "name": "update_node_subtask",
+    "description": "修改任务，包括创建，修改，完成，回滚。如果有字段值设置，可以通过查询对应空间sub_task工作项类型的字段配置，从字段配置中，根据字段名称去匹配对应的字段key,如果有字段名匹配的，优先使用fields",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "role_assignee": {
+          "description": "子任务角色负责人列表,当该节点负责人分配方式为与角色联动时使用，每个角色负责人对象包含角色 ID 和对应的负责人 userKey数组",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "角色名称",
+                "type": "string"
+              },
+              "role": {
+                "description": "角色id",
+                "type": "string"
+              },
+              "owners": {
+                "description": "负责人 user_key 数组",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "deliverable": {
+          "description": "交付物，只有子任务配置了交付物才能更新",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field_value": {
+                "description": "### 不同的传入格式对应的字段类型\n- 模板ID：template\n    - 举例：145405865\n    - 特殊说明：传入模版ID的语义是要切换模版。对于template，务必使用list_workitem_field_config，传入field_keys=template找到所有模板的枚举值。并匹配到相应的模板ID以进行传入。\n- 单个字面值：text、multi-pure-text、link、bool、number\n  - 举例：测试工作项\n- 单个userkey: user\n  - 举例：7509072868295085608\n- userkey数组：multi-user\n  - 举例：[\"7509072868295085608\",\"7509072868295085608\"]\n- 单个枚举项的ID值：select、radio、radio、tree-select\n  - 统一先使用获取字段配置工具得到枚举值\n{\n  \"option_id\": \"437794\", // 枚举值ID\n  \"option_name\": \"功能需求-主工作流程\" // 对应用户语义\n}\n  - 然后传入相应的ID即可: 437794\n- 支持新增选项的多选：multi-select\n  - 举例1：复用现有的选项值\n    \n[\n    {\n        \"option_id\": \"111\"\n    },\n    {\n        \"option_id\": \"222\"\n    }\n]\n  - 举例2：新建并使用一个选项值。需要随机生成一个小写加下划线的8位option_id填入，比如：gtxfhratx\n[\n    {\n        \"option_name\": \"新建选项值\",\n        \"free_add\": true,\n        \"option_id\":\"gtxfhratx\"\n    }\n]\n- 关联工作项的ID：workitem_related_select、workitem_related_multi_select\n  - workitem_related_select类型举例：145405865\n  - workitem_related_multi_select举例：[145405865,145405866]。注意，数组中的元素必须是数字类型，不能是字符串类型。\n- markdown格式：multi-text\n- 毫秒时间戳，天精度，64位：date\n- 时间区间：schedule\n  - 举例：传入一个数组，数组中的元素为2个，均为毫秒时间戳。第一个元素为开始时间，第二个元素为结束时间。\n  [1722182400000,1722355199999]\n- 时间区间：precise_date\n  - 举例：\n{\n    \"start_time\": 1722182400000, \n    \"end_time\": 1722355199999 \n}\n- 角色：字段key为role_owners的专有逻辑。只支持创建时传入。更新时请使用role_operate来操作。\n ",
+                "type": "string"
+              },
+              "field_key": {
+                "description": "字段key",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "work_item_id": {
+          "description": "创建子任务的时候，是所属工作项id，修改，完成，回滚的时候应该是子任务本身：子任务id",
+          "type": "string"
+        },
+        "assignee": {
+          "description": "子任务负责人 user_key 数组，当节点负责人分配方式不为“与角色联动”时使用",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "task_id": {
+          "description": "子任务id,创建的时候生成，在修改，完成，回滚的时候需要传入",
+          "type": "string"
+        },
+        "action": {
+          "description": "针对子任务要进行的操作：创建子任务：create, 修改子任务 ：update, 完成子任务：confirm, 回滚子任务：rollback",
+          "type": "string"
+        },
+        "schedule": {
+          "description": "子任务的排期信息",
+          "type": "object",
+          "properties": {
+            "estimate_start_date": {
+              "description": "排期开始时间，根据时区转换为00时00分00秒的毫秒级时间戳",
+              "type": "number"
+            },
+            "estimate_end_date": {
+              "description": "排期结束时间，根据时区转换为00时00分00秒的毫秒级时间戳",
+              "type": "number"
+            },
+            "is_auto": {
+              "description": "传入排期未传入估分时，自动补充估分；不传IsAuto，默认未true",
+              "type": "boolean"
+            },
+            "points": {
+              "description": "估分,排期所消耗的时间天",
+              "type": "number"
+            }
+          }
+        },
+        "node_id": {
+          "description": "要修改的子任务所属的模板节点id，创建时候是所属工作项的模板节点id",
+          "type": "string"
+        },
+        "fields": {
+          "description": "要更新的实例具体的字段",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field_key": {
+                "description": "字段key，当创建子任务的时候，name必填",
+                "type": "string"
+              },
+              "field_value": {
+                "description": "### 不同的传入格式对应的字段类型\n- 模板ID：template\n    - 举例：145405865\n    - 特殊说明：传入模版ID的语义是要切换模版。对于template，务必使用list_workitem_field_config，传入field_keys=template找到所有模板的枚举值。并匹配到相应的模板ID以进行传入。\n- 单个字面值：text、multi-pure-text、link、bool、number\n  - 举例：测试工作项\n- 单个userkey: user\n  - 举例：7509072868295085608\n- userkey数组：multi-user\n  - 举例：[\"7509072868295085608\",\"7509072868295085608\"]\n- 单个枚举项的ID值：select、radio、radio、tree-select\n  - 统一先使用获取字段配置工具得到枚举值\n{\n  \"option_id\": \"437794\", // 枚举值ID\n  \"option_name\": \"功能需求-主工作流程\" // 对应用户语义\n}\n  - 然后传入相应的ID即可: 437794\n- 支持新增选项的多选：multi-select\n  - 举例1：复用现有的选项值\n    \n[\n    {\n        \"option_id\": \"111\"\n    },\n    {\n        \"option_id\": \"222\"\n    }\n]\n  - 举例2：新建并使用一个选项值。需要随机生成一个小写加下划线的8位option_id填入，比如：gtxfhratx\n[\n    {\n        \"option_name\": \"新建选项值\",\n        \"free_add\": true,\n        \"option_id\":\"gtxfhratx\"\n    }\n]\n- 关联工作项的ID：workitem_related_select、workitem_related_multi_select\n  - workitem_related_select类型举例：145405865\n  - workitem_related_multi_select举例：[145405865,145405866]。注意，数组中的元素必须是数字类型，不能是字符串类型。\n- markdown格式：multi-text\n- 毫秒时间戳，天精度，64位：date\n- 时间区间：schedule\n  - 举例：传入一个数组，数组中的元素为2个，均为毫秒时间戳。第一个元素为开始时间，第二个元素为结束时间。\n  [1722182400000,1722355199999]\n- 时间区间：precise_date\n  - 举例：\n{\n    \"start_time\": 1722182400000, \n    \"end_time\": 1722355199999 \n}\n- 角色：字段key为role_owners的专有逻辑。只支持创建时传入。更新时请使用role_operate来操作。\n ",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "url": {
+          "description": "url信息，https:// 开头的链接，从中可以提取出project_key,work_item_type, work_item_id和view_id信息，从url中解析这些信息的时候会被使用，从而忽略原来入参中的对应字段",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "要修改的子任务所属的空间projectKey",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node_id"
+      ]
+    }
+  }
+]

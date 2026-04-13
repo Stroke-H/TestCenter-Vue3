@@ -10,6 +10,7 @@ interface Project {
   project_name: string
   short_code: string
   wiki_url?: string
+  workspace?: string
   created_at?: string
 }
 
@@ -23,7 +24,8 @@ const form = ref<Project>({
   project_code: '',
   project_name: '',
   short_code: '',
-  wiki_url: ''
+  wiki_url: '',
+  workspace: ''
 })
 
 const fetchProjects = async () => {
@@ -40,7 +42,7 @@ const fetchProjects = async () => {
 
 const handleAdd = () => {
   dialogType.value = 'add'
-  form.value = { id: '', project_code: '', project_name: '', short_code: '', wiki_url: '' }
+  form.value = { id: '', project_code: '', project_name: '', short_code: '', wiki_url: '', workspace: '' }
   dialogVisible.value = true
 }
 
@@ -107,6 +109,7 @@ onMounted(fetchProjects)
       <el-table-column prop="project_code" label="项目代码" width="150" />
       <el-table-column prop="project_name" label="项目名称" min-width="150" />
       <el-table-column prop="short_code" label="项目缩写" width="100" />
+      <el-table-column prop="workspace" label="所属空间" width="120" />
       <el-table-column prop="wiki_url" label="项目文档关联" min-width="200">
         <template #default="{ row }">
           <el-link v-if="row.wiki_url" type="primary" :href="row.wiki_url" target="_blank" style="font-size: 13px;">
@@ -140,6 +143,14 @@ onMounted(fetchProjects)
       </el-form-item>
       <el-form-item label="项目缩写">
         <el-input v-model="form.short_code" placeholder="例如: swa, swi" />
+      </el-form-item>
+      <el-form-item label="所属空间">
+        <el-select v-model="form.workspace" placeholder="请选择所属空间" clearable style="width: 100%;">
+          <el-option label="海外短剧" value="海外短剧" />
+          <el-option label="免费短剧" value="免费短剧" />
+          <el-option label="iOS订阅产品" value="iOS订阅产品" />
+          <el-option label="番茄短剧" value="番茄短剧" />
+        </el-select>
       </el-form-item>
       <el-form-item label="项目文档">
         <el-input v-model="form.wiki_url" placeholder="请输入飞书文档或 Wiki 链接" />

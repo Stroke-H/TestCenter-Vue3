@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
 import { User, Lock, ArrowRight } from '@element-plus/icons-vue'
+import request from '@/api/request'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -23,23 +24,20 @@ const handleLogin = async () => {
 
   loading.value = true
   try {
-    const res = await fetch('http://localhost:8080/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(loginForm)
+    const data: any = await request.post('/auth/login', loginForm)
+    
+    authStore.setToken(data.token)
+    authStore.setUser(data.user)
+    ElMessage.success('登录成功')
+    router.push('/dashboard')
+  } catch (err: any) {
+    const errorMsg = err.customMessage || '登录流程出现异常'
+    ElMessage({
+      message: errorMsg,
+      type: 'error',
+      duration: 5000,
+      showClose: true
     })
-
-    const data = await res.json()
-    if (res.ok) {
-      authStore.setToken(data.token)
-      authStore.setUser(data.user)
-      ElMessage.success('登录成功')
-      router.push('/dashboard')
-    } else {
-      ElMessage.error(data.error || '登录失败')
-    }
-  } catch (err) {
-    ElMessage.error('网络连接失败')
   } finally {
     loading.value = false
   }

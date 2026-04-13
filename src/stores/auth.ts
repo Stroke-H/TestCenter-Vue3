@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import request from '@/api/request'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref(localStorage.getItem('token') || '')
@@ -25,16 +26,12 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchMe() {
     if (!token.value) return
     try {
-      const res = await fetch('http://localhost:8080/api/auth/me', {
+      const res: any = await request.get('/auth/me', {
         headers: {
           'Authorization': token.value
         }
       })
-      if (res.ok) {
-        user.value = await res.json()
-      } else {
-        logout()
-      }
+      user.value = res
     } catch (err) {
       console.error('Failed to fetch user info', err)
       logout()

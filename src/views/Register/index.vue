@@ -3,6 +3,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock, ArrowRight, CircleCheck } from '@element-plus/icons-vue'
+import request from '@/api/request'
 
 const router = useRouter()
 
@@ -27,25 +28,22 @@ const handleRegister = async () => {
 
   loading.value = true
   try {
-    const res = await fetch('http://localhost:8080/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username: registerForm.username,
-        nickname: registerForm.nickname,
-        password: registerForm.password
-      })
+    const data: any = await request.post('/auth/register', {
+      username: registerForm.username,
+      nickname: registerForm.nickname,
+      password: registerForm.password
     })
 
-    const data = await res.json()
-    if (res.ok) {
-      ElMessage.success('注册成功，请登录')
-      router.push('/login')
-    } else {
-      ElMessage.error(data.error || '注册失败')
-    }
-  } catch (err) {
-    ElMessage.error('网络连接失败')
+    ElMessage.success('注册成功，请登录')
+    router.push('/login')
+  } catch (err: any) {
+    const errorMsg = err.customMessage || '注册过程出现异常'
+    ElMessage({
+      message: errorMsg,
+      type: 'error',
+      duration: 5000,
+      showClose: true
+    })
   } finally {
     loading.value = false
   }

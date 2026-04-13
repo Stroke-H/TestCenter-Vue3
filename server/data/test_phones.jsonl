@@ -1,0 +1,20 @@
+{"id":"2","device_name":"iPhone15-粉色","os":"iOS","model":"26","allowed_app":"A1106,A648","created_at":"2025-12-16T15:46:13"}
+{"id":"3","device_name":"iPhone13 - 粉色","os":"iOS","model":"18.5.1","allowed_app":"A1106,A648","created_at":"2025-12-16T15:46:13"}
+{"id":"4","device_name":"iPhone13 - 黑色","os":"iOS","model":"18.4","allowed_app":"A1106,A648,A1168","created_at":"2025-12-16T15:46:13"}
+{"id":"5","device_name":"三星 F52 珍珠白","os":"Android","model":"13","allowed_app":"A1096,A1100,A648,A864","created_at":"2025-12-16T15:46:13"}
+{"id":"6","device_name":"Google pixel5 靛色","os":"Android","model":"14","allowed_app":"A1096,A1100,A644,A732,A750,A840,A864","created_at":"2025-12-16T15:46:13"}
+{"id":"7","device_name":"VIVO S9 灰色","os":"Android","model":"12","allowed_app":"A1096,A1100,A644,A732,A750,A840,A864","created_at":"2025-12-16T15:46:13"}
+{"id":"8","device_name":"红米 Note14 青绿色","os":"Android","model":"14","allowed_app":"A1096,A1100,A1157,A644,A732,A750,A840,A864","created_at":"2025-12-16T15:46:13"}
+{"id":"9","device_name":"Google pixel4a 黑色","os":"Android","model":"14","allowed_app":"A1096,A1100,A1157,A644,A732,A750,A840,A864","created_at":"2025-12-16T15:46:13"}
+{"id":"10","device_name":"Google pixel2 白色","os":"Android","model":"9","allowed_app":"A1096,A1100,A644,A732,A750,A840,A864","created_at":"2025-12-16T15:46:13"}
+{"id":"11","device_name":"Google pixel7 黑色","os":"Android","model":"14","allowed_app":"A1096,A1100,A1157,A644,A732,A750,A840,A864","created_at":"2025-12-16T15:46:13"}
+{"id":"12","device_name":"iPhone 11 金色","os":"iOS","model":"18.4.1","allowed_app":"A1092,A746,A757","created_at":"2025-12-16T15:46:13"}
+{"id":"13","device_name":"iPhone 13 远峰蓝","os":"iOS","model":"18.4","allowed_app":"A1092,A746,A757","created_at":"2025-12-16T15:46:13"}
+{"id":"14","device_name":"iPhone 15 绿色","os":"iOS","model":"18.5","allowed_app":"A1092,A746,A757","created_at":"2025-12-16T15:46:13"}
+{"id":"15","device_name":"iPhone 13 远峰蓝","os":"iOS","model":"16.1.2","allowed_app":"A1148","created_at":"2025-12-16T15:46:13"}
+{"id":"16","device_name":"iPhone 15 黑色","os":"iOS","model":"18.5","allowed_app":"A1148","created_at":"2025-12-16T15:46:13"}
+{"id":"17","device_name":"iPhone 14 白色","os":"iOS","model":"18.5","allowed_app":"A1148","created_at":"2025-12-16T15:46:13"}
+{"id":"18","device_name":"三星Galaxy A5S 加拿大","os":"Android","model":"15","allowed_app":"A1147","created_at":"2025-12-16T15:46:13"}
+{"id":"20","device_name":"iPhone 15 128G 粉色","os":"iOS","model":"26","allowed_app":"A1153","created_at":"2025-12-16T15:46:13"}
+{"id":"26","device_name":"iPhone8","os":"iOS","model":"16.7.1","allowed_app":"A1106,A648","created_at":"2025-12-16T15:56:01"}
+{"id":"27","device_name":"iphone 15pro 256GB","os":"iOS","model":"26.2.1","allowed_app":"A1092,A920","created_at":"2026-02-13T14:34:25"}

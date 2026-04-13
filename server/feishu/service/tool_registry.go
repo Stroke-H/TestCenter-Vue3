@@ -316,7 +316,7 @@ func init() {
 					Description: "测试的需求/故事链接列表",
 				},
 			},
-			Required: []string{"project_code", "period"},
+			Required: []string{"project_code"},
 		},
 		Execute: func(ctx context.Context, chatID string, senderID string, argsJSON string) (string, error) {
 			var args struct {
@@ -361,7 +361,9 @@ func init() {
 			// 3. Date Formatting
 			year := time.Now().Year()
 			formattedPeriod := args.Period
-			if strings.Contains(args.Period, "-") {
+			if formattedPeriod == "" {
+				formattedPeriod = time.Now().Format("2006-01-02")
+			} else if strings.Contains(args.Period, "-") {
 				parts := strings.Split(args.Period, "-")
 				if len(parts) == 2 {
 					formatDate := func(s string) string {
@@ -375,8 +377,9 @@ func init() {
 				}
 			}
 
-			// 4. Test Environment (Filter by OS suffix)
-			envStr := "正式服务器"
+			// 4. Test Environment & Devices
+			testEnv := "正式服务器"
+			testDevices := ""
 			devices, _ := services.ConfigServiceInstance.GetDevicesByProjectCode(projectActualCode)
 
 			// Detect target OS from project name suffix
@@ -396,7 +399,7 @@ func init() {
 					}
 				}
 				if len(names) > 0 {
-					envStr = strings.Join(names, "/") + "/正式服务器"
+					testDevices = strings.Join(names, "/")
 				}
 			}
 
@@ -436,18 +439,24 @@ func init() {
 				formattedStories += link + "\n"
 			}
 
+			devicesLine := ""
+			if testDevices != "" {
+				devicesLine = fmt.Sprintf("测试设备：%s\n", testDevices)
+			}
+
 			report := fmt.Sprintf("%s项目验收报告\n\n"+
 				"项目名称：%s\n"+
 				"版本号：%s\n"+
 				"测试负责人：%s\n"+
 				"测试时间：%s\n"+
 				"测试环境：%s\n"+
+				"%s"+
 				"本次测试覆盖率： 100%%\n\n"+
 				"测试结论：当前版本Pass！\n"+
 				"正式版本缺陷修复验证情况：\n"+
 				"本次预提审版本缺陷提交情况：\n%s%s"+
 				"版本更新测试需求点：\n%s",
-				projectActualCode, projectName, displayVersion, testOwner, formattedPeriod, envStr, formattedUnfixed, formattedFixed, formattedStories)
+				projectActualCode, projectName, displayVersion, testOwner, formattedPeriod, testEnv, devicesLine, formattedUnfixed, formattedFixed, formattedStories)
 
 			operatorName := testOwner
 			operatorID := senderID
@@ -468,7 +477,8 @@ func init() {
 					TestOwner:           testOwner,
 					Reporter:            testOwner,
 					TestTime:            formattedPeriod,
-					TestEnv:             envStr,
+					TestEnv:             testEnv,
+					TestDevices:         testDevices,
 					TestConclusion:      "Pass",
 					BugFixStatus:        formattedFixed,
 					BugSubmissionStatus: formattedUnfixed,
@@ -560,7 +570,7 @@ func init() {
 				ID:        fmt.Sprintf("OP_%d", time.Now().UnixNano()),
 				ToolName:  "generate_acceptance_report",
 				Project:   projectActualCode,
-				Env:       envStr,
+				Env:       testEnv,
 				UserID:    operatorID,
 				UserName:  operatorName,
 				Status:    "success",
@@ -586,7 +596,7 @@ func init() {
 				ProjectCode:     projectActualCode,
 				Version:         displayVersion,
 				Period:          formattedPeriod,
-				Environment:     envStr,
+				Environment:     testEnv,
 				BugLinksFixed:   args.BugFixed,
 				BugLinksUnfixed: args.BugUnfixed,
 				StoryLinks:      args.StoryLinks,
@@ -594,6 +604,119 @@ func init() {
 				IsReport:        true,
 			})
 			return string(outJSON), nil
+		},
+	})
+
+	RegisterTool(ToolDef{
+		Name:        "get_project_info",
+		Description: "查询 TestCenter 的内部项目字典。当你获取到用户输入的项目代号（如 swi, swa）时，使用此工具查找该项目的全名、所属业务线、所属飞书空间及其在飞书中的 project_key。返回结果中会包含可以直接使用的 MQL 搜索语句，你必须直接用它们去调用 search_by_mql。",
+		Parameters: &jsonschema.Definition{
+			Type: jsonschema.Object,
+			Properties: map[string]jsonschema.Definition{
+				"project_code": {
+					Type:        jsonschema.String,
+					Description: "项目代号/缩写，如 'swi', 'swa'",
+				},
+				"version": {
+					Type:        jsonschema.String,
+					Description: "目标版本号，如 '2.60.0'",
+				},
+			},
+			Required: []string{"project_code", "version"},
+		},
+		Execute: func(ctx context.Context, chatID string, senderID string, argsJSON string) (string, error) {
+			var args struct {
+				ProjectCode string `json:"project_code"`
+				Version     string `json:"version"`
+			}
+			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+				return "", err
+			}
+			
+			project, err := services.ConfigServiceInstance.GetProjectBySubCode(args.ProjectCode)
+			if err != nil || project == nil {
+				return fmt.Sprintf("❌ 未找到项目代号 '%s'。请提示用户补充详细信息或到平台上配置项目空间。", args.ProjectCode), nil
+			}
+
+			if project.Workspace == "" {
+				return fmt.Sprintf("⚠️ 找到项目 '%s'，但其【所属空间】为空。请立刻对用户说：当前项目没有绑定所属空间，请在平台系统设置中补充验收报告需要的对应空间信息。缺少空间信息时，你需要向用户索要以下信息来手动生成报告：测试周期、已修复缺陷链接、未修复缺陷链接、需求链接。", project.ProjectName), nil
+			}
+
+			// URL Mappings
+			projectKeyMap := map[string]string{
+				"海外短剧": "shortwave",
+				"免费短剧": "freedrama",
+				"iOS订阅产品": "ios_sub",
+				"番茄短剧": "tomato",
+			}
+
+			projectKey := projectKeyMap[project.Workspace]
+			if projectKey == "" {
+				projectKey = "unknown"
+			}
+
+			// Auto-extract business line and platform from project name
+			// e.g. "ShortsWave - iOS" -> businessLine="ShortsWave", platform="iOS"
+			businessLine := ""
+			platform := ""
+			nameParts := strings.SplitN(project.ProjectName, " - ", 2)
+			if len(nameParts) == 2 {
+				businessLine = strings.TrimSpace(nameParts[0])
+				platform = strings.TrimSpace(nameParts[1])
+			}
+
+			version := args.Version
+
+			// Platform-specific MQL mappings
+			storyPlatformFilter := ""
+			storyCategoryFilter := ""
+			bugPlatformFilter := ""
+			if strings.EqualFold(platform, "iOS") {
+				storyPlatformFilter = "field_e4ca95 = \"iOS\""
+				storyCategoryFilter = "field_b980a4 = \"iOS端需求\""
+				bugPlatformFilter = "field_f7ef16 = \"IOS\""
+			} else if strings.EqualFold(platform, "Android") {
+				storyPlatformFilter = "field_e4ca95 = \"Android\""
+				storyCategoryFilter = "field_b980a4 = \"安卓端需求\""
+				bugPlatformFilter = "field_f7ef16 = \"Android\""
+			}
+
+			// Build exact working MQL statements based on correct schema
+			// Story table: story
+			// Bug table for this project: 63329b6c980d67099b12fd73
+			storyMQL := fmt.Sprintf("SELECT work_item_id, name, work_item_status FROM `%s`.`story` WHERE business = \"%s\"", projectKey, businessLine)
+			bugMQL := fmt.Sprintf("SELECT work_item_id, name, work_item_status FROM `%s`.`63329b6c980d67099b12fd73` WHERE business = \"%s\"", projectKey, businessLine)
+
+			if storyPlatformFilter != "" {
+				storyMQL += " AND " + storyPlatformFilter
+			}
+			if storyCategoryFilter != "" {
+				storyMQL += " AND " + storyCategoryFilter
+			}
+			if bugPlatformFilter != "" {
+				bugMQL += " AND " + bugPlatformFilter
+			}
+
+			return fmt.Sprintf("✅ 找到项目信息：\n"+
+				"项目全名：%s\n"+
+				"所属空间：%s\n"+
+				"飞书Project_Key：%s\n"+
+				"业务线：%s\n"+
+				"平台：%s\n\n"+
+				"【核心查询指令 ★★★ 必须严格执行 ★★★】：\n"+
+				"1. 获取需求：请调用 search_by_mql，参数 mql 为：%s 并且请你自行在后面加上版本过滤条件（例如：AND 规划版本 LIKE \"%%%s%%\"）。\n"+
+				"2. 获取缺陷：请调用 search_by_mql，参数 mql 为：%s 并且请你自行在后面加上版本过滤条件（例如：AND 解决版本 LIKE \"%%%s%%\"）。\n"+
+				"3. 【禁止归纳总结】：拿到 search_by_mql 的结果后，直接转换为链接提交给验收报告工具。禁止自行总结需求内容或省略链接！\n"+
+				"4. 【绝对不能丢弃数据】：该业务线下的所有子业务线（如：商业变现、用户体验等）都属于 %s，请不要因为业务线名称不完全相等就擅自丢弃查询到的需求/缺陷！！\n"+
+				"5. 获取到记录后，请将其对应转换为以下链接格式提交到验收报告中：\n"+
+				"   需求链接：https://project.feishu.cn/%s/story/detail/{ID}\n"+
+				"   缺陷链接：https://project.feishu.cn/%s/bug/detail/{ID}\n",
+				project.ProjectName, project.Workspace, projectKey,
+				businessLine, platform,
+				storyMQL, version,
+				bugMQL, version,
+				businessLine,
+				projectKey, projectKey), nil
 		},
 	})
 

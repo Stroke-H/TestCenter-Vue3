@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"testcenter-server/feishu/model"
+
+	"github.com/sashabaranov/go-openai/jsonschema"
 )
 
 type MCPRequest struct {

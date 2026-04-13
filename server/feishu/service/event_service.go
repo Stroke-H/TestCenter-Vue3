@@ -197,7 +197,38 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 			cleanContent := stripAllMentions(stdMsg)
 
 			go func() {
+				// Add a "THUMBSUP" reaction to act as a "Processing..." indicator
+				var reactionId *string
+				cli := client.GetClient()
+				if cli != nil {
+					reactionReq := larkim.NewCreateMessageReactionReqBuilder().
+						MessageId(stdMsg.MsgID).
+						Body(larkim.NewCreateMessageReactionReqBodyBuilder().
+							ReactionType(larkim.NewEmojiBuilder().EmojiType("OnIt").Build()).
+							Build()).
+						Build()
+					resp, err := cli.Im.MessageReaction.Create(context.Background(), reactionReq)
+					if err != nil {
+						log.Printf("[Feishu Reaction] Error adding reaction: %v", err)
+					} else if !resp.Success() {
+						log.Printf("[Feishu Reaction] Failed: Code=%d, Msg=%s", resp.Code, resp.Msg)
+					} else {
+						log.Printf("[Feishu Reaction] Successfully added processing indicator")
+						if resp.Data != nil && resp.Data.ReactionId != nil {
+							reactionId = resp.Data.ReactionId
+						}
+					}
+				}
+				
 				aiResponse := ProcessChat(ctx, stdMsg.ChatID, stdMsg.SenderID, cleanContent)
+				
+				if cli != nil && reactionId != nil {
+					cli.Im.MessageReaction.Delete(context.Background(), larkim.NewDeleteMessageReactionReqBuilder().
+						MessageId(stdMsg.MsgID).
+						ReactionId(*reactionId).
+						Build())
+				}
+
 				replyText(ctx, stdMsg.MsgID, aiResponse)
 			}()
 		}

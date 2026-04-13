@@ -199,9 +199,7 @@ func callDeepSeek(ctx context.Context, senderID string, session *SessionContext,
 		Messages:    messages,
 		Temperature: 0.1,
 	}
-	if !bypassConstraints {
-		req.Tools = GetAvailableTools()
-	}
+	req.Tools = GetAvailableTools()
 
 	var resp openai.ChatCompletionResponse
 	var err error
@@ -213,6 +211,45 @@ func callDeepSeek(ctx context.Context, senderID string, session *SessionContext,
 			break
 		}
 		log.Printf("[Bot Brain] API Error on attempt %d: %v", i+1, err)
+
+		// On 400 errors (broken history), clear session and rebuild with just the last user message
+		if strings.Contains(err.Error(), "400") && strings.Contains(err.Error(), "tool") {
+			log.Printf("[Bot Brain] Detected corrupted history (orphaned tool messages). Resetting session.")
+			// Find the last user message
+			lastUserMsg := ""
+			for j := len(session.History) - 1; j >= 0; j-- {
+				if session.History[j].Role == openai.ChatMessageRoleUser {
+					lastUserMsg = session.History[j].Content
+					break
+				}
+			}
+			// Reset the session history
+			session.History = []openai.ChatCompletionMessage{
+				{Role: openai.ChatMessageRoleSystem, Content: GetSystemPrompt()},
+			}
+			if lastUserMsg != "" {
+				session.AppendMessage(openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleUser,
+					Content: lastUserMsg,
+				})
+			}
+			// Rebuild request with cleaned history
+			history = normalizeMessagesForDeepSeek(session.History)
+			messages = make([]openai.ChatCompletionMessage, 0, len(history)+2)
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: systemContext,
+			})
+			messages = append(messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: activeSystemPrompt,
+			})
+			messages = append(messages, history...)
+			req.Messages = messages
+			time.Sleep(time.Second)
+			continue
+		}
+
 		if !strings.Contains(err.Error(), "EOF") && !strings.Contains(err.Error(), "timeout") && !strings.Contains(err.Error(), "connection reset") {
 			break
 		}
@@ -231,61 +268,96 @@ func callDeepSeek(ctx context.Context, senderID string, session *SessionContext,
 
 	// Check if tool call requested
 	if len(msg.ToolCalls) > 0 {
-		toolCall := msg.ToolCalls[0] // handle single tool call for now
-		toolDef, exists := Registry[toolCall.Function.Name]
-		if !exists {
-			return fmt.Sprintf("AI 请求了一个不存在的系统工具: %s", toolCall.Function.Name)
+		// First pass: look for any tool that requires confirmation
+		for _, toolCall := range msg.ToolCalls {
+			toolDef, exists := Registry[toolCall.Function.Name]
+			if exists && toolDef.NeedConfirm {
+				// We currently only support confirming one tool at a time logic-wise
+				session.State = StateWaitConfirm
+				// Make a copy to avoid pointer scope issues
+				tc := toolCall 
+				session.PendingTool = &tc
+
+				prompt := toolDef.ConfirmPrompt
+				if toolDef.BuildConfirmMsg != nil {
+					if dynPrompt, err := toolDef.BuildConfirmMsg(ctx, toolCall.Function.Arguments); err == nil {
+						prompt = dynPrompt
+					} else {
+						prompt = fmt.Sprintf("⚠️ [操作预览失败] %v\n您可以回复【是】继续强行执行，或回复【否】中止操作。", err)
+					}
+				} else if prompt != "" {
+					prompt = fmt.Sprintf(prompt, toolCall.Function.Arguments)
+				}
+				return prompt
+			}
 		}
 
-		if toolDef.NeedConfirm {
-			// Put session in Wait Confirm state
-			session.State = StateWaitConfirm
-			session.PendingTool = &toolCall
-
-			prompt := toolDef.ConfirmPrompt
-			if toolDef.BuildConfirmMsg != nil {
-				if dynPrompt, err := toolDef.BuildConfirmMsg(ctx, toolCall.Function.Arguments); err == nil {
-					prompt = dynPrompt
+		// Execute all tools if none need confirmation
+		for _, toolCall := range msg.ToolCalls {
+			toolDef, exists := Registry[toolCall.Function.Name]
+			result := ""
+			if !exists {
+				result = fmt.Sprintf("AI 请求了一个不存在的系统工具: %s", toolCall.Function.Name)
+			} else {
+				res, err := toolDef.Execute(ctx, session.ChatID, senderID, toolCall.Function.Arguments)
+				if err != nil {
+					result = fmt.Sprintf("执行失败: %v", err)
 				} else {
-					prompt = fmt.Sprintf("⚠️ [操作预览失败] %v\n您可以回复【是】继续强行执行，或回复【否】中止操作。", err)
+					result = res
 				}
-			} else if prompt != "" {
-				prompt = fmt.Sprintf(prompt, toolCall.Function.Arguments)
 			}
-			return prompt
-		} else {
-			// Execute immediately
-			result, err := toolDef.Execute(ctx, session.ChatID, senderID, toolCall.Function.Arguments)
-			if err != nil {
-				result = fmt.Sprintf("执行失败: %v", err)
-			}
+
 			session.AppendMessage(openai.ChatCompletionMessage{
 				Role:       openai.ChatMessageRoleTool,
 				Content:    result,
 				Name:       toolCall.Function.Name,
 				ToolCallID: toolCall.ID,
 			})
-			// Recursive call to get the final text response
-			return callDeepSeek(ctx, senderID, session, false)
 		}
+		
+		// Recursive call to get the final text response after ALL tool results are appended
+		return callDeepSeek(ctx, senderID, session, false)
 	}
 
 	// Normal text reply
 	return msg.Content
 }
 
+// normalizeMessagesForDeepSeek sanitizes the message history to ensure it is valid:
+// 1. Ensures assistant messages always have non-empty content.
+// 2. Ensures tool messages always have non-empty content.
+// 3. Removes orphaned tool messages (tool messages without a preceding assistant message with matching tool_calls).
 func normalizeMessagesForDeepSeek(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
 	normalized := make([]openai.ChatCompletionMessage, 0, len(messages))
+
+	// Build a set of valid tool_call IDs from assistant messages
+	validToolCallIDs := make(map[string]bool)
+
 	for _, msg := range messages {
 		fixed := msg
-		if fixed.Role == openai.ChatMessageRoleAssistant && fixed.Content == "" {
-			// DeepSeek's compatibility layer is stricter than OpenAI here and requires assistant content to exist.
-			fixed.Content = " "
+
+		if fixed.Role == openai.ChatMessageRoleAssistant {
+			if fixed.Content == "" {
+				fixed.Content = " "
+			}
+			// Track all tool_call IDs this assistant message declares
+			for _, tc := range fixed.ToolCalls {
+				validToolCallIDs[tc.ID] = true
+			}
+			normalized = append(normalized, fixed)
+		} else if fixed.Role == openai.ChatMessageRoleTool {
+			if fixed.Content == "" {
+				fixed.Content = " "
+			}
+			// Only include this tool message if its ToolCallID is valid
+			if fixed.ToolCallID != "" && validToolCallIDs[fixed.ToolCallID] {
+				normalized = append(normalized, fixed)
+			} else {
+				log.Printf("[Bot Brain] Dropping orphaned tool message (ID=%s, Name=%s)", fixed.ToolCallID, fixed.Name)
+			}
+		} else {
+			normalized = append(normalized, fixed)
 		}
-		if fixed.Role == openai.ChatMessageRoleTool && fixed.Content == "" {
-			fixed.Content = " "
-		}
-		normalized = append(normalized, fixed)
 	}
 	return normalized
 }

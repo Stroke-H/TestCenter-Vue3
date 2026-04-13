@@ -32,25 +32,43 @@ service.interceptors.response.use(
     return response.data
   },
   (error) => {
-    const { response } = error
+    const { response, code, message } = error
+    let errorMsg = '网络或服务器异常'
+
     if (response) {
       // HTTP 状态码错误处理
       switch (response.status) {
         case 401:
-          console.error('[Auth] 未授权，请重新登录')
+          errorMsg = '未授权，请检查登录凭证或重新登录'
           break
         case 403:
-          console.error('[Auth] 权限不足')
+          errorMsg = '拒绝访问：权限不足'
+          break
+        case 404:
+          errorMsg = '请求地址错误 (404)'
           break
         case 500:
-          console.error('[Server] 服务器内部错误')
+          errorMsg = '后端服务器运行报错 (500)'
+          break
+        case 502:
+        case 503:
+          errorMsg = '服务器正在启动中或网关连接失败 (502/503)'
           break
         default:
-          console.error(`[HTTP ${response.status}]`, response.data?.message || '请求失败')
+          errorMsg = response.data?.error || response.data?.message || `请求失败 (${response.status})`
       }
+    } else if (code === 'ECONNABORTED' || message.includes('timeout')) {
+      errorMsg = '服务器响应超时，请确认后端 8080 端口是否正常开启'
+    } else if (message.includes('Network Error')) {
+      errorMsg = '无法连接到服务器，可能原因：\n1. 后端服务尚未启动\n2. 网络连接不通\n3. 域名解析错误'
     } else {
-      console.error('[Network] 网络异常，请检查连接')
+      errorMsg = message || '发生了未知的网络错误'
     }
+
+    // 将具体的错误信息挂载到 error 对象上，方便 UI 侧精准显示
+    error.customMessage = errorMsg
+    console.error('[Request Error]', { code, message, response, errorMsg })
+    
     return Promise.reject(error)
   }
 )
