@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, markRaw } from 'vue'
 import { useRouter } from 'vue-router'
-import { Plus, Filter, Calendar, User, Collection, View, Download, Delete, Files } from '@element-plus/icons-vue'
+import { Plus, Filter, Calendar, User, Collection, Download, Delete, Files } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import dayjs from 'dayjs'

@@ -2,10 +2,10 @@ package services
 
 import (
 	"net/http"
- 
- 	"testcenter-server/models"
- 	"github.com/gin-gonic/gin"
- )
+
+	"github.com/gin-gonic/gin"
+	"testcenter-server/models"
+)
 
 // Gin Handlers for Config
 
@@ -111,4 +111,82 @@ func SaveAccountHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, account)
+}
+
+func GetSandboxAccountsHandler(c *gin.Context) {
+	accounts, err := ListSandboxAccounts()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, accounts)
+}
+
+func SaveSandboxAccountHandler(c *gin.Context) {
+	var account models.SandboxAccount
+	if err := c.ShouldBindJSON(&account); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if account.Account == "" || account.Password == "" || account.ProjectCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "account, password and project_code are required"})
+		return
+	}
+	if account.AccountType == "" {
+		account.AccountType = "sandbox"
+	}
+
+	saved, err := CreateSandboxAccount(account)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, saved)
+}
+
+func DeleteSandboxAccountHandler(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing sandbox account id"})
+		return
+	}
+	if err := DeleteSandboxAccount(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func UpdateSandboxAccountHandler(c *gin.Context) {
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing sandbox account id"})
+		return
+	}
+
+	var account models.SandboxAccount
+	if err := c.ShouldBindJSON(&account); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Prefer route id as the source of truth.
+	account.ID = id
+
+	if account.Account == "" || account.Password == "" || account.ProjectCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "account, password and project_code are required"})
+		return
+	}
+
+	if account.AccountType == "" {
+		account.AccountType = "sandbox"
+	}
+
+	updated, err := UpdateSandboxAccount(account)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, updated)
 }

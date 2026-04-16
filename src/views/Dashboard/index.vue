@@ -330,6 +330,20 @@ const perfTools = ref<ToolDef[]>([
             <a href="#" class="open-link" @click.prevent="router.push('/skillify')">打开</a>
           </div>
         </div>
+
+        <div class="tool-card">
+          <div class="tool-card__top">
+            <div class="tool-card__icon" style="background: rgba(16, 185, 129, 0.12)">
+              <el-icon :size="20" color="#10b981"><component :is="Icons.User" /></el-icon>
+            </div>
+          </div>
+          <h3 class="tool-card__name">沙盒账号管理</h3>
+          <p class="tool-card__desc">集中查看与管理测试流程中使用的沙盒账号卡片</p>
+          <div class="tool-card__footer">
+            <span class="ready-text">V0.1</span>
+            <a href="#" class="open-link" @click.prevent="router.push('/sandbox_accounts')">打开</a>
+          </div>
+        </div>
       </div>
     </div>
 
