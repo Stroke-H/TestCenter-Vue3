@@ -66,6 +66,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '节点 Skill 化', icon: 'MagicStick' }
       },
       {
+        path: 'sandbox_accounts',
+        name: 'SandboxAccounts',
+        component: () => import('@/views/TestProcess/SandboxAccounts/index.vue'),
+        meta: { title: '沙盒账号管理', hidden: true }
+      },
+      {
         path: 'acceptance_reports',
         name: 'AcceptanceReport',
         component: () => import('@/views/AcceptanceReport/index.vue'),

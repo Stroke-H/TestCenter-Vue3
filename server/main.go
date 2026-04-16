@@ -58,6 +58,10 @@ func main() {
 
 			configGroup.GET("/accounts", services.GetAccountsHandler)
 			configGroup.POST("/accounts", services.SaveAccountHandler)
+			configGroup.GET("/sandbox-accounts", services.GetSandboxAccountsHandler)
+			configGroup.POST("/sandbox-accounts", services.SaveSandboxAccountHandler)
+			configGroup.DELETE("/sandbox-accounts/:id", services.DeleteSandboxAccountHandler)
+			configGroup.PUT("/sandbox-accounts/:id", services.UpdateSandboxAccountHandler)
 		}
 
 		// Mind Map Processes
