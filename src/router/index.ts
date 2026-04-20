@@ -84,6 +84,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '斗兽棋', hidden: true }
       },
       {
+        path: 'novel_reader',
+        name: 'NovelReader',
+        component: () => import('@/views/NovelReader/index.vue'),
+        meta: { title: '小说阅读器', hidden: true }
+      },
+      {
         path: 'ui_auto',
         name: 'UIAutoTest',
         component: () => import('@/views/UIAutoTest/index.vue'),

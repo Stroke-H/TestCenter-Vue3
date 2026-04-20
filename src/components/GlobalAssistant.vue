@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { useDramaRunStore } from '@/stores'
 
 // --- Types ---
 interface Message {
@@ -25,6 +26,7 @@ interface ReportData {
 // --- API Service ---
 const API_BASE = 'http://localhost:8080/api'
 const authStore = useAuthStore()
+const dramaRunStore = useDramaRunStore()
 
 // --- State ---
 const assistantVisible = ref(false)
@@ -37,6 +39,8 @@ const assistantMessages = ref<Message[]>([
 const messageContainer = ref<HTMLElement | null>(null)
 const fabPosition = ref({ top: 0, left: 0 })
 const isDraggingFab = ref(false)
+const assistantButtonLabel = computed(() => dramaRunStore.assistantLabel)
+const assistantButtonActive = computed(() => dramaRunStore.isAssistantActive)
 let dragOffsetX = 0
 let dragOffsetY = 0
 let dragMoved = false
@@ -263,6 +267,7 @@ const startFabDrag = (event: PointerEvent) => {
 
 onMounted(() => {
   syncFabPositionWithinViewport()
+  dramaRunStore.recoverCurrentRun()
   window.addEventListener('resize', syncFabPositionWithinViewport)
 })
 
@@ -278,17 +283,23 @@ onBeforeUnmount(() => {
     <!-- FAB Button -->
     <div
       class="fab-container"
-      :class="{ 'is-dragging': isDraggingFab }"
+      :class="{ 'is-dragging': isDraggingFab, 'is-test-active': assistantButtonActive }"
       :style="{ top: `${fabPosition.top}px`, left: `${fabPosition.left}px` }"
       @pointerdown.prevent="startFabDrag"
     >
+      <transition name="assistant-bubble">
+        <div v-if="dramaRunStore.bubbleVisible" class="fab-status-bubble">
+          {{ dramaRunStore.bubbleText }}
+        </div>
+      </transition>
       <el-button
         type="primary"
         size="large"
         class="fab-btn"
+        :class="{ 'fab-btn--test-active': assistantButtonActive }"
       >
-        <el-icon class="mr-2"><component :is="Icons.ChatLineRound" /></el-icon>
-        智能助手
+        <el-icon class="mr-2"><component :is="assistantButtonActive ? Icons.VideoPlay : Icons.ChatLineRound" /></el-icon>
+        {{ assistantButtonLabel }}
       </el-button>
     </div>
 
@@ -418,6 +429,38 @@ onBeforeUnmount(() => {
   cursor: grabbing;
 }
 
+.fab-container.is-test-active {
+  animation: fabFloat 2.4s ease-in-out infinite;
+}
+
+.fab-status-bubble {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 12px);
+  width: max-content;
+  max-width: 260px;
+  padding: 10px 14px;
+  border-radius: 16px 16px 4px 16px;
+  background: rgba(15, 23, 42, 0.94);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.22);
+  pointer-events: none;
+}
+
+.fab-status-bubble::after {
+  content: '';
+  position: absolute;
+  right: 20px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  background: rgba(15, 23, 42, 0.94);
+  transform: rotate(45deg);
+}
+
 .fab-btn {
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
   height: 52px;
@@ -432,6 +475,14 @@ onBeforeUnmount(() => {
   user-select: none;
 }
 
+.fab-btn--test-active {
+  min-width: 112px;
+  color: #0f172a;
+  border: none;
+  background: linear-gradient(135deg, #fef3c7 0%, #67e8f9 48%, #86efac 100%);
+  box-shadow: 0 10px 26px rgba(14, 165, 233, 0.34);
+}
+
 .fab-btn:hover {
   transform: scale(1.05) translateY(-2px);
   box-shadow: 0 6px 16px rgba(99, 102, 241, 0.5);
@@ -441,6 +492,26 @@ onBeforeUnmount(() => {
 .fab-container.is-dragging .fab-btn:hover {
   transform: none;
   box-shadow: 0 8px 20px rgba(99, 102, 241, 0.35);
+}
+
+.assistant-bubble-enter-active,
+.assistant-bubble-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.assistant-bubble-enter-from,
+.assistant-bubble-leave-to {
+  opacity: 0;
+  transform: translateY(8px) scale(0.96);
+}
+
+@keyframes fabFloat {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
 }
 
 .mr-2 { margin-right: 8px; }

@@ -13,7 +13,7 @@ interface ProjectItem {
 
 interface TestAccountItem {
   id: string
-  account_type: 'sandbox' | 'dataqa'
+  account_type: AccountType
   account: string
   password: string
   project_code: string
@@ -28,28 +28,36 @@ interface AccountGroup {
 const ACCOUNT_TYPE_OPTIONS = [
   { label: '全部账号', value: 'all' },
   { label: '沙盒账号', value: 'sandbox' },
-  { label: '数说测试账号', value: 'dataqa' }
+  { label: '数说测试账号', value: 'dataqa' },
+  { label: '真实测试账号', value: 'real' }
 ] as const
+
+type AccountType = 'sandbox' | 'dataqa' | 'real'
+type AccountTypeFilter = 'all' | AccountType
 
 const projects = ref<ProjectItem[]>([])
 const testAccounts = ref<TestAccountItem[]>([])
 const showCreateDialog = ref(false)
 const editingProjectCode = ref('')
-const activeType = ref<'all' | 'sandbox' | 'dataqa'>('all')
+const activeType = ref<AccountTypeFilter>('all')
 const activeProjectFilter = ref('all')
 
 const showEditDialog = ref(false)
 const editForm = ref({
   id: '',
-  account_type: 'sandbox' as 'sandbox' | 'dataqa',
+  account_type: 'sandbox' as AccountType,
   account: '',
+  device_color: '',
+  system_version: '',
   password: '',
   project_code: ''
 })
 
 const newAccountForm = ref({
-  account_type: 'sandbox' as 'sandbox' | 'dataqa',
+  account_type: 'sandbox' as AccountType,
   account: '',
+  device_color: '',
+  system_version: '',
   password: '',
   project_code: ''
 })
@@ -57,8 +65,15 @@ const newAccountForm = ref({
 const filteredAccounts = computed(() => {
   return testAccounts.value.filter((item) => {
     const matchType = activeType.value === 'all' || item.account_type === activeType.value
-    const matchProject = activeProjectFilter.value === 'all' || item.project_code === activeProjectFilter.value
+    const projectKey = item.project_code || 'unassigned'
+    const matchProject = activeProjectFilter.value === 'all' || projectKey === activeProjectFilter.value
     return matchType && matchProject
+  })
+})
+
+const typeFilteredAccounts = computed(() => {
+  return testAccounts.value.filter((item) => {
+    return activeType.value === 'all' || item.account_type === activeType.value
   })
 })
 
@@ -66,18 +81,20 @@ const accountStats = computed(() => {
   const projectCodes = new Set(testAccounts.value.map((item) => item.project_code).filter(Boolean))
   const sandboxCount = testAccounts.value.filter((item) => item.account_type === 'sandbox').length
   const dataqaCount = testAccounts.value.filter((item) => item.account_type === 'dataqa').length
+  const realCount = testAccounts.value.filter((item) => item.account_type === 'real').length
 
   return [
     { title: '总账号数', value: testAccounts.value.length, tone: 'blue' },
     { title: '沙盒账号', value: sandboxCount, tone: 'green' },
     { title: '数说账号', value: dataqaCount, tone: 'amber' },
+    { title: '真实账号', value: realCount, tone: 'cyan' },
     { title: '已分配项目数', value: projectCodes.size, tone: 'slate' }
   ]
 })
 
 const projectNavItems = computed(() => {
   const counts = new Map<string, number>()
-  filteredAccounts.value.forEach((item) => {
+  typeFilteredAccounts.value.forEach((item) => {
     const key = item.project_code || 'unassigned'
     counts.set(key, (counts.get(key) || 0) + 1)
   })
@@ -86,7 +103,7 @@ const projectNavItems = computed(() => {
     {
       key: 'all',
       label: '全部',
-      count: filteredAccounts.value.length
+      count: typeFilteredAccounts.value.length
     }
   ]
 
@@ -127,16 +144,16 @@ const groupedAccounts = computed<AccountGroup[]>(() => {
   return Array.from(groupMap.values())
 })
 
-const getProjectName = (projectCode: string) => {
-  return projects.value.find((project) => project.project_code === projectCode)?.project_name || projectCode
-}
-
 const getTypeBadgeLabel = (type: TestAccountItem['account_type']) => {
-  return type === 'dataqa' ? 'DataQA' : 'Sandbox'
+  if (type === 'dataqa') return 'DataQA'
+  if (type === 'real') return 'Real'
+  return 'Sandbox'
 }
 
 const getTypeBadgeClass = (type: TestAccountItem['account_type']) => {
-  return type === 'dataqa' ? 'account-badge account-badge--dataqa' : 'account-badge account-badge--sandbox'
+  if (type === 'dataqa') return 'account-badge account-badge--dataqa'
+  if (type === 'real') return 'account-badge account-badge--real'
+  return 'account-badge account-badge--sandbox'
 }
 
 const getPrimaryFieldLabel = (type: TestAccountItem['account_type']) => {
@@ -144,21 +161,93 @@ const getPrimaryFieldLabel = (type: TestAccountItem['account_type']) => {
 }
 
 const getSecondaryFieldLabel = (type: TestAccountItem['account_type']) => {
-  return type === 'dataqa' ? '标识' : '密码'
+  return type === 'dataqa' ? '数说ID' : '密码'
 }
 
-const getAccountPlaceholder = (type: 'sandbox' | 'dataqa') => {
+const getAccountPlaceholder = (type: AccountType) => {
   return type === 'dataqa' ? '请输入设备名称' : '请输入账号'
 }
 
-const getPasswordPlaceholder = (type: 'sandbox' | 'dataqa') => {
-  return type === 'dataqa' ? '请输入设备标识' : '请输入密码'
+const getPasswordPlaceholder = (type: AccountType) => {
+  return type === 'dataqa' ? '请输入数说ID' : '请输入密码'
+}
+
+// dataqa 的 account 字段当前形如：phone15-粉色 系统版本26
+// 这里拆分：phone15-粉色 => 设备部分；26 => 系统版本
+const parseDataqaDeviceAndVersion = (raw: string) => {
+  const text = raw?.trim() || ''
+  if (!text) return { device: '', version: '' }
+
+  const match = text.match(/^(.*?)\s*系统版本\s*([0-9]+(?:\.[0-9]+)*)\s*$/)
+  if (match) {
+    return {
+      device: (match[1] ?? '').trim(),
+      version: (match[2] ?? '').trim()
+    }
+  }
+
+  const idx = text.indexOf('系统版本')
+  if (idx !== -1) {
+    return {
+      device: text.slice(0, idx).trim(),
+      version: text.slice(idx + '系统版本'.length).trim()
+    }
+  }
+
+  return { device: text, version: '' }
+}
+
+const getDataqaDeviceModel = (raw: string) => {
+  const devicePart = parseDataqaDeviceAndVersion(raw).device || raw
+  const parts = devicePart.split('-').map((p) => p.trim()).filter(Boolean)
+  if (parts.length >= 2) {
+    return parts.slice(0, -1).join('-')
+  }
+  return devicePart.trim()
+}
+
+const getDataqaColor = (raw: string) => {
+  const devicePart = parseDataqaDeviceAndVersion(raw).device || raw
+  const parts = devicePart.split('-').map((p) => p.trim()).filter(Boolean)
+  if (parts.length >= 2) {
+    return parts[parts.length - 1] || ''
+  }
+  return ''
+}
+
+const getDataqaSystemVersion = (raw: string) => {
+  return parseDataqaDeviceAndVersion(raw).version || '—'
+}
+
+const buildDataqaAccount = (raw: string, overrideColor: string, overrideSystemVersion: string) => {
+  const parsed = parseDataqaDeviceAndVersion(raw)
+  const finalSystemVersion = (overrideSystemVersion || parsed.version).trim()
+  if (!finalSystemVersion) {
+    // 没有系统版本就保持原样（避免破坏历史数据）
+    return raw.trim()
+  }
+
+  const devicePart = parsed.device || ''
+  const parts = devicePart.split('-').map((p) => p.trim()).filter(Boolean)
+
+  let model = devicePart.trim()
+  let extractedColor = ''
+  if (parts.length >= 2) {
+    extractedColor = parts[parts.length - 1] || ''
+    model = parts.slice(0, -1).join('-')
+  }
+
+  const finalColor = (overrideColor || extractedColor).trim()
+  const finalDevice = finalColor ? `${model}-${finalColor}` : model
+  return `${finalDevice} 系统版本${finalSystemVersion}`.trim()
 }
 
 const resetCreateForm = () => {
   newAccountForm.value = {
-    account_type: activeType.value === 'dataqa' ? 'dataqa' : 'sandbox',
+    account_type: activeType.value === 'all' ? 'sandbox' : activeType.value,
     account: '',
+    device_color: '',
+    system_version: '',
     password: '',
     project_code: ''
   }
@@ -169,6 +258,8 @@ const resetEditForm = () => {
     id: '',
     account_type: 'sandbox',
     account: '',
+    device_color: '',
+    system_version: '',
     password: '',
     project_code: ''
   }
@@ -200,13 +291,24 @@ const fetchAccounts = async () => {
 const handleCreateAccount = async () => {
   const payload = {
     account_type: newAccountForm.value.account_type,
-    account: newAccountForm.value.account.trim(),
+    account:
+      newAccountForm.value.account_type === 'dataqa'
+        ? buildDataqaAccount(
+            newAccountForm.value.account.trim(),
+            newAccountForm.value.device_color,
+            newAccountForm.value.system_version
+          )
+        : newAccountForm.value.account.trim(),
     password: newAccountForm.value.password.trim(),
     project_code: newAccountForm.value.project_code
   }
 
   if (!payload.account) {
     ElMessage.warning('请输入测试账号')
+    return
+  }
+  if (newAccountForm.value.account_type === 'dataqa' && !newAccountForm.value.system_version.trim()) {
+    ElMessage.warning('请输入系统版本')
     return
   }
   if (!payload.password) {
@@ -256,11 +358,33 @@ const handleDeleteAccount = async (accountId: string) => {
   }
 }
 
+const handleCopyDataqaIdentifiers = async (accounts: TestAccountItem[]) => {
+  const identifiers = accounts
+    .filter((item) => item.account_type === 'dataqa')
+    .map((item) => item.password.trim())
+    .filter(Boolean)
+
+  if (identifiers.length === 0) {
+    ElMessage.warning('当前项目下暂无可复制的数说标识')
+    return
+  }
+
+  try {
+    await navigator.clipboard.writeText(identifiers.join(','))
+    ElMessage.success(`已复制 ${identifiers.length} 个数说标识`)
+  } catch (err) {
+    console.error('Failed to copy dataqa identifiers:', err)
+    ElMessage.error('复制失败，请检查浏览器剪贴板权限')
+  }
+}
+
 const openEditDialog = (account: TestAccountItem) => {
   editForm.value = {
     id: account.id,
     account_type: account.account_type || 'sandbox',
-    account: account.account,
+    account: account.account_type === 'dataqa' ? getDataqaDeviceModel(account.account) : account.account,
+    device_color: account.account_type === 'dataqa' ? getDataqaColor(account.account) : '',
+    system_version: account.account_type === 'dataqa' ? getDataqaSystemVersion(account.account) : '',
     password: account.password,
     project_code: account.project_code
   }
@@ -272,7 +396,14 @@ const handleUpdateAccount = async () => {
 
   const payload = {
     account_type: editForm.value.account_type,
-    account: editForm.value.account.trim(),
+    account:
+      editForm.value.account_type === 'dataqa'
+        ? buildDataqaAccount(
+            editForm.value.account.trim(),
+            editForm.value.device_color,
+            editForm.value.system_version
+          )
+        : editForm.value.account.trim(),
     password: editForm.value.password.trim(),
     project_code: editForm.value.project_code
   }
@@ -281,8 +412,12 @@ const handleUpdateAccount = async () => {
     ElMessage.warning('请输入测试账号/设备名称')
     return
   }
+  if (editForm.value.account_type === 'dataqa' && !editForm.value.system_version.trim()) {
+    ElMessage.warning('请输入系统版本')
+    return
+  }
   if (!payload.password) {
-    ElMessage.warning('请输入密码/设备标识')
+    ElMessage.warning('请输入密码/数说ID')
     return
   }
   if (!payload.project_code) {
@@ -394,14 +529,25 @@ onMounted(async () => {
                 <h2 class="project-title">{{ group.title }}</h2>
                 <span class="project-code">{{ group.projectCode === 'unassigned' ? '未分配' : group.projectCode }}</span>
               </div>
-              <el-button
-                size="small"
-                plain
-                class="project-edit-btn"
-                @click="toggleEditProject(group.projectCode)"
-              >
-                {{ editingProjectCode === group.projectCode ? '完成' : '编辑' }}
-              </el-button>
+              <div class="project-actions">
+                <el-button
+                  v-if="activeType === 'dataqa'"
+                  size="small"
+                  plain
+                  class="project-copy-btn"
+                  @click="handleCopyDataqaIdentifiers(group.items)"
+                >
+                  一键复制
+                </el-button>
+                <el-button
+                  size="small"
+                  plain
+                  class="project-edit-btn"
+                  @click="toggleEditProject(group.projectCode)"
+                >
+                  {{ editingProjectCode === group.projectCode ? '完成' : '编辑' }}
+                </el-button>
+              </div>
             </div>
 
             <div class="account-grid">
@@ -413,24 +559,43 @@ onMounted(async () => {
                 @dblclick.stop="openEditDialog(account)"
               >
                 <div class="account-card__title">
-                  <span class="account-name">{{ account.account }}</span>
+                  <span class="account-name">
+                    {{
+                      account.account_type === 'dataqa'
+                        ? getDataqaDeviceModel(account.account)
+                        : account.account
+                    }}
+                  </span>
                   <span :class="getTypeBadgeClass(account.account_type)">
                     {{ getTypeBadgeLabel(account.account_type) }}
                   </span>
                 </div>
 
                 <div class="account-card__body">
-                  <div class="account-row">
-                    <span class="field-label">{{ getPrimaryFieldLabel(account.account_type) }}</span>
-                    <span class="field-value">{{ account.account }}</span>
-                  </div>
-                  <div class="account-row">
-                    <span class="field-label">{{ getSecondaryFieldLabel(account.account_type) }}</span>
-                    <span class="field-value">{{ account.password }}</span>
-                  </div>
-                  <div class="account-meta">
-                    <span class="project-chip">{{ getProjectName(account.project_code) }}</span>
-                  </div>
+                  <template v-if="account.account_type === 'dataqa'">
+                    <div class="account-row">
+                      <span class="field-label">系统版本</span>
+                      <span class="field-value">{{ getDataqaSystemVersion(account.account) }}</span>
+                    </div>
+                    <div class="account-row">
+                      <span class="field-label">颜色</span>
+                      <span class="field-value">{{ getDataqaColor(account.account) }}</span>
+                    </div>
+                    <div class="account-row">
+                      <span class="field-label">{{ getSecondaryFieldLabel(account.account_type) }}</span>
+                      <span class="field-value">{{ account.password }}</span>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div class="account-row">
+                      <span class="field-label">{{ getPrimaryFieldLabel(account.account_type) }}</span>
+                      <span class="field-value">{{ account.account }}</span>
+                    </div>
+                    <div class="account-row">
+                      <span class="field-label">{{ getSecondaryFieldLabel(account.account_type) }}</span>
+                      <span class="field-value">{{ account.password }}</span>
+                    </div>
+                  </template>
                 </div>
 
                 <div class="account-card__footer">
@@ -461,6 +626,7 @@ onMounted(async () => {
         <el-select v-model="newAccountForm.account_type" placeholder="请选择账号类型" style="width: 100%">
           <el-option label="沙盒账号" value="sandbox" />
           <el-option label="数说测试账号" value="dataqa" />
+          <el-option label="真实测试账号" value="real" />
         </el-select>
 
         <el-select v-model="newAccountForm.project_code" placeholder="请选择所属项目" style="width: 100%">
@@ -475,6 +641,17 @@ onMounted(async () => {
         <el-input
           v-model="newAccountForm.account"
           :placeholder="getAccountPlaceholder(newAccountForm.account_type)"
+        />
+
+        <el-input
+          v-if="newAccountForm.account_type === 'dataqa'"
+          v-model="newAccountForm.device_color"
+          placeholder="请输入设备颜色"
+        />
+        <el-input
+          v-if="newAccountForm.account_type === 'dataqa'"
+          v-model="newAccountForm.system_version"
+          placeholder="请输入系统版本"
         />
         <el-input
           v-model="newAccountForm.password"
@@ -501,6 +678,7 @@ onMounted(async () => {
         <el-select v-model="editForm.account_type" placeholder="请选择账号类型" style="width: 100%">
           <el-option label="沙盒账号" value="sandbox" />
           <el-option label="数说测试账号" value="dataqa" />
+          <el-option label="真实测试账号" value="real" />
         </el-select>
 
         <el-select v-model="editForm.project_code" placeholder="请选择所属项目" style="width: 100%">
@@ -515,6 +693,18 @@ onMounted(async () => {
         <el-input
           v-model="editForm.account"
           :placeholder="getAccountPlaceholder(editForm.account_type)"
+        />
+
+        <el-input
+          v-if="editForm.account_type === 'dataqa'"
+          v-model="editForm.device_color"
+          placeholder="请输入设备颜色"
+        />
+
+        <el-input
+          v-if="editForm.account_type === 'dataqa'"
+          v-model="editForm.system_version"
+          placeholder="请输入系统版本"
         />
 
         <el-input
@@ -581,7 +771,7 @@ onMounted(async () => {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 18px;
 }
@@ -606,6 +796,10 @@ onMounted(async () => {
 
 .stat-card--amber {
   background: linear-gradient(180deg, #ffffff, #fffbeb);
+}
+
+.stat-card--cyan {
+  background: linear-gradient(180deg, #ffffff, #ecfeff);
 }
 
 .stat-card--slate {
@@ -760,6 +954,14 @@ onMounted(async () => {
   font-weight: 700;
 }
 
+.project-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.project-copy-btn,
 .project-edit-btn {
   border-radius: 999px;
 }
@@ -778,7 +980,9 @@ onMounted(async () => {
 }
 
 .account-card :deep(.el-card__body) {
-  padding: 18px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px;
 }
 
 .account-card__title {
@@ -786,7 +990,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .account-name {
@@ -816,9 +1020,14 @@ onMounted(async () => {
   color: #2563eb;
 }
 
+.account-badge--real {
+  background: rgba(14, 165, 233, 0.12);
+  color: #0284c7;
+}
+
 .account-card__body {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .account-row {
@@ -860,7 +1069,7 @@ onMounted(async () => {
 .account-card__footer {
   display: flex;
   justify-content: flex-end;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .account-delete-btn {

@@ -6,9 +6,55 @@ const EMAIL = process.env.EMAIL || "test_super_001@shortswave.com";
 const PASSWORD = process.env.PASSWORD || "test123456";
 const LOGIN_URL = process.env.LOGIN_URL || "http://35.225.224.94:8080/api/pwd_login";
 const DRAMA_LIST_URL = process.env.DRAMA_LIST_URL || "http://35.225.224.94:8080/api/management/drama/all_online_ids";
+const FETCH_RETRY_ATTEMPTS = Number(process.env.PREPARE_FETCH_RETRY_ATTEMPTS || 3);
 
 // 定义最终落盘的存储文件路径 (锁定在项目根目录)
 const OUTPUT_FILE = path.join(import.meta.dirname, '..', 'drama_info.json');
+
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function fetchWithRetry(url, options, label) {
+  let lastError;
+  for (let attempt = 1; attempt <= FETCH_RETRY_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.ok || attempt >= FETCH_RETRY_ATTEMPTS || !shouldRetryStatus(response.status)) {
+        return response;
+      }
+      const bodyText = await safeReadText(response);
+      console.warn(`⚠️ ${label} 第 ${attempt}/${FETCH_RETRY_ATTEMPTS} 次请求失败，HTTP ${response.status}，准备重试。响应: ${bodyText}`);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= FETCH_RETRY_ATTEMPTS) {
+        throw error;
+      }
+      console.warn(`⚠️ ${label} 第 ${attempt}/${FETCH_RETRY_ATTEMPTS} 次请求异常，准备重试: ${formatFetchError(error)}`);
+    }
+    await sleep(500 * attempt);
+  }
+  throw lastError || new Error(`${label} 请求失败`);
+}
+
+function shouldRetryStatus(status) {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function safeReadText(response) {
+  try {
+    return await response.clone().text();
+  } catch (error) {
+    return `读取响应失败: ${formatFetchError(error)}`;
+  }
+}
+
+function formatFetchError(error) {
+  const cause = error?.cause;
+  const parts = [error?.message || String(error)];
+  if (cause?.code) parts.push(`code=${cause.code}`);
+  if (cause?.host) parts.push(`host=${cause.host}`);
+  if (cause?.port) parts.push(`port=${cause.port}`);
+  return parts.join(', ');
+}
 
 async function main() {
   console.log('🚀 开始执行前置数据准备任务...');
@@ -26,14 +72,14 @@ async function main() {
     password: PASSWORD,
   };
 
-  const loginRes = await fetch(LOGIN_URL, {
+  const loginRes = await fetchWithRetry(LOGIN_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Connection': 'close'
     },
     body: JSON.stringify(loginPayload)
-  });
+  }, '登录接口');
 
   if (!loginRes.ok) {
     const errorText = await loginRes.text();
@@ -67,14 +113,14 @@ async function main() {
   // Step 2: 携带 Token 获取在线剧集 ID
   // -------------------------------------------------------------
   console.log(`\n🎬 Step 2: 携带 Token 请求剧集列表 [${DRAMA_LIST_URL}]`);
-  const dramaRes = await fetch(DRAMA_LIST_URL, {
+  const dramaRes = await fetchWithRetry(DRAMA_LIST_URL, {
     method: 'GET',
     headers: {
       // 通过 Cookie 附带身份凭证进行鉴权
       'Cookie': `x-token=${xToken}`,
       'Connection': 'close'
     }
-  });
+  }, '剧集列表接口');
 
   if (!dramaRes.ok) {
     const errorText = await dramaRes.text();

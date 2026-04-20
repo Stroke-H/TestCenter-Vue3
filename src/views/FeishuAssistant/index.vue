@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -37,12 +37,44 @@ interface OperationLog {
   timestamp: string
 }
 
+type ScheduleType = 'Once' | 'Daily' | 'weekly'
+
+interface ScheduledTask {
+  id: string
+  name: string
+  scheduleType: ScheduleType
+  creator: string
+  nextRun: string
+  testProject: string
+  testProjectCode: string
+  testEnv: string
+  status: 'active' | 'paused' | 'running' | 'completed'
+  description: string
+}
+
+interface ProjectOption {
+  id: string
+  project_code: string
+  project_name: string
+}
+
+interface ScheduledTaskForm {
+  taskType: 'episode-playback-test' | ''
+  scheduleType: ScheduleType | ''
+  creator: string
+  startDate: string
+  executionTime: string
+  testProjectCode: string
+  testEnv: string
+}
+
 // --- API Service (Direct fetch for simplicity in this dashboard) ---
 const API_BASE = 'http://localhost:8080/api'
 const authStore = useAuthStore()
+const scheduledTasks = ref<ScheduledTask[]>([])
 
 // --- Mock / Init Data ---
-const tools = ref([
+const tools = computed(() => [
   {
     id: 'total-sessions',
     name: 'Total Sessions',
@@ -52,10 +84,10 @@ const tools = ref([
     iconBg: 'rgba(59, 130, 246, 0.1)'
   },
   {
-    id: 'active-users',
-    name: 'Active Users',
-    value: '45',
-    iconName: 'User',
+    id: 'total-scheduled-tasks',
+    name: 'Total Scheduled Tasks',
+    value: String(scheduledTasks.value.length),
+    iconName: 'AlarmClock',
     iconColor: '#10b981',
     iconBg: 'rgba(16, 185, 129, 0.1)'
   },
@@ -95,18 +127,59 @@ const sessions = ref<SessionRecord[]>([
 ])
 
 const operationLogs = ref<OperationLog[]>([])
+const projects = ref<ProjectOption[]>([])
 
 // --- State ---
 const drawerVisible = ref(false)
 const selectedSession = ref<SessionRecord | null>(null)
 const replyContent = ref('')
+const scheduledTaskDialogVisible = ref(false)
+const scheduledTaskDialogMode = ref<'create' | 'edit'>('create')
+const editingScheduledTaskId = ref('')
+const scheduledTaskForm = ref<ScheduledTaskForm>({
+  taskType: '',
+  scheduleType: '',
+  creator: '',
+  startDate: '',
+  executionTime: '',
+  testProjectCode: '',
+  testEnv: ''
+})
+
+const scheduleTypeOptions: ScheduleType[] = ['Once', 'Daily', 'weekly']
+const testEnvOptions = ['测试服务器', '正式服务器']
+
+const currentOperator = computed(() => {
+  return authStore.user?.username || authStore.user?.user_name || authStore.user?.name || 'TesterByClaw'
+})
+
+const nextRunPreview = computed(() => {
+  const form = scheduledTaskForm.value
+  if (!form.scheduleType) return ''
+  if (!form.startDate || !form.executionTime) return ''
+  return `${form.startDate} ${form.executionTime}`
+})
+
+const scheduledTaskDialogTitle = computed(() => {
+  return scheduledTaskDialogMode.value === 'edit' ? 'Edit Scheduled Task' : 'New Scheduled Tasks'
+})
+
+const scheduledTaskSubmitText = computed(() => {
+  return scheduledTaskDialogMode.value === 'edit' ? 'Save' : 'Create'
+})
 
 // --- Lifecycle ---
 onMounted(() => {
   fetchOperationLogs()
+  fetchProjects()
+  fetchScheduledTasks()
   // Refresh every 10s
-  const timer = setInterval(fetchOperationLogs, 10000)
-  onUnmounted(() => clearInterval(timer))
+  const logTimer = setInterval(fetchOperationLogs, 10000)
+  const taskTimer = setInterval(fetchScheduledTasks, 10000)
+  onUnmounted(() => {
+    clearInterval(logTimer)
+    clearInterval(taskTimer)
+  })
 })
 
 // --- Handlers ---
@@ -124,10 +197,184 @@ const fetchOperationLogs = async () => {
   }
 }
 
+const fetchProjects = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/config/projects`)
+    const data = await res.json()
+    projects.value = Array.isArray(data) ? data : []
+  } catch (e) {
+    console.error('Failed to fetch projects', e)
+  }
+}
+
+const parseApiResponse = async (res: Response) => {
+  const rawText = await res.text()
+  let data: any = null
+  try {
+    data = rawText ? JSON.parse(rawText) : null
+  } catch {
+    data = { error: rawText || 'Unexpected empty response' }
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.error || `Request failed (${res.status})`)
+  }
+
+  return data
+}
+
+const normalizeScheduledTask = (task: any): ScheduledTask => {
+  return {
+    id: task.id,
+    name: task.name,
+    scheduleType: task.scheduleType || task.schedule_type,
+    creator: task.creator,
+    nextRun: task.nextRun || task.next_run,
+    testProject: task.testProject || task.test_project,
+    testProjectCode: task.testProjectCode || task.test_project_code,
+    testEnv: task.testEnv || task.test_env,
+    status: task.status,
+    description: task.description
+  }
+}
+
+const fetchScheduledTasks = async () => {
+  try {
+    const res = await fetch(`${API_BASE}/scheduled-tasks`)
+    const data = await parseApiResponse(res)
+    scheduledTasks.value = Array.isArray(data) ? data.map(normalizeScheduledTask) : []
+  } catch (e) {
+    console.error('Failed to fetch scheduled tasks', e)
+  }
+}
+
 const handleToolClick = (toolId: string) => {
   if (toolId === 'bot-config') {
     ElMessage.info('Opening Bot Configuration...')
   }
+}
+
+const getProjectLabel = (code: string) => {
+  const matched = projects.value.find(item => item.project_code === code)
+  if (!matched) return code || '-'
+  return `${matched.project_name} (${matched.project_code})`
+}
+
+const getProjectName = (code: string) => {
+  return projects.value.find(item => item.project_code === code)?.project_name || code
+}
+
+const openCreateScheduledTask = () => {
+  scheduledTaskDialogMode.value = 'create'
+  editingScheduledTaskId.value = ''
+  scheduledTaskForm.value = {
+    taskType: 'episode-playback-test',
+    scheduleType: '',
+    creator: currentOperator.value,
+    startDate: '',
+    executionTime: '',
+    testProjectCode: '',
+    testEnv: ''
+  }
+  scheduledTaskDialogVisible.value = true
+}
+
+const splitNextRun = (nextRun: string) => {
+  const [date = '', time = ''] = (nextRun || '').split(' ')
+  return { date, time }
+}
+
+const openEditScheduledTask = (task: ScheduledTask) => {
+  const { date, time } = splitNextRun(task.nextRun)
+  scheduledTaskDialogMode.value = 'edit'
+  editingScheduledTaskId.value = task.id
+  scheduledTaskForm.value = {
+    taskType: 'episode-playback-test',
+    scheduleType: task.scheduleType,
+    creator: task.creator,
+    startDate: date,
+    executionTime: time,
+    testProjectCode: task.testProjectCode,
+    testEnv: task.testEnv
+  }
+  scheduledTaskDialogVisible.value = true
+}
+
+const handleScheduleTypeChange = () => {
+  scheduledTaskForm.value.startDate = ''
+  scheduledTaskForm.value.executionTime = ''
+}
+
+const createScheduledTask = async () => {
+  const form = scheduledTaskForm.value
+  if (!form.taskType || !form.scheduleType || !form.creator || !form.testProjectCode || !form.testEnv) {
+    ElMessage.warning('请填写 Function、Schedule Type、Creater、Test Project 和 Test Env')
+    return
+  }
+  if (!form.startDate || !form.executionTime) {
+    ElMessage.warning('请选择定时任务的执行日期和执行时间')
+    return
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/scheduled-tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        function: form.taskType,
+        schedule_type: form.scheduleType,
+        creator: form.creator,
+        next_run: nextRunPreview.value,
+        test_project: getProjectName(form.testProjectCode),
+        test_project_code: form.testProjectCode,
+        test_env: form.testEnv
+      })
+    })
+    const data = await parseApiResponse(res)
+    scheduledTasks.value.unshift(normalizeScheduledTask(data))
+    scheduledTaskDialogVisible.value = false
+    ElMessage.success('Scheduled task created')
+  } catch (e: any) {
+    ElMessage.error(e?.message || 'Scheduled task 创建失败')
+  }
+}
+
+const updateScheduledTask = async () => {
+  const form = scheduledTaskForm.value
+  if (!editingScheduledTaskId.value || !form.scheduleType) {
+    ElMessage.warning('请选择需要修改的 Scheduled task 和 Schedule Type')
+    return
+  }
+  if (!form.startDate || !form.executionTime) {
+    ElMessage.warning('请选择定时任务的执行日期和执行时间')
+    return
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/scheduled-tasks/${editingScheduledTaskId.value}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        schedule_type: form.scheduleType,
+        next_run: nextRunPreview.value
+      })
+    })
+    const data = await parseApiResponse(res)
+    const updated = normalizeScheduledTask(data)
+    scheduledTasks.value = scheduledTasks.value.map(item => item.id === updated.id ? updated : item)
+    scheduledTaskDialogVisible.value = false
+    ElMessage.success('Scheduled task updated')
+  } catch (e: any) {
+    ElMessage.error(e?.message || 'Scheduled task 修改失败')
+  }
+}
+
+const submitScheduledTask = () => {
+  if (scheduledTaskDialogMode.value === 'edit') {
+    updateScheduledTask()
+    return
+  }
+  createScheduledTask()
 }
 
 const openSessionDetail = (row: SessionRecord) => {
@@ -176,6 +423,19 @@ const formatTime = (ts: string) => {
 
 <template>
   <div class="dashboard">
+    <div class="page-header">
+      <div class="header-left">
+        <h2 class="page-title">Feishu Assistant</h2>
+        <div class="breadcrumb">Feishu Assistant <span class="divider">/</span> Bot Operations</div>
+      </div>
+      <div class="header-right">
+        <el-button type="primary" class="new-scheduled-task-btn" @click="openCreateScheduledTask">
+          <el-icon><component :is="Icons.Plus" /></el-icon>
+          New Scheduled Tasks
+        </el-button>
+      </div>
+    </div>
+
     <!-- ========== Overview Cards ========== -->
     <div class="section">
       <div class="section-header">
@@ -252,6 +512,62 @@ const formatTime = (ts: string) => {
           <el-table-column prop="summary" label="Latest Activity Summary" min-width="250" show-overflow-tooltip />
 
           <el-table-column prop="lastActiveTime" label="Last Active Time" width="180" />
+        </el-table>
+      </div>
+    </div>
+
+    <!-- ========== Scheduled Tasks ========== -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title-row">
+          <div class="section-icon section-icon--green">
+            <el-icon :size="14"><component :is="Icons.Clock" /></el-icon>
+          </div>
+          <h2 class="section-title">Scheduled tasks</h2>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <el-table :data="scheduledTasks" style="width: 100%" empty-text="No scheduled tasks yet.">
+          <el-table-column label="Task" min-width="260">
+            <template #default="scope">
+              <div class="scheduled-task">
+                <span class="scheduled-task__name">{{ scope.row.name }}</span>
+                <span class="scheduled-task__desc">{{ scope.row.description }}</span>
+              </div>
+            </template>
+          </el-table-column>
+
+          <el-table-column prop="scheduleType" label="Schedule Type" width="150" />
+          <el-table-column prop="testProject" label="Test Project" width="190">
+            <template #default="scope">
+              <span>{{ scope.row.testProject }}</span>
+              <span class="scheduled-task__code"> / {{ scope.row.testProjectCode }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="testEnv" label="Test Env" min-width="150" />
+          <el-table-column prop="creator" label="Creater" width="150" />
+          <el-table-column prop="nextRun" label="Next Run" width="170" />
+
+          <el-table-column prop="status" label="Status" width="120" align="center">
+            <template #default="scope">
+              <el-tag :type="getStatusType(scope.row.status)" size="small" round>
+                {{ scope.row.status.toUpperCase() }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="Actions" width="110" align="center" fixed="right">
+            <template #default="scope">
+              <el-button
+                link
+                type="primary"
+                :disabled="scope.row.status === 'running'"
+                @click.stop="openEditScheduledTask(scope.row)"
+              >
+                Edit
+              </el-button>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
     </div>
@@ -337,6 +653,111 @@ const formatTime = (ts: string) => {
         <div class="chat-ended-notice" v-else>This session has been ended.</div>
       </div>
     </el-drawer>
+
+    <el-dialog
+      v-model="scheduledTaskDialogVisible"
+      :title="scheduledTaskDialogTitle"
+      width="560px"
+      destroy-on-close
+    >
+      <el-form :model="scheduledTaskForm" label-position="top" class="scheduled-task-form">
+        <el-form-item label="Function">
+          <el-select
+            v-model="scheduledTaskForm.taskType"
+            placeholder="请选择功能"
+            style="width: 100%"
+            :disabled="scheduledTaskDialogMode === 'edit'"
+          >
+            <el-option label="剧集播放接口测试" value="episode-playback-test" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="Schedule Type">
+          <el-select
+            v-model="scheduledTaskForm.scheduleType"
+            placeholder="请选择执行频率"
+            style="width: 100%"
+            @change="handleScheduleTypeChange"
+          >
+            <el-option
+              v-for="item in scheduleTypeOptions"
+              :key="item"
+              :label="item"
+              :value="item"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="Test Project">
+          <el-select
+            v-model="scheduledTaskForm.testProjectCode"
+            placeholder="请选择测试项目"
+            style="width: 100%"
+            filterable
+            :disabled="scheduledTaskDialogMode === 'edit'"
+          >
+            <el-option
+              v-for="project in projects"
+              :key="project.id || project.project_code"
+              :label="getProjectLabel(project.project_code)"
+              :value="project.project_code"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="Test Env">
+          <el-select
+            v-model="scheduledTaskForm.testEnv"
+            placeholder="请选择测试环境"
+            style="width: 100%"
+            :disabled="scheduledTaskDialogMode === 'edit'"
+          >
+            <el-option
+              v-for="env in testEnvOptions"
+              :key="env"
+              :label="env"
+              :value="env"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="Creater">
+          <el-input v-model="scheduledTaskForm.creator" disabled />
+        </el-form-item>
+
+        <el-form-item label="Next Run">
+          <div
+            v-if="scheduledTaskForm.scheduleType"
+            class="next-run-picker"
+          >
+            <el-date-picker
+              v-model="scheduledTaskForm.startDate"
+              type="date"
+              placeholder="请选择开始日期"
+              value-format="YYYY-MM-DD"
+              format="YYYY-MM-DD"
+              class="next-run-picker__date"
+            />
+            <el-time-picker
+              v-model="scheduledTaskForm.executionTime"
+              placeholder="请选择执行时间"
+              value-format="HH:mm:ss"
+              format="HH:mm"
+              class="next-run-picker__time"
+            />
+          </div>
+          <el-input v-else placeholder="请先选择 Schedule Type" disabled />
+          <div v-if="scheduledTaskForm.scheduleType === 'weekly'" class="schedule-hint">
+            Weekly tasks run every 7 days from the selected start date.
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="scheduledTaskDialogVisible = false">Cancel</el-button>
+        <el-button type="primary" @click="submitScheduledTask">{{ scheduledTaskSubmitText }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -348,6 +769,39 @@ const formatTime = (ts: string) => {
   gap: 32px;
   padding: 8px 0;
   position: relative;
+}
+
+/* ==================== Page Header ==================== */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 0 2px;
+}
+
+.page-title {
+  color: #111827;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.7px;
+  margin: 0 0 6px;
+}
+
+.breadcrumb {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.divider {
+  margin: 0 8px;
+  color: #cbd5e1;
+}
+
+.new-scheduled-task-btn {
+  border-radius: 10px;
+  font-weight: 700;
+  height: 40px;
 }
 
 /* ==================== Sections ==================== */
@@ -377,6 +831,7 @@ const formatTime = (ts: string) => {
 .section-icon--blue { background: #3b82f6; }
 .section-icon--indigo { background: #6366f1; }
 .section-icon--orange { background: #f59e0b; }
+.section-icon--green { background: #10b981; }
 
 .section-title {
   font-size: 17px;
@@ -449,6 +904,60 @@ const formatTime = (ts: string) => {
 
 :deep(.session-row) {
   cursor: pointer;
+}
+
+.scheduled-task {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.scheduled-task__name {
+  color: #1e293b;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.scheduled-task__desc {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.scheduled-task__code {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.scheduled-task-form {
+  padding-top: 4px;
+}
+
+.next-run-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.next-run-picker__date,
+.next-run-picker__time {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+:deep(.next-run-picker .el-date-editor.el-input),
+:deep(.next-run-picker .el-date-editor.el-input__wrapper) {
+  width: 100%;
+}
+
+.schedule-hint {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 8px;
 }
 
 /* ==================== Chat Drawer ==================== */

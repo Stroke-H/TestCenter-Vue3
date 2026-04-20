@@ -10,9 +10,15 @@ const offlineErrors = new Counter('offline_chapter_count');
 const totalMismatchErrors = new Counter('total_mismatch_count');
 const fetchErrors = new Counter('fetch_fail_count');
 const updateStatusErrors = new Counter('update_status_fail_count');
+const transportRetryCount = new Counter('transport_retry_count');
+const retryCandidateCount = new Counter('retry_candidate_count');
 
 // ---------- 2. 加载配置与数据 (Config & Drama Info) ----------
 const k6Config = JSON.parse(open('./k6_config.json'));
+const RETRY_MARKER_PREFIX = '__DRAMA_RETRY_720_NETWORK__|';
+const PROGRESS_MARKER_PREFIX = '__DRAMA_CASE_DONE__|';
+const isRetryPhase = __ENV.DRAMA_RETRY_PHASE === '1';
+const retryIds = parseRetryIds(__ENV.DRAMA_RETRY_IDS || '');
 
 const data = new SharedArray('drama_info_loader', function () {
     // 强制读取根目录下的 drama_info.json 文件 (由 Node 脚本生成)
@@ -21,13 +27,15 @@ const data = new SharedArray('drama_info_loader', function () {
 });
 
 const config = data[0];
-const DRAMA_LIST = config.dramaList || [];
+const DRAMA_LIST = retryIds.length > 0 ? retryIds : (config.dramaList || []);
 const TOKEN = config.auth.x_token;
 const API_BASE = config.apiBase || "http://35.225.224.94:8080";
 
 // ---------- 3. 动态负载逻辑 ----------
 const totalIds = DRAMA_LIST.length;
-const vus = k6Config.vus || Math.min(30, totalIds);
+const vus = isRetryPhase
+    ? Math.max(1, Math.min(k6Config.retryVus || 5, totalIds))
+    : (k6Config.vus || Math.min(30, totalIds));
 const itersPerVu = k6Config.itersPerVu || Math.ceil(totalIds / vus);
 
 export const options = {
@@ -47,6 +55,19 @@ export const options = {
     }
 };
 
+function parseRetryIds(rawValue) {
+    if (!rawValue) return [];
+    try {
+        const parsed = JSON.parse(rawValue);
+        if (Array.isArray(parsed)) {
+            return parsed.map(String).filter(Boolean);
+        }
+    } catch (e) {
+        // Fall back to comma-separated input for manual runs.
+    }
+    return rawValue.split(',').map(item => item.trim()).filter(Boolean);
+}
+
 // ---------- 4. 核心获取函数 ----------
 function fetchDramaData(dramaId, resolution) {
     const url = `${API_BASE}/api/management/drama/chapter/list?drama_id=${dramaId}&page=1&page_size=200&resolution=${resolution}`;
@@ -58,21 +79,50 @@ function fetchDramaData(dramaId, resolution) {
         timeout: k6Config.timeout || '15s'
     };
 
-    const res = http.get(url, params);
-    if (res.status !== 200) {
-        return { success: false, msg: `HTTP ${res.status} 请求失败` };
+    const maxAttempts = k6Config.retryAttempts || 3;
+    let lastError = '';
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const res = http.get(url, params);
+        if (res.status !== 200) {
+            lastError = formatRequestError(res, attempt, maxAttempts);
+            if (isTransportFailure(res.status) && attempt < maxAttempts) {
+                transportRetryCount.add(1);
+                sleep(0.2 * attempt);
+                continue;
+            }
+            return { success: false, msg: lastError };
+        }
+
+        try {
+            const body = JSON.parse(res.body);
+            return { 
+                success: true, 
+                total: body.total || 0, 
+                items: body.data || [] 
+            };
+        } catch (e) {
+            return { success: false, msg: 'JSON 解析失败' };
+        }
     }
 
-    try {
-        const body = JSON.parse(res.body);
-        return { 
-            success: true, 
-            total: body.total || 0, 
-            items: body.data || [] 
-        };
-    } catch (e) {
-        return { success: false, msg: 'JSON 解析失败' };
-    }
+    return { success: false, msg: lastError || '请求失败' };
+}
+
+function isTransportFailure(status) {
+    return status === 0 || status >= 500;
+}
+
+function formatRequestError(res, attempt, maxAttempts) {
+    const parts = [`HTTP ${res.status}`];
+    if (res.error) parts.push(res.error);
+    if (res.error_code) parts.push(`code=${res.error_code}`);
+    parts.push(`attempt=${attempt}/${maxAttempts}`);
+    return parts.join(' | ');
+}
+
+function markDramaCaseDone(dramaId) {
+    console.log(`${PROGRESS_MARKER_PREFIX}${dramaId}`);
 }
 
 // ---------- 5. 数据校验逻辑 ----------
@@ -109,22 +159,34 @@ export default function () {
 
     const res720 = fetchDramaData(dramaId, '720p');
     if (!res720.success) {
-        const errorMsg = `<details style="cursor: pointer; color: #e74c3c;"><summary><b>剧集 ID: ${dramaId} (720p 接口请求失败)</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">错误原因: ${res720.msg}</div></details>`;
-        console.error(`[🔥] 剧集 ${dramaId} 720p 请求失败: ${res720.msg}`);
+        if (!isRetryPhase) {
+            const retryMarker = `${RETRY_MARKER_PREFIX}${dramaId}|${encodeURIComponent(res720.msg)}`;
+            check(null, { [retryMarker]: false });
+            retryCandidateCount.add(1);
+            console.warn(`[↻] 剧集 ${dramaId} 720p 第一轮网络请求失败，加入二次尝试队列: ${res720.msg}`);
+            markDramaCaseDone(dramaId);
+            return;
+        }
+
+        const errorMsg = `<details style="cursor: pointer; color: #e74c3c;"><summary><b>剧集 ID: ${dramaId} (720p 网络请求失败)</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">错误原因: ${res720.msg}</div></details>`;
+        console.error(`[🔥] 剧集 ${dramaId} 720p 二次尝试仍网络请求失败: ${res720.msg}`);
         check(null, { [errorMsg]: false });
         fetchErrors.add(1);
+        markDramaCaseDone(dramaId);
         return;
     }
 
     const health720 = analyzeHealth(res720.items);
     if (health720.healthy && res720.total === res720.items.length) {
         sleep(0.1);
+        markDramaCaseDone(dramaId);
         return; 
     }
 
     const res540 = fetchDramaData(dramaId, '540p');
     if (!res540.success) {
         reportFaults(dramaId, health720.errors, res720.total, res720.items.length);
+        markDramaCaseDone(dramaId);
         return;
     }
 
@@ -184,6 +246,7 @@ export default function () {
         console.warn(`[❌ 实锤故障] ${summaryLabel}\n  ${errorDetails.join('\n  ')}`);
         check(null, { [expandableMsg]: false });
     }
+    markDramaCaseDone(dramaId);
     sleep(0.1);
 }
 
@@ -207,8 +270,13 @@ function reportFaults(dramaId, errors, total, actualLen) {
 }
 
 export function handleSummary(data) {
+    const retryCandidates = collectRetryCandidates(data);
+    const failedChecks = collectFailedChecks(data, name => !name.startsWith(RETRY_MARKER_PREFIX));
+    stripRetryCandidateChecks(data, retryCandidates.length);
+
     const summaryText = `[📊] 执行完毕。汇总结果: 
         抓取失败数: ${data.metrics.fetch_fail_count ? data.metrics.fetch_fail_count.values.count : 0}
+        720p网络失败待复验数: ${data.metrics.retry_candidate_count ? data.metrics.retry_candidate_count.values.count : 0}
         跳号剧集数: ${data.metrics.continuity_fail_count ? data.metrics.continuity_fail_count.values.count : 0}
         下架/异常章节总数: ${data.metrics.offline_chapter_count ? data.metrics.offline_chapter_count.values.count : 0}
         计数不符剧集数: ${data.metrics.total_mismatch_count ? data.metrics.total_mismatch_count.values.count : 0}`;
@@ -220,6 +288,8 @@ export function handleSummary(data) {
         'offline_chapter_count': 'Unhealthy Chapters (下架/异常章节总数)',
         'total_mismatch_count': 'Total Mismatch (计数不符剧集数)',
         'fetch_fail_count': 'Fetch Failures (接口抓取失败数)',
+        'transport_retry_count': 'Transport Retries (网络重试次数)',
+        'retry_candidate_count': 'Retry Candidates (720p网络失败待复验数)',
     };
 
     const finalMetrics = {};
@@ -241,7 +311,94 @@ export function handleSummary(data) {
         .replace(/&lt;div/g, '<div')
         .replace(/&lt;\/div&gt;/g, '</div>');
 
-    return {
-        "k6-scripts/reports/drama_check_report.html": unescapedHtml,
+    const output = {};
+    if (isRetryPhase) {
+        output["k6-scripts/reports/drama_retry_report.html"] = unescapedHtml;
+        output["k6-scripts/reports/drama_retry_result.json"] = JSON.stringify({
+            generatedAt: new Date().toISOString(),
+            phase: 'retry',
+            retryIds,
+            persistentFailures: failedChecks,
+        }, null, 2);
+        return output;
+    }
+
+    output["k6-scripts/reports/drama_check_report.html"] = unescapedHtml;
+    output["k6-scripts/reports/drama_retry_candidates.json"] = JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        phase: 'initial',
+        candidates: retryCandidates,
+    }, null, 2);
+    return output;
+}
+
+function collectRetryCandidates(data) {
+    const candidates = [];
+    const seen = {};
+    walkChecks(data.root_group, checkItem => {
+        const name = checkItem.name || '';
+        if (!name.startsWith(RETRY_MARKER_PREFIX) || !checkItem.fails) return;
+        const rest = name.substring(RETRY_MARKER_PREFIX.length);
+        const parts = rest.split('|');
+        const dramaId = parts[0];
+        if (!dramaId || seen[dramaId]) return;
+        seen[dramaId] = true;
+        candidates.push({
+            dramaId,
+            reason: decodeURIComponent(parts.slice(1).join('|') || ''),
+        });
+    });
+    return candidates;
+}
+
+function collectFailedChecks(data, shouldInclude) {
+    const failures = [];
+    walkChecks(data.root_group, checkItem => {
+        const name = checkItem.name || '';
+        if (!checkItem.fails || !shouldInclude(name)) return;
+        failures.push({
+            name,
+            fails: checkItem.fails || 0,
+            passes: checkItem.passes || 0,
+        });
+    });
+    return failures;
+}
+
+function stripRetryCandidateChecks(data, removedFailCount) {
+    stripRetryCandidateChecksFromGroup(data.root_group);
+    const checksMetric = data.metrics && data.metrics.checks && data.metrics.checks.values;
+    if (!checksMetric || !removedFailCount) return;
+
+    if (typeof checksMetric.fails === 'number') {
+        checksMetric.fails = Math.max(0, checksMetric.fails - removedFailCount);
+    }
+    if (typeof checksMetric.count === 'number') {
+        checksMetric.count = Math.max(0, checksMetric.count - removedFailCount);
+    }
+    if (typeof checksMetric.passes === 'number' && typeof checksMetric.fails === 'number') {
+        const total = checksMetric.passes + checksMetric.fails;
+        checksMetric.rate = total > 0 ? checksMetric.passes / total : 1;
+        checksMetric.value = checksMetric.rate;
+    }
+}
+
+function stripRetryCandidateChecksFromGroup(group) {
+    if (!group) return;
+    if (Array.isArray(group.checks)) {
+        group.checks = group.checks.filter(checkItem => !(checkItem.name || '').startsWith(RETRY_MARKER_PREFIX));
+    }
+    if (Array.isArray(group.groups)) {
+        group.groups.forEach(stripRetryCandidateChecksFromGroup);
+    }
+}
+
+function walkChecks(group, visitor) {
+    if (!group) return;
+    if (Array.isArray(group.checks)) {
+        group.checks.forEach(visitor);
+    }
+    if (Array.isArray(group.groups)) {
+        group.groups.forEach(child => walkChecks(child, visitor));
     };
 }
