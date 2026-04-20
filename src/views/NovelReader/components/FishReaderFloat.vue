@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, shallowRef, useTemplateRef, watch } from 'vue'
 import { useFishReaderStore } from '@/stores'
 
 defineOptions({ name: 'FishReaderFloat' })
 
 const fishReaderStore = useFishReaderStore()
 const contentRef = useTemplateRef<HTMLElement>('contentRef')
+const controlsVisible = shallowRef(false)
 
 const position = reactive({
   x: 0,
@@ -101,6 +102,10 @@ function goPage(delta: number) {
   })
 }
 
+function toggleControls() {
+  controlsVisible.value = !controlsVisible.value
+}
+
 function startDrag(event: PointerEvent) {
   const target = event.target as HTMLElement
   if (target.closest('button')) return
@@ -177,6 +182,9 @@ watch(
     if (visible && position.x === 0 && position.y === 0) {
       initPosition()
     }
+    if (visible) {
+      controlsVisible.value = false
+    }
   },
   { immediate: true }
 )
@@ -197,15 +205,21 @@ onUnmounted(() => {
   <section
     v-if="fishReaderStore.visible && fishReaderStore.book && currentChapter"
     class="fish-reader-float"
-    :class="shellClass"
+    :class="[shellClass, { 'fish-reader-float--immersive': !controlsVisible }]"
     :style="{
       left: `${position.x}px`,
       top: `${position.y}px`,
       width: `${position.width}px`,
       height: `${position.height}px`
     }"
+    @click="toggleControls"
   >
-    <header class="fish-reader-float__header" @pointerdown="startDrag">
+    <header
+      v-if="controlsVisible"
+      class="fish-reader-float__header"
+      @click.stop
+      @pointerdown="startDrag"
+    >
       <div class="fish-reader-float__meta">
         <span class="fish-reader-float__mode">摸鱼模式</span>
         <strong class="fish-reader-float__book">{{ fishReaderStore.book.name }}</strong>
@@ -238,13 +252,19 @@ onUnmounted(() => {
       </p>
     </article>
 
-    <footer class="fish-reader-float__footer">
+    <footer v-if="controlsVisible" class="fish-reader-float__footer" @click.stop>
       <button type="button" @click="goPage(-1)">上一屏</button>
       <span>第 {{ fishReaderStore.chapterIndex + 1 }} / {{ fishReaderStore.book.chapters.length }} 章</span>
       <button type="button" @click="goPage(1)">下一屏</button>
     </footer>
 
-    <button class="fish-reader-float__resize" type="button" aria-label="调整大小" @pointerdown="startResize" />
+    <button
+      class="fish-reader-float__resize"
+      type="button"
+      aria-label="调整大小"
+      @click.stop
+      @pointerdown="startResize"
+    />
   </section>
 </template>
 
@@ -261,6 +281,10 @@ onUnmounted(() => {
   color: #243040;
   box-shadow: 0 18px 48px rgba(15, 23, 42, 0.22);
   backdrop-filter: blur(16px);
+}
+
+.fish-reader-float--immersive {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .fish-reader-float--day {
@@ -353,6 +377,11 @@ onUnmounted(() => {
   overflow: auto;
   padding: 18px 20px 24px;
   scroll-behavior: smooth;
+}
+
+.fish-reader-float--immersive .fish-reader-float__content {
+  padding-top: 22px;
+  padding-bottom: 22px;
 }
 
 .fish-reader-float__content--indent p {
