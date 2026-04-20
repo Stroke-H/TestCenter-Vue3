@@ -316,29 +316,14 @@ const perfTools = ref<ToolDef[]>([
           </div>
         </div>
 
-        <!-- Node Skillify Tool -->
-        <div class="tool-card">
-          <div class="tool-card__top">
-            <div class="tool-card__icon" style="background: rgba(99, 102, 241, 0.1)">
-              <el-icon :size="20" color="#6366f1"><component :is="Icons.MagicStick" /></el-icon>
-            </div>
-          </div>
-          <h3 class="tool-card__name">节点Skill化工具</h3>
-          <p class="tool-card__desc">自动化将测试节点转化为可重用的原子 Skill 组件</p>
-          <div class="tool-card__footer">
-            <span class="ready-text">V1.0</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/skillify')">打开</a>
-          </div>
-        </div>
-
         <div class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(16, 185, 129, 0.12)">
               <el-icon :size="20" color="#10b981"><component :is="Icons.User" /></el-icon>
             </div>
           </div>
-          <h3 class="tool-card__name">沙盒账号管理</h3>
-          <p class="tool-card__desc">集中查看与管理测试流程中使用的沙盒账号卡片</p>
+          <h3 class="tool-card__name">测试账号管理</h3>
+          <p class="tool-card__desc">集中查看与管理测试流程中使用的沙盒账号与数说测试账号</p>
           <div class="tool-card__footer">
             <span class="ready-text">V0.1</span>
             <a href="#" class="open-link" @click.prevent="router.push('/sandbox_accounts')">打开</a>
@@ -387,18 +372,18 @@ const perfTools = ref<ToolDef[]>([
             <a href="#" class="open-link" @click.prevent="router.push('/testcase_gen')">打开</a>
           </div>
         </div>
-        <!-- Existng Jungle Chess Card -->
+
         <div class="tool-card">
           <div class="tool-card__top">
-            <div class="tool-card__icon" style="background: rgba(139, 92, 246, 0.1)">
-              <el-icon :size="20" color="#8b5cf6"><component :is="Icons.Grid" /></el-icon>
+            <div class="tool-card__icon" style="background: rgba(99, 102, 241, 0.1)">
+              <el-icon :size="20" color="#6366f1"><component :is="Icons.MagicStick" /></el-icon>
             </div>
           </div>
-          <h3 class="tool-card__name">斗兽棋</h3>
-          <p class="tool-card__desc">休闲类游戏自动化策略验证（实验性功能）</p>
+          <h3 class="tool-card__name">节点Skill化工具</h3>
+          <p class="tool-card__desc">自动化将测试节点转化为可重用的原子 Skill 组件</p>
           <div class="tool-card__footer">
-            <span class="ready-text">V0.1-Beta</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/ui_auto_jungle')">打开</a>
+            <span class="ready-text">V1.0</span>
+            <a href="#" class="open-link" @click.prevent="router.push('/skillify')">打开</a>
           </div>
         </div>
       </div>
@@ -433,6 +418,48 @@ const perfTools = ref<ToolDef[]>([
           <div class="tool-card__footer">
             <span class="extra-text">{{ tool.statusText }}</span>
             <a href="#" class="open-link" @click.prevent="handleLaunch(tool)">打开</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== Other Extensions ========== -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title-row">
+          <div class="section-icon section-icon--teal">
+            <el-icon :size="14"><component :is="Icons.Grid" /></el-icon>
+          </div>
+          <h2 class="section-title">其他拓展</h2>
+        </div>
+      </div>
+
+      <div class="card-grid card-grid--4">
+        <div class="tool-card">
+          <div class="tool-card__top">
+            <div class="tool-card__icon" style="background: rgba(20, 184, 166, 0.12)">
+              <el-icon :size="20" color="#14b8a6"><component :is="Icons.Grid" /></el-icon>
+            </div>
+          </div>
+          <h3 class="tool-card__name">斗兽棋</h3>
+          <p class="tool-card__desc">休闲类游戏自动化策略验证（实验性功能）</p>
+          <div class="tool-card__footer">
+            <span class="ready-text">V0.1-Beta</span>
+            <a href="#" class="open-link" @click.prevent="router.push('/ui_auto_jungle')">打开</a>
+          </div>
+        </div>
+
+        <div class="tool-card">
+          <div class="tool-card__top">
+            <div class="tool-card__icon" style="background: rgba(20, 184, 166, 0.12)">
+              <el-icon :size="20" color="#0f766e"><component :is="Icons.Reading" /></el-icon>
+            </div>
+          </div>
+          <h3 class="tool-card__name">小说阅读器</h3>
+          <p class="tool-card__desc">打开本地 TXT 小说，自动解析章节并进入沉浸式阅读</p>
+          <div class="tool-card__footer">
+            <span class="ready-text">本地可用</span>
+            <a href="#" class="open-link" @click.prevent="router.push('/novel_reader')">打开</a>
           </div>
         </div>
       </div>

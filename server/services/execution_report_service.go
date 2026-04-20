@@ -76,12 +76,21 @@ func AddExecutionReportHandler(c *gin.Context) {
 		return
 	}
 
-	// 由后端生成 ID 和创建时间（如果前端没传）
+	saved, err := AddExecutionReport(r)
+	if err != nil {
+		log.Println("[ERROR] Save exec report failed:", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, saved)
+}
+
+func AddExecutionReport(r ExecutionReport) (ExecutionReport, error) {
 	if r.ID == "" {
 		r.ID = "REP-" + time.Now().Format("20060102150405")
 	}
 	if r.CreatedAt == "" {
-		// 格式化为：2026/03/30 15:42:56 (使用标准补齐格式有利于排序和展示)
 		r.CreatedAt = time.Now().Format("2006/01/02 15:04:05")
 	}
 
@@ -89,23 +98,22 @@ func AddExecutionReportHandler(c *gin.Context) {
 	defer execReportMu.Unlock()
 
 	// 确保 data 目录存在
-	os.MkdirAll("data", 0755)
+	if err := os.MkdirAll("data", 0755); err != nil {
+		return r, err
+	}
 
 	file, err := os.OpenFile(execReportsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		log.Println("[ERROR] Save exec report failed:", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open reports file for writing"})
-		return
+		return r, err
 	}
 	defer file.Close()
 
 	data, _ := json.Marshal(r)
 	if _, err := file.WriteString(string(data) + "\n"); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write report line"})
-		return
+		return r, err
 	}
 
-	c.JSON(http.StatusOK, r)
+	return r, nil
 }
 
 // ClearExecutionReportsHandler 清空所有执行记录

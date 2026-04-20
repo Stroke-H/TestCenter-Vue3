@@ -13,6 +13,7 @@ import {
   Service,
   DataAnalysis,
   Monitor,
+  Notebook,
   UserFilled,
   SwitchButton,
   Collection,
@@ -29,19 +30,33 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 
 import GlobalAssistant from '@/components/GlobalAssistant.vue'
+import FishReaderFloat from '@/views/NovelReader/components/FishReaderFloat.vue'
 
 // 侧边栏宽度：折叠时 64px，展开时 220px
 const sidebarWidth = computed(() => (appStore.sidebarCollapsed ? '64px' : '220px'))
 
 // 当前激活的菜单项
-const activeMenu = computed(() => route.path)
+const activeMenu = computed(() => {
+  if (route.path.startsWith('/testcase_gen')) {
+    return '/testcase_gen/list'
+  }
+  return route.path
+})
 
 // 菜单项配置
 const menuItems = [
   { path: '/dashboard', title: '仪表盘', icon: Odometer },
-  { path: '/reports', title: '测试报告', icon: DataAnalysis },
+  {
+    path: '/report_center',
+    title: '报告中心',
+    icon: DataAnalysis,
+    children: [
+      { path: '/reports', title: '测试报告', icon: DataAnalysis },
+      { path: '/acceptance_reports', title: '验收报告', icon: Monitor },
+      { path: '/testcase_gen/list', title: '用例报告', icon: Notebook }
+    ]
+  },
   { path: '/feishu_assistant', title: '飞书助手', icon: Service },
-  { path: '/acceptance_reports', title: '验收报告', icon: Monitor },
   { 
     path: '/settings', 
     title: '系统设置', 
@@ -176,6 +191,7 @@ const handleLogout = () => {
     </el-container>
 
     <!-- 全局智能助手 -->
+    <FishReaderFloat />
     <GlobalAssistant />
   </el-container>
 </template>
@@ -235,22 +251,40 @@ const handleLogout = () => {
   flex: 1;
 }
 
-.sidebar-menu .el-menu-item {
+.sidebar-menu :deep(.el-menu-item),
+.sidebar-menu :deep(.el-sub-menu__title) {
   height: 48px;
   line-height: 48px;
   margin: 2px 8px;
+  padding: 0 14px !important;
   border-radius: 8px;
   transition: all 0.2s ease;
 }
 
-.sidebar-menu .el-menu-item:hover {
+.sidebar-menu :deep(.el-menu-item:hover),
+.sidebar-menu :deep(.el-sub-menu__title:hover) {
   background: #f1f5f9 !important;
 }
 
-.sidebar-menu .el-menu-item.is-active {
+.sidebar-menu :deep(.el-menu-item.is-active) {
   background: #eef2ff !important;
   color: #3b82f6 !important;
   font-weight: 600;
+}
+
+.sidebar-menu :deep(.el-menu-item .el-icon),
+.sidebar-menu :deep(.el-sub-menu__title .el-icon:first-child) {
+  width: 20px;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.sidebar-menu :deep(.el-sub-menu .el-menu-item) {
+  padding-left: 38px !important;
+}
+
+.sidebar-menu :deep(.el-sub-menu__icon-arrow) {
+  right: 14px;
 }
 
 /* ==================== 顶部导航 ==================== */
@@ -329,6 +363,7 @@ const handleLogout = () => {
   padding: 24px;
   background: #f5f6fa;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 /* ==================== 过渡动画 ==================== */

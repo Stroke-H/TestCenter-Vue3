@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useReportStore } from '@/stores'
+import { useDramaRunStore, useReportStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -18,6 +18,7 @@ const route = useRoute()
 const router = useRouter()
 const reportStore = useReportStore()
 const authStore = useAuthStore()
+const dramaRunStore = useDramaRunStore()
 
 // 从路由参数获取工具信息
 const toolName = ref((route.query.name as string) || '测试剧集是否重复')
@@ -157,7 +158,7 @@ const handleAccountDelete = async (token: string, originalHeaders: Record<string
 const scriptName = isDramaCheck ? 'drama_check_flow.js' : 'episode.js'
 
 // 执行状态
-type ExecStatus = 'Ready' | 'Executing' | 'Stopped' | 'Finished'
+type ExecStatus = 'Ready' | 'Executing' | 'Stopped' | 'Finished' | 'Failed'
 const currentStatus = ref<ExecStatus>('Ready')
 
 // 运行时间控制
@@ -172,6 +173,20 @@ let timer: ReturnType<typeof setInterval> | null = null
 const logs = ref<string[]>(['准备就绪，点击 Execute 开始执行'])
 const logContainer = ref<HTMLElement | null>(null)
 let ws: WebSocket | null = null
+const executionSucceeded = ref(false)
+const executionFailed = ref(false)
+const visibleLogs = computed(() => isDramaCheck ? dramaRunStore.logs : logs.value)
+const visibleReportUrl = computed(() => isDramaCheck ? dramaRunStore.reportUrl : reportUrl.value)
+const visibleDuration = computed(() => isDramaCheck ? dramaRunStore.duration : duration.value)
+const visibleUptime = computed(() => isDramaCheck ? dramaRunStore.uptime : uptime.value)
+const visibleStatus = computed<ExecStatus>(() => {
+  if (!isDramaCheck) return currentStatus.value
+  if (dramaRunStore.status === 'running') return 'Executing'
+  if (dramaRunStore.status === 'done') return 'Finished'
+  if (dramaRunStore.status === 'failed') return 'Failed'
+  if (dramaRunStore.status === 'stopped') return 'Stopped'
+  return currentStatus.value
+})
 
 const formatTime = (seconds: number) => {
   const h = Math.floor(seconds / 3600).toString().padStart(2, '0')
@@ -187,6 +202,10 @@ const scrollToBottom = () => {
     }
   })
 }
+
+watch(visibleLogs, () => {
+  scrollToBottom()
+})
 
 // 新增：URL 校验函数
 const isValidUrl = (url: string) => {
@@ -301,6 +320,8 @@ const startExecution = async () => {
   }
 
   reportUrl.value = '' // 清除上一次的报告
+  executionSucceeded.value = false
+  executionFailed.value = false
   logs.value = []
   logs.value.push(`[${new Date().toLocaleTimeString()}] 准备连接调度引擎...`)
 
@@ -328,6 +349,18 @@ const startExecution = async () => {
     }
 
     const query = new URLSearchParams(params).toString()
+    if (isDramaCheck) {
+      await dramaRunStore.start({
+        email: profile.email,
+        password: profile.password,
+        loginUrl: profile.loginUrl,
+        dramaListUrl: profile.dramaListUrl,
+        toolName: toolName.value,
+        author: authStore.user?.username || 'tester'
+      })
+      return
+    }
+
     ws = new WebSocket(`${wsUrl}?${query}`)
 
     ws.onopen = () => {
@@ -343,6 +376,17 @@ const startExecution = async () => {
 
     ws.onmessage = (event) => {
       const data = event.data
+      if (typeof data === 'string' && data.startsWith('EXECUTION_STATUS:')) {
+        const [, status, reason] = data.split(':')
+        if (status === 'success') {
+          executionSucceeded.value = true
+        } else {
+          executionFailed.value = true
+          logs.value.push(`[ERROR] 执行失败${reason ? `: ${reason}` : ''}`)
+          scrollToBottom()
+        }
+        return
+      }
       // 识别后端发送的报告就绪信号
       if (typeof data === 'string' && data.startsWith('REPORT_READY:')) {
         const reportFile = data.split(':')[1] || ''
@@ -366,19 +410,33 @@ const startExecution = async () => {
     ws.onclose = async () => {
       if (timer) clearInterval(timer)
       if (currentStatus.value === 'Executing') {
+        // K6 类任务必须等后端明确返回成功信号，避免异常关闭时展示旧报告。
+        const reportType = isWebFrontendStressTest ? 'Web 性能分析' : (isDramaCheck ? '业务自动化' : 'K6 压测')
+        if (!isWebFrontendStressTest && (!executionSucceeded.value || executionFailed.value)) {
+          currentStatus.value = 'Failed'
+          logs.value.push(`[${new Date().toLocaleTimeString()}] 任务执行失败，未生成新报告。`)
+          await reportStore.addReport({
+            name: toolName.value,
+            type: reportType,
+            status: 'Failed',
+            duration: formatTime(duration.value),
+            author: authStore.user?.username || 'tester',
+            reportUrl: '',
+            analysisResult: ''
+          })
+          return
+        }
+
         currentStatus.value = 'Finished'
-        
+
         // 如果是 K6 类任务，手动设置报告路径（Lighthouse 类任务由 ws 消息驱动）
-        if (!isWebFrontendStressTest) {
+        if (!isWebFrontendStressTest && !reportUrl.value) {
           const reportFile = isDramaCheck ? 'drama_check_report.html' : 'summary.html'
           const finalReportUrl = `${getBackendHost()}/reports/${reportFile}?t=${Date.now()}`
           reportUrl.value = finalReportUrl
         }
         
         logs.value.push(`[${new Date().toLocaleTimeString()}] 任务执行完成。`)
-
-        // 决定任务类型标签
-        const reportType = isWebFrontendStressTest ? 'Web 性能分析' : (isDramaCheck ? '业务自动化' : 'K6 压测')
 
         // 如果是 Web 性能分析，补充分析逻辑
         if (isWebFrontendStressTest && tempLighthouseFile.value) {
@@ -421,15 +479,23 @@ const startExecution = async () => {
 }
 
 const stopExecution = async () => {
-  if (currentStatus.value !== 'Executing') return
+  if (visibleStatus.value !== 'Executing') return
+
+  if (isDramaCheck) {
+    await dramaRunStore.stop()
+    currentStatus.value = 'Stopped'
+    return
+  }
+
+  currentStatus.value = 'Stopped'
 
   if (ws) {
     ws.close()
     ws = null
   }
   if (timer) clearInterval(timer)
-  
-  if (currentStatus.value === 'Executing') {
+
+  if (!isDramaCheck) {
     await reportStore.addReport({
       name: toolName.value,
       type: isDramaCheck ? '业务自动化' : 'K6 压测',
@@ -439,7 +505,6 @@ const stopExecution = async () => {
     })
   }
 
-  currentStatus.value = 'Stopped'
   logs.value.push(`[${new Date().toLocaleTimeString()}] 手动终止执行。`)
 }
 
@@ -448,7 +513,9 @@ const clearLogs = () => {
 }
 
 const closePage = () => {
-  if (currentStatus.value === 'Executing') {
+  if (isDramaCheck && visibleStatus.value === 'Executing') {
+    dramaRunStore.markBackground()
+  } else if (currentStatus.value === 'Executing') {
     stopExecution()
   }
   router.push('/')
@@ -460,6 +527,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  if (isDramaCheck && visibleStatus.value === 'Executing') {
+    dramaRunStore.markBackground()
+    return
+  }
   if (ws) ws.close()
 })
 </script>
@@ -525,10 +596,10 @@ onUnmounted(() => {
         <!-- 日志顶栏 -->
         <div class="log-header">
           <div class="log-status-info">
-            <span class="dot" :class="{ 'dot-active': currentStatus === 'Executing', 'dot-ready': currentStatus !== 'Executing' }"></span>
-            <span class="status-text">Status: {{ currentStatus }}</span>
+            <span class="dot" :class="{ 'dot-active': visibleStatus === 'Executing', 'dot-ready': visibleStatus !== 'Executing' }"></span>
+            <span class="status-text">Status: {{ visibleStatus }}</span>
             <span class="divider">|</span>
-            <span class="uptime-text">UPTIME: <span class="time-val">{{ formatTime(uptime) }}</span></span>
+            <span class="uptime-text">UPTIME: <span class="time-val">{{ formatTime(visibleUptime) }}</span></span>
           </div>
           <div class="log-actions">
             <el-icon class="action-btn" title="Copy"><CopyDocument /></el-icon>
@@ -540,11 +611,11 @@ onUnmounted(() => {
         </div>
 
         <!-- 两种视图状态：日志 / HTML报告 -->
-        <div v-if="reportUrl" class="report-container">
-          <iframe :src="reportUrl" class="report-iframe" frameborder="0"></iframe>
+        <div v-if="visibleReportUrl" class="report-container">
+          <iframe :src="visibleReportUrl" class="report-iframe" frameborder="0"></iframe>
         </div>
         <div v-else class="log-content" ref="logContainer">
-          <div v-for="(log, idx) in logs" :key="idx" class="log-line">
+          <div v-for="(log, idx) in visibleLogs" :key="idx" class="log-line">
             {{ log }}
           </div>
         </div>
@@ -557,17 +628,17 @@ onUnmounted(() => {
       <div class="bottom-left">
         <div class="stat-item">
           <span class="stat-label">DURATION</span>
-          <span class="stat-value">{{ formatTime(duration) }}</span>
+          <span class="stat-value">{{ formatTime(visibleDuration) }}</span>
         </div>
         <div class="stat-item">
           <span class="stat-label">STATUS</span>
-          <span class="stat-value capitalize">{{ currentStatus.toLowerCase() === 'ready' ? 'Idle' : currentStatus }}</span>
+          <span class="stat-value capitalize">{{ visibleStatus.toLowerCase() === 'ready' ? 'Idle' : visibleStatus }}</span>
         </div>
       </div>
       <div class="bottom-right">
         <button 
           class="btn-stop" 
-          :disabled="currentStatus !== 'Executing'"
+          :disabled="visibleStatus !== 'Executing'"
           @click="stopExecution"
         >
           <el-icon><VideoPause /></el-icon>
@@ -575,7 +646,7 @@ onUnmounted(() => {
         </button>
         <button 
           class="btn-execute" 
-          :disabled="currentStatus === 'Executing'"
+          :disabled="visibleStatus === 'Executing'"
           @click="startExecution"
         >
           <el-icon><VideoPlay /></el-icon>

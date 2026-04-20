@@ -35,6 +35,10 @@ func main() {
 	{
 		// WebSocket endpoint for streaming K6 execution
 		api.GET("/ws/k6", services.RunK6TestHandler)
+		api.GET("/ws/drama-run", services.SubscribeDramaRunHandler)
+		api.GET("/drama-runs/current", services.CurrentDramaRunHandler)
+		api.POST("/drama-runs/start", services.StartDramaRunHandler)
+		api.POST("/drama-runs/stop", services.StopDramaRunHandler)
 		// WebSocket endpoint for Lighthouse execution
 		api.GET("/ws/lighthouse", services.RunLighthouseHandler)
 		// WebSocket endpoint for Playwright execution
@@ -120,6 +124,14 @@ func main() {
 			execReports.DELETE("", services.ClearExecutionReportsHandler)
 		}
 
+		// Scheduled Tasks
+		scheduledTasks := api.Group("/scheduled-tasks")
+		{
+			scheduledTasks.GET("", services.ListScheduledTasksHandler)
+			scheduledTasks.POST("", services.CreateScheduledTaskHandler)
+			scheduledTasks.PUT("/:id", services.UpdateScheduledTaskHandler)
+		}
+
 		// Playwright UI Automation
 		playwright := api.Group("/playwright")
 		{
@@ -170,6 +182,7 @@ func main() {
 
 	// Initialize Feishu Bot Bridge
 	feishu.InitFeishuBridge(r)
+	services.InitScheduledTaskService()
 
 	log.Println("TestCenter Go Backend starting on :8080")
 	if err := r.Run(":8080"); err != nil {
