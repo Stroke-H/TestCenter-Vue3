@@ -17,15 +17,14 @@ import (
 func InitFeishuBridge(r *gin.Engine) {
 	// 1. Load Config
 	config, err := model.LoadConfig("data/feishu_config.json")
-	model.LoadAIConfig() // Load DeepSeek configuration
+	model.LoadAIConfig() // Load AI provider configuration
 	if err != nil {
 		log.Printf("[Feishu] Failed to load config: %v. Module skipped.\n", err)
 		return
 	}
 	model.GlobalFeishuConfig = config
-	model.LoadTestPhones() // Initialize migrated phone data
-    service.InitMCPClient() // Initialize MCP Client
-
+	model.LoadTestPhones()  // Initialize migrated phone data
+	service.InitMCPClient() // Initialize MCP Client
 
 	if config.AppID == "" || config.AppSecret == "" {
 		log.Println("[Feishu] AppID or AppSecret is empty. Please check data/feishu_config.json")

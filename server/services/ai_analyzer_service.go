@@ -59,10 +59,10 @@ func AnalyzeLighthouseHandler(c *gin.Context) {
 		return
 	}
 
-	analysisResult, err := analyzeWithDeepSeek(c.Request.Context(), summary)
+	analysisResult, err := analyzeWithAI(c.Request.Context(), summary)
 	if err != nil {
-		log.Printf("[ERROR] DeepSeek analysis failed: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("DeepSeek analysis failed: %v", err)})
+		log.Printf("[ERROR] AI analysis failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("AI analysis failed: %v", err)})
 		return
 	}
 
@@ -128,14 +128,15 @@ func extractLighthouseSummary(data []byte) (*LighthouseSummary, error) {
 	return summary, nil
 }
 
-func analyzeWithDeepSeek(ctx context.Context, summary *LighthouseSummary) (string, error) {
+func analyzeWithAI(ctx context.Context, summary *LighthouseSummary) (string, error) {
 	config := model.GlobalAIConfig
 	if config == nil {
 		config = model.LoadAIConfig()
 	}
 
-	if config == nil || strings.TrimSpace(config.APIKey) == "" {
-		return "", fmt.Errorf("DeepSeek API Key 未配置")
+	providers := config.EffectiveProviders()
+	if config == nil || len(providers) == 0 {
+		return "", fmt.Errorf("AI API Key 未配置")
 	}
 
 	summaryJSON, err := json.MarshalIndent(summary, "", "  ")
@@ -143,18 +144,14 @@ func analyzeWithDeepSeek(ctx context.Context, summary *LighthouseSummary) (strin
 		return "", err
 	}
 
-	clientConfig := openai.DefaultConfig(config.APIKey)
-	clientConfig.BaseURL = config.BaseURL
-	clientConfig.HTTPClient = &http.Client{
+	httpClient := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
 		},
 		Timeout: 90 * time.Second,
 	}
 
-	client := openai.NewClientWithConfig(clientConfig)
 	req := openai.ChatCompletionRequest{
-		Model: config.Model,
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role: openai.ChatMessageRoleSystem,
@@ -172,17 +169,31 @@ func analyzeWithDeepSeek(ctx context.Context, summary *LighthouseSummary) (strin
 		Temperature: 0.2,
 	}
 
-	resp, err := client.CreateChatCompletion(ctx, req)
-	if err != nil {
-		return "", err
+	var resp openai.ChatCompletionResponse
+	var apiErr error
+	for _, provider := range providers {
+		clientConfig := openai.DefaultConfig(provider.APIKey)
+		clientConfig.BaseURL = provider.BaseURL
+		clientConfig.HTTPClient = httpClient
+		client := openai.NewClientWithConfig(clientConfig)
+		req.Model = provider.Model
+
+		resp, apiErr = client.CreateChatCompletion(ctx, req)
+		if apiErr == nil {
+			break
+		}
+		log.Printf("[AI Analyzer] %s provider failed, trying next AI provider if available: %v", provider.Name, apiErr)
+	}
+	if apiErr != nil {
+		return "", apiErr
 	}
 	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("DeepSeek returned no choices")
+		return "", fmt.Errorf("AI returned no choices")
 	}
 
 	result := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if result == "" {
-		return "", fmt.Errorf("DeepSeek returned empty analysis")
+		return "", fmt.Errorf("AI returned empty analysis")
 	}
 
 	return result, nil

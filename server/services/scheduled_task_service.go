@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -347,67 +346,19 @@ func updateScheduledTaskAfterRun(task ScheduledTask, runAt time.Time, result str
 func loadScheduledTasks() ([]ScheduledTask, error) {
 	scheduledTaskMu.Lock()
 	defer scheduledTaskMu.Unlock()
-	return readScheduledTasksUnlocked()
+	return sqlListJSON[ScheduledTask]("scheduled_tasks", "`migrated_at` ASC")
 }
 
 func appendScheduledTask(task ScheduledTask) error {
 	scheduledTaskMu.Lock()
 	defer scheduledTaskMu.Unlock()
-
-	if err := os.MkdirAll("data", 0755); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(scheduledTasksFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	data, _ := json.Marshal(task)
-	_, err = file.WriteString(string(data) + "\n")
-	return err
+	return sqlUpsertJSON("scheduled_tasks", task)
 }
 
 func saveScheduledTasks(tasks []ScheduledTask) error {
 	scheduledTaskMu.Lock()
 	defer scheduledTaskMu.Unlock()
-
-	if err := os.MkdirAll("data", 0755); err != nil {
-		return err
-	}
-	file, err := os.Create(scheduledTasksFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	writer := bufio.NewWriter(file)
-	for _, task := range tasks {
-		data, _ := json.Marshal(task)
-		if _, err := writer.WriteString(string(data) + "\n"); err != nil {
-			return err
-		}
-	}
-	return writer.Flush()
-}
-
-func readScheduledTasksUnlocked() ([]ScheduledTask, error) {
-	file, err := os.Open(scheduledTasksFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []ScheduledTask{}, nil
-		}
-		return nil, err
-	}
-	defer file.Close()
-
-	var tasks []ScheduledTask
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var task ScheduledTask
-		if err := json.Unmarshal(scanner.Bytes(), &task); err == nil {
-			tasks = append(tasks, task)
-		}
-	}
-	return tasks, scanner.Err()
+	return sqlReplaceAllJSON("scheduled_tasks", tasks)
 }
 
 func parseScheduledTime(value string) (time.Time, error) {

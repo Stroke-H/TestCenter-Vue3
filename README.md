@@ -34,7 +34,7 @@
 - **前端**: Vue 3 (Composition API), Pinia, Element Plus, Vite, TypeScript.
 - **后端**: Go (Gin Framework), WebSocket (Real-time Streaming).
 - **AI**: DeepSeek/OpenAI 兼容协议接入, 专用会话管理系统.
-- **数据层**: JSONL 轻量化持久化方案, 支持 Git 备份与审计。
+- **数据层**: JSONL 轻量化持久化方案, 预留 MySQL 连接池与健康检查框架，支持后续平滑迁移。
 
 ---
 
@@ -65,6 +65,13 @@ TestCenter_Vue3/
    ./start.sh
    ```
    该脚本会自动并行拉起 5173 (Vue) 和 8080 (Go) 两个核心服务。
+
+### MySQL 连接配置
+
+后端已预留统一的 MySQL 接入框架，默认连接写在 `server/data/database_config.json`，环境变量可覆盖默认值。
+
+启动后可通过 `GET /api/database/config` 查看脱敏配置，通过 `GET /api/database/health` 检查连接池和数据库连通性。
+JSONL 到 MySQL 的一次性迁移已完成，历史迁移脚本已归档到 `平台功能测试文件管理/mysql-jsonl-migration/`。
 
 ---
 

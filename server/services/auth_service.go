@@ -1,14 +1,11 @@
 package services
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -61,7 +58,6 @@ type AccountUpdateRequest struct {
 // --- Service Logic ---
 
 var (
-	userFile = "data/users.jsonl"
 	userLock sync.RWMutex
 )
 
@@ -119,15 +115,7 @@ func RegisterUser(username, nickname, password string) (*User, error) {
 		CreatedAt:    time.Now().Format(time.RFC3339),
 	}
 
-	// Save to JSONL
-	f, err := os.OpenFile(userFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	b, _ := json.Marshal(user)
-	if _, err := f.Write(append(b, '\n')); err != nil {
+	if err := sqlUpsertJSON("testers", user); err != nil {
 		return nil, err
 	}
 
@@ -171,7 +159,7 @@ func verifyLegacyHash(pwhash, password string) bool {
 		fmt.Sscanf(algoParts[1], "%d", &n)
 		fmt.Sscanf(algoParts[2], "%d", &r)
 		fmt.Sscanf(algoParts[3], "%d", &p)
-		
+
 		var err error
 		// FIX: Use 64 bytes instead of 32 for legacy scrypt hashes
 		actualHash, err = scrypt.Key([]byte(password), []byte(salt), n, r, p, 64)
@@ -187,23 +175,15 @@ func verifyLegacyHash(pwhash, password string) bool {
 }
 
 func findUserByIdentifier(identifier string) (*User, error) {
-	f, err := os.Open(userFile)
+	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
 	identifier = strings.ToLower(identifier)
-	for scanner.Scan() {
-		var user User
-		if err := json.Unmarshal(scanner.Bytes(), &user); err == nil {
-			if strings.ToLower(user.Username) == identifier || strings.ToLower(user.Email) == identifier {
-				return &user, nil
-			}
+	for i := range users {
+		user := &users[i]
+		if strings.ToLower(user.Username) == identifier || strings.ToLower(user.Email) == identifier {
+			return user, nil
 		}
 	}
 	return nil, nil
@@ -214,19 +194,13 @@ func GetUserByID(id string) (*User, error) {
 	userLock.RLock()
 	defer userLock.RUnlock()
 
-	f, err := os.Open(userFile)
+	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var u User
-		if err := json.Unmarshal(scanner.Bytes(), &u); err == nil {
-			if u.ID == id {
-				return &u, nil
-			}
+	for i := range users {
+		if users[i].ID == id {
+			return &users[i], nil
 		}
 	}
 	return nil, errors.New("用户不存在")
@@ -237,32 +211,22 @@ func ListAccountProfiles() ([]AccountProfile, error) {
 	userLock.RLock()
 	defer userLock.RUnlock()
 
-	f, err := os.Open(userFile)
+	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []AccountProfile{}, nil
-		}
 		return nil, err
 	}
-	defer f.Close()
-
 	profiles := make([]AccountProfile, 0)
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var user User
-		if err := json.Unmarshal(scanner.Bytes(), &user); err == nil {
-			profiles = append(profiles, AccountProfile{
-				ID:           user.ID,
-				Username:     user.Username,
-				Nickname:     user.Nickname,
-				Email:        user.Email,
-				CreatedAt:    user.CreatedAt,
-				FeishuOpenID: user.FeishuOpenID,
-			})
-		}
+	for _, user := range users {
+		profiles = append(profiles, AccountProfile{
+			ID:           user.ID,
+			Username:     user.Username,
+			Nickname:     user.Nickname,
+			Email:        user.Email,
+			CreatedAt:    user.CreatedAt,
+			FeishuOpenID: user.FeishuOpenID,
+		})
 	}
-
-	return profiles, scanner.Err()
+	return profiles, nil
 }
 
 // UpdateAccountProfile updates editable account fields while preserving login credentials.
@@ -270,47 +234,24 @@ func UpdateAccountProfile(req AccountUpdateRequest) (*AccountProfile, error) {
 	userLock.Lock()
 	defer userLock.Unlock()
 
-	f, err := os.Open(userFile)
+	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	users := make([]User, 0)
 	updatedIndex := -1
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var user User
-		if err := json.Unmarshal(scanner.Bytes(), &user); err == nil {
-			if user.ID == req.ID {
-				user.Nickname = req.Nickname
-				user.Email = req.Email
-				updatedIndex = len(users)
-			}
-			users = append(users, user)
+	for i := range users {
+		if users[i].ID == req.ID {
+			users[i].Nickname = req.Nickname
+			users[i].Email = req.Email
+			updatedIndex = i
+			break
 		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
 	if updatedIndex < 0 {
 		return nil, errors.New("用户不存在")
 	}
-
-	file, err := os.Create(userFile)
-	if err != nil {
+	if err := sqlUpsertJSON("testers", users[updatedIndex]); err != nil {
 		return nil, err
-	}
-	defer file.Close()
-
-	for _, user := range users {
-		b, _ := json.Marshal(user)
-		if _, err := file.Write(append(b, '\n')); err != nil {
-			return nil, err
-		}
 	}
 
 	updatedUser := users[updatedIndex]
@@ -329,31 +270,22 @@ func FindUserByFuzzyName(name string) (*User, bool, error) {
 	userLock.RLock()
 	defer userLock.RUnlock()
 
-	f, err := os.Open(userFile)
+	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
 		return nil, false, err
 	}
-	defer f.Close()
-
 	var fuzzyMatch *User
 	target := strings.ToLower(name)
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var u User
-		if err := json.Unmarshal(scanner.Bytes(), &u); err == nil {
-			uname := strings.ToLower(u.Username)
-			uemail := strings.ToLower(u.Email)
-			unick := strings.ToLower(u.Nickname)
-
-			// Exact match priority (Username, Email, or Nickname)
-			if uname == target || uemail == target || unick == target {
-				return &u, true, nil
-			}
-			// Fuzzy match (contains) as fallback
-			if fuzzyMatch == nil && (strings.Contains(uname, target) || strings.Contains(uemail, target) || strings.Contains(unick, target)) {
-				fuzzyMatch = &u
-			}
+	for i := range users {
+		u := &users[i]
+		uname := strings.ToLower(u.Username)
+		uemail := strings.ToLower(u.Email)
+		unick := strings.ToLower(u.Nickname)
+		if uname == target || uemail == target || unick == target {
+			return u, true, nil
+		}
+		if fuzzyMatch == nil && (strings.Contains(uname, target) || strings.Contains(uemail, target) || strings.Contains(unick, target)) {
+			fuzzyMatch = u
 		}
 	}
 
@@ -368,19 +300,13 @@ func FindUserByFeishuOpenID(openID string) (*User, error) {
 	userLock.RLock()
 	defer userLock.RUnlock()
 
-	f, err := os.Open(userFile)
+	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var u User
-		if err := json.Unmarshal(scanner.Bytes(), &u); err == nil {
-			if u.FeishuOpenID == openID {
-				return &u, nil
-			}
+	for i := range users {
+		if users[i].FeishuOpenID == openID {
+			return &users[i], nil
 		}
 	}
 	return nil, nil
@@ -391,43 +317,24 @@ func UpdateUserFeishuOpenID(userID, openID string) error {
 	userLock.Lock()
 	defer userLock.Unlock()
 
-	f, err := os.Open(userFile)
+	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
 		return err
 	}
-
-	var users []User
-	scanner := bufio.NewScanner(f)
 	updated := false
-	for scanner.Scan() {
-		var u User
-		if err := json.Unmarshal(scanner.Bytes(), &u); err == nil {
-			if u.ID == userID {
-				u.FeishuOpenID = openID
-				updated = true
-			}
-			users = append(users, u)
+	var updatedUser User
+	for i := range users {
+		if users[i].ID == userID {
+			users[i].FeishuOpenID = openID
+			updatedUser = users[i]
+			updated = true
+			break
 		}
 	}
-	f.Close()
-
 	if !updated {
 		return errors.New("用户未找到，无法绑定")
 	}
-
-	// Rewrite file
-	wf, err := os.OpenFile(userFile, os.O_TRUNC|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer wf.Close()
-
-	for _, u := range users {
-		b, _ := json.Marshal(u)
-		wf.Write(append(b, '\n'))
-	}
-
-	return nil
+	return sqlUpsertJSON("testers", updatedUser)
 }
 
 // UnbindFeishuOpenID removes a Feishu binding by OpenID
@@ -435,43 +342,24 @@ func UnbindFeishuOpenID(openID string) error {
 	userLock.Lock()
 	defer userLock.Unlock()
 
-	f, err := os.Open(userFile)
+	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
 		return err
 	}
-
-	var users []User
-	scanner := bufio.NewScanner(f)
 	updated := false
-	for scanner.Scan() {
-		var u User
-		if err := json.Unmarshal(scanner.Bytes(), &u); err == nil {
-			if u.FeishuOpenID == openID {
-				u.FeishuOpenID = ""
-				updated = true
-			}
-			users = append(users, u)
+	var updatedUser User
+	for i := range users {
+		if users[i].FeishuOpenID == openID {
+			users[i].FeishuOpenID = ""
+			updatedUser = users[i]
+			updated = true
+			break
 		}
 	}
-	f.Close()
-
 	if !updated {
 		return errors.New("当前飞书用户尚未绑定任何测试账户")
 	}
-
-	// Rewrite file
-	wf, err := os.OpenFile(userFile, os.O_TRUNC|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer wf.Close()
-
-	for _, u := range users {
-		b, _ := json.Marshal(u)
-		wf.Write(append(b, '\n'))
-	}
-
-	return nil
+	return sqlUpsertJSON("testers", updatedUser)
 }
 
 // --- Handlers ---

@@ -1,11 +1,8 @@
 package services
 
 import (
-	"bufio"
-	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -38,26 +35,11 @@ func GetExecutionReportsHandler(c *gin.Context) {
 	execReportMu.Lock()
 	defer execReportMu.Unlock()
 
-	file, err := os.Open(execReportsFile)
+	reports, err := sqlListJSON[ExecutionReport]("execution_reports", "`id` ASC")
 	if err != nil {
-		if os.IsNotExist(err) {
-			// 文件不存在，返回空列表
-			c.JSON(http.StatusOK, []ExecutionReport{})
-			return
-		}
 		log.Println("[ERROR] Open exec reports failed:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open reports file"})
 		return
-	}
-	defer file.Close()
-
-	var reports []ExecutionReport
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var r ExecutionReport
-		if err := json.Unmarshal([]byte(scanner.Text()), &r); err == nil {
-			reports = append(reports, r)
-		}
 	}
 
 	// 精准排序：按 ID 倒序排列 (ID 格式包含 YYYYMMDDHHMMSS，天然支持时间排序)
@@ -97,22 +79,9 @@ func AddExecutionReport(r ExecutionReport) (ExecutionReport, error) {
 	execReportMu.Lock()
 	defer execReportMu.Unlock()
 
-	// 确保 data 目录存在
-	if err := os.MkdirAll("data", 0755); err != nil {
+	if err := sqlUpsertJSON("execution_reports", r); err != nil {
 		return r, err
 	}
-
-	file, err := os.OpenFile(execReportsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return r, err
-	}
-	defer file.Close()
-
-	data, _ := json.Marshal(r)
-	if _, err := file.WriteString(string(data) + "\n"); err != nil {
-		return r, err
-	}
-
 	return r, nil
 }
 
@@ -121,11 +90,7 @@ func ClearExecutionReportsHandler(c *gin.Context) {
 	execReportMu.Lock()
 	defer execReportMu.Unlock()
 
-	if err := os.Truncate(execReportsFile, 0); err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusOK, gin.H{"message": "No reports file to clear"})
-			return
-		}
+	if err := sqlClearJSON("execution_reports"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear reports file"})
 		return
 	}

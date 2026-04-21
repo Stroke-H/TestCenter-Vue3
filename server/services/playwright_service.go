@@ -1,10 +1,7 @@
 package services
 
 import (
-	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"testcenter-server/models"
 	"time"
@@ -25,49 +22,26 @@ var (
 func loadJSONL[T any](path string) ([]T, error) {
 	pwMutex.Lock()
 	defer pwMutex.Unlock()
-
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []T{}, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
-	var items []T
-	decoder := json.NewDecoder(f)
-	for decoder.More() {
-		var item T
-		if err := decoder.Decode(&item); err == nil {
-			items = append(items, item)
-		}
-	}
-	return items, nil
+	return sqlListJSON[T](playwrightTableForPath(path), "`migrated_at` ASC")
 }
 
 func saveAllJSONL[T any](path string, items []T) error {
 	pwMutex.Lock()
 	defer pwMutex.Unlock()
+	return sqlReplaceAllJSON(playwrightTableForPath(path), items)
+}
 
-	dir := filepath.Dir(path)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		_ = os.MkdirAll(dir, 0755)
+func playwrightTableForPath(path string) string {
+	switch path {
+	case suiteLogPath:
+		return "pw_suites"
+	case caseLogPath:
+		return "pw_cases"
+	case keywordLogPath:
+		return "pw_keywords"
+	default:
+		return path
 	}
-
-	f, err := os.OpenFile(path, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	encoder := json.NewEncoder(f)
-	for _, item := range items {
-		if err := encoder.Encode(item); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // --- Suite Handlers ---

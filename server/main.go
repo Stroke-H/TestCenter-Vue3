@@ -68,6 +68,13 @@ func main() {
 			configGroup.PUT("/sandbox-accounts/:id", services.UpdateSandboxAccountHandler)
 		}
 
+		// Database Infrastructure
+		databaseGroup := api.Group("/database")
+		{
+			databaseGroup.GET("/config", services.GetDatabaseConfigHandler)
+			databaseGroup.GET("/health", services.GetDatabaseHealthHandler)
+		}
+
 		// Mind Map Processes
 		services.EnsureDataDir()
 		processes := api.Group("/processes")

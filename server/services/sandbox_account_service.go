@@ -1,10 +1,7 @@
 package services
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -30,11 +27,6 @@ var defaultSandboxAccounts = []models.SandboxAccount{
 func migrateDataqaProjectCodes() error {
 	sandboxAccountsLock.Lock()
 	defer sandboxAccountsLock.Unlock()
-
-	if err := ensureSandboxAccountsFile(); err != nil {
-		return err
-	}
-
 	accounts, err := readSandboxAccountsUnlocked()
 	if err != nil {
 		return err
@@ -58,58 +50,35 @@ func migrateDataqaProjectCodes() error {
 }
 
 func ensureSandboxAccountsFile() error {
-	if _, err := os.Stat(sandboxAccountsFile); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-
-	file, err := os.Create(sandboxAccountsFile)
+	accounts, err := sqlListJSON[models.SandboxAccount]("sandbox_accounts", "`migrated_at` ASC")
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
+	if len(accounts) > 0 {
+		return nil
+	}
 	now := time.Now().Format(time.RFC3339)
+	seed := make([]models.SandboxAccount, 0, len(defaultSandboxAccounts))
 	for _, account := range defaultSandboxAccounts {
 		if account.CreatedAt == "" {
 			account.CreatedAt = now
 		}
-		line, err := json.Marshal(account)
-		if err != nil {
-			continue
-		}
-		if _, err := writer.WriteString(string(line) + "\n"); err != nil {
-			return err
-		}
+		seed = append(seed, account)
 	}
-	return writer.Flush()
+	return sqlReplaceAllJSON("sandbox_accounts", seed)
 }
 
 func readSandboxAccountsUnlocked() ([]models.SandboxAccount, error) {
-	file, err := os.Open(sandboxAccountsFile)
+	accounts, err := sqlListJSON[models.SandboxAccount]("sandbox_accounts", "`migrated_at` ASC")
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-
-	var accounts []models.SandboxAccount
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		var account models.SandboxAccount
-		if err := json.Unmarshal([]byte(line), &account); err == nil {
-			if account.AccountType == "" {
-				account.AccountType = "sandbox"
-			}
-			accounts = append(accounts, account)
+	for i := range accounts {
+		if accounts[i].AccountType == "" {
+			accounts[i].AccountType = "sandbox"
 		}
 	}
-	return accounts, scanner.Err()
+	return accounts, nil
 }
 
 func ListSandboxAccounts() ([]models.SandboxAccount, error) {
@@ -128,23 +97,7 @@ func ListSandboxAccounts() ([]models.SandboxAccount, error) {
 }
 
 func saveSandboxAccounts(accounts []models.SandboxAccount) error {
-	file, err := os.Create(sandboxAccountsFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	for _, account := range accounts {
-		line, err := json.Marshal(account)
-		if err != nil {
-			continue
-		}
-		if _, err := writer.WriteString(string(line) + "\n"); err != nil {
-			return err
-		}
-	}
-	return writer.Flush()
+	return sqlReplaceAllJSON("sandbox_accounts", accounts)
 }
 
 func CreateSandboxAccount(account models.SandboxAccount) (*models.SandboxAccount, error) {

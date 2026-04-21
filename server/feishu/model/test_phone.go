@@ -1,9 +1,10 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
-	"os"
 	"sync"
+	"testcenter-server/database"
 	"time"
 )
 
@@ -40,19 +41,12 @@ func AddTestPhone(phone TestPhone) error {
 	}
 
 	testPhones = append(testPhones, phone)
-	return saveTestPhones()
+	return upsertTestPhone(phone)
 }
 
 func saveTestPhones() error {
-	file, err := os.Create(testPhonesFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
 	for _, p := range testPhones {
-		if err := encoder.Encode(p); err != nil {
+		if err := upsertTestPhone(p); err != nil {
 			return err
 		}
 	}
@@ -60,27 +54,64 @@ func saveTestPhones() error {
 }
 
 func LoadTestPhones() error {
-	file, err := os.Open(testPhonesFile)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	db, _, err := database.NewManager().DB(ctx)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
-	defer file.Close()
+	rows, err := db.QueryContext(ctx, "SELECT `raw_json` FROM `test_phones` ORDER BY `migrated_at` ASC")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
 
 	var loaded []TestPhone
-	decoder := json.NewDecoder(file)
-	for decoder.More() {
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return err
+		}
 		var p TestPhone
-		if err := decoder.Decode(&p); err != nil {
+		if err := json.Unmarshal(raw, &p); err != nil {
 			return err
 		}
 		loaded = append(loaded, p)
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 
 	testPhonesLock.Lock()
 	testPhones = loaded
 	testPhonesLock.Unlock()
 	return nil
+}
+
+func upsertTestPhone(phone TestPhone) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	db, _, err := database.NewManager().DB(ctx)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(phone)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO test_phones (id, device_name, os, model, allowed_app, created_at, raw_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			device_name = VALUES(device_name),
+			os = VALUES(os),
+			model = VALUES(model),
+			allowed_app = VALUES(allowed_app),
+			created_at = VALUES(created_at),
+			raw_json = VALUES(raw_json),
+			migrated_at = CURRENT_TIMESTAMP
+	`, phone.ID, phone.DeviceName, phone.OS, phone.Model, phone.AllowedApp, phone.CreatedAt, string(raw))
+	return err
 }

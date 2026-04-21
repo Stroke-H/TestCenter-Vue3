@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -73,14 +72,9 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 	// Prettified JSON log for verification
 	log.Println(larkcore.Prettify(stdMsg))
 
-	// Write to file for visibility
-	if b, err := json.Marshal(stdMsg); err == nil {
-		f, _ := os.OpenFile("data/feishu_messages.jsonl", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if f != nil {
-			f.Write(b)
-			f.WriteString("\n")
-			f.Close()
-		}
+	// Persist standardized message for audit and later trace enrichment.
+	if err := services.SQLUpsertJSONForFeishu("feishu_messages", stdMsg); err != nil {
+		log.Printf("[Feishu] persist standardized message failed: %v", err)
 	}
 
 	// 0. Handle Multi-turn Confirmation States
@@ -88,7 +82,7 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 
 	if stdMsg.ChatType == "group" {
 		cleanContent := stripAllMentions(stdMsg)
-		isTriggered := hasBotMention(stdMsg) || IsDTeacherMode(cleanContent)
+		isTriggered := hasBotMention(stdMsg) || IsDTeacherMode(cleanContent) || IsUnlockMode(cleanContent)
 		if isTriggered {
 			session.ActivateGroupConversation(stdMsg.SenderID, 2)
 			session.ConsumeGroupConversationTurn()
@@ -219,9 +213,9 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 						}
 					}
 				}
-				
+
 				aiResponse := ProcessChat(ctx, stdMsg.ChatID, stdMsg.SenderID, cleanContent)
-				
+
 				if cli != nil && reactionId != nil {
 					cli.Im.MessageReaction.Delete(context.Background(), larkim.NewDeleteMessageReactionReqBuilder().
 						MessageId(stdMsg.MsgID).

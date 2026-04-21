@@ -1,11 +1,7 @@
 package service
 
 import (
-	"bufio"
-	"encoding/json"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testcenter-server/feishu/model"
@@ -24,30 +20,10 @@ var (
 func AddOperationLog(op model.AIOperationLog) error {
 	logMutex.Lock()
 	defer logMutex.Unlock()
-
-	// Ensure directory exists
-	dir := filepath.Dir(logPath)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		_ = os.MkdirAll(dir, 0755)
-	}
-
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
+	if err := services.SQLUpsertJSONForFeishu("ai_operation_logs", op); err != nil {
 		log.Printf("[AI Logger] Failed to open log file: %v", err)
 		return err
 	}
-	defer f.Close()
-
-	data, err := json.Marshal(op)
-	if err != nil {
-		return err
-	}
-
-	if _, err := f.Write(data); err != nil {
-		return err
-	}
-	_, _ = f.WriteString("\n")
-
 	return nil
 }
 
@@ -56,22 +32,9 @@ func GetOperationLogs() ([]model.AIOperationLog, error) {
 	logMutex.Lock()
 	defer logMutex.Unlock()
 
-	f, err := os.Open(logPath)
+	logs, err := services.SQLListJSONForFeishu[model.AIOperationLog]("ai_operation_logs", "`migrated_at` ASC")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []model.AIOperationLog{}, nil
-		}
 		return nil, err
-	}
-	defer f.Close()
-
-	var logs []model.AIOperationLog
-	decoder := json.NewDecoder(f)
-	for decoder.More() {
-		var l model.AIOperationLog
-		if err := decoder.Decode(&l); err == nil {
-			logs = append(logs, l)
-		}
 	}
 
 	enrichLegacyDeleteOperationLogs(logs)
@@ -133,25 +96,13 @@ func enrichLegacyDeleteOperationLogs(logs []model.AIOperationLog) {
 }
 
 func loadDeleteRequestTraces() []deleteRequestTrace {
-	f, err := os.Open("data/feishu_messages.jsonl")
+	messages, err := services.SQLListJSONForFeishu[model.StandardizedMessage]("feishu_messages", "`migrated_at` ASC")
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
-
-	type feishuMessage struct {
-		SenderID  string `json:"sender_id"`
-		Content   string `json:"content"`
-		Timestamp int64  `json:"timestamp"`
-	}
 
 	var traces []deleteRequestTrace
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var msg feishuMessage
-		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
-			continue
-		}
+	for _, msg := range messages {
 		if msg.Timestamp == 0 {
 			continue
 		}
@@ -192,27 +143,5 @@ func findNearestDeleteTraceBefore(traces []deleteRequestTrace, operationTime tim
 func SaveChatSession(session model.AIChatSession) error {
 	logMutex.Lock()
 	defer logMutex.Unlock()
-
-	dir := filepath.Dir(chatLogPath)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		_ = os.MkdirAll(dir, 0755)
-	}
-
-	f, err := os.OpenFile(chatLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	data, err := json.Marshal(session)
-	if err != nil {
-		return err
-	}
-
-	if _, err := f.Write(data); err != nil {
-		return err
-	}
-	_, _ = f.WriteString("\n")
-
-	return nil
+	return services.SQLUpsertJSONForFeishu("ai_chat_histories", session)
 }

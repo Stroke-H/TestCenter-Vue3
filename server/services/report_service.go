@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -47,51 +45,16 @@ var (
 func SaveAcceptanceReport(report AcceptanceReport) error {
 	reportMutex.Lock()
 	defer reportMutex.Unlock()
-
-	dir := filepath.Dir(reportLogPath)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		_ = os.MkdirAll(dir, 0755)
-	}
-
-	f, err := os.OpenFile(reportLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	data, err := json.Marshal(report)
-	if err != nil {
-		return err
-	}
-
-	if _, err := f.Write(data); err != nil {
-		return err
-	}
-	_, _ = f.WriteString("\n")
-
-	return nil
+	return sqlUpsertJSON("acceptance_reports", report)
 }
 
 func GetAcceptanceReports() ([]AcceptanceReport, error) {
 	reportMutex.Lock()
 	defer reportMutex.Unlock()
 
-	f, err := os.Open(reportLogPath)
+	reports, err := sqlListJSON[AcceptanceReport]("acceptance_reports", "`migrated_at` ASC")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []AcceptanceReport{}, nil
-		}
 		return nil, err
-	}
-	defer f.Close()
-
-	var reports []AcceptanceReport
-	decoder := json.NewDecoder(f)
-	for decoder.More() {
-		var r AcceptanceReport
-		if err := decoder.Decode(&r); err == nil {
-			reports = append(reports, r)
-		}
 	}
 
 	// Reverse to show newest first

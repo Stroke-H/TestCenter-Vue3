@@ -71,6 +71,18 @@ func GetRelaxedSystemPrompt() string {
 		getAcceptanceReportWorkflowPrompt()
 }
 
+func IsUnlockMode(message string) bool {
+	return strings.HasPrefix(strings.TrimSpace(message), "<解限模式>")
+}
+
+func StripUnlockPrefix(message string) string {
+	trimmed := strings.TrimSpace(message)
+	if strings.HasPrefix(trimmed, "<解限模式>") {
+		return strings.TrimSpace(strings.TrimPrefix(trimmed, "<解限模式>"))
+	}
+	return trimmed
+}
+
 func IsDTeacherMode(message string) bool {
 	trimmed := strings.TrimSpace(message)
 	return strings.HasPrefix(trimmed, "D老师，") ||

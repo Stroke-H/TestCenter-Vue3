@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
-	"os"
 	"strings"
 	"testcenter-server/models"
 	"time"
@@ -18,12 +18,12 @@ import (
 
 // ElementData represents a raw clickable element found on a page
 type ElementData struct {
-	Selector     string `json:"selector"`
-	Text         string `json:"text"`
-	TagName      string `json:"tag_name"`
-	Role         string `json:"role"`
-	AriaLabel    string `json:"aria_label"`
-	Placeholder  string `json:"placeholder"`
+	Selector      string `json:"selector"`
+	Text          string `json:"text"`
+	TagName       string `json:"tag_name"`
+	Role          string `json:"role"`
+	AriaLabel     string `json:"aria_label"`
+	Placeholder   string `json:"placeholder"`
 	ParentContext string `json:"parent_context"` // e.g. "header", "footer", "form"
 }
 
@@ -38,7 +38,7 @@ type SkillNode struct {
 
 // ScanResults holds the final output of the scanning process
 type ScanResults struct {
-	URL      string      `json:"url"`
+	URL      string        `json:"url"`
 	Elements []ElementData `json:"elements"`
 }
 
@@ -173,29 +173,22 @@ func (s *SkillifyService) ScanPageElements(targetURL string) (*ScanResults, erro
 	}, nil
 }
 
-// GenerateSkillsWithAI uses DeepSeek to transform elements into Skill nodes
+// GenerateSkillsWithAI uses the configured AI providers to transform elements into Skill nodes.
 func (s *SkillifyService) GenerateSkillsWithAI(elements []ElementData) ([]SkillNode, error) {
 	config := model.GlobalAIConfig
 	if config == nil {
 		config = model.LoadAIConfig()
 	}
 
-	if config == nil || strings.TrimSpace(config.APIKey) == "" {
-		return nil, fmt.Errorf("DeepSeek API Key not configured")
+	providers := config.EffectiveProviders()
+	if config == nil || len(providers) == 0 {
+		return nil, fmt.Errorf("AI API Key not configured")
 	}
 
 	// Prepare data for AI
 	elementsJSON, _ := json.MarshalIndent(elements, "", "  ")
 
-	clientConfig := openai.DefaultConfig(config.APIKey)
-	clientConfig.BaseURL = config.BaseURL
-	clientConfig.HTTPClient = &http.Client{
-		Timeout: 90 * time.Second,
-	}
-
-	client := openai.NewClientWithConfig(clientConfig)
 	req := openai.ChatCompletionRequest{
-		Model: config.Model,
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role: openai.ChatMessageRoleSystem,
@@ -230,7 +223,23 @@ func (s *SkillifyService) GenerateSkillsWithAI(elements []ElementData) ([]SkillN
 		Temperature: 0.3,
 	}
 
-	resp, err := client.CreateChatCompletion(context.Background(), req)
+	var resp openai.ChatCompletionResponse
+	var err error
+	for _, provider := range providers {
+		clientConfig := openai.DefaultConfig(provider.APIKey)
+		clientConfig.BaseURL = provider.BaseURL
+		clientConfig.HTTPClient = &http.Client{
+			Timeout: 90 * time.Second,
+		}
+
+		client := openai.NewClientWithConfig(clientConfig)
+		req.Model = provider.Model
+		resp, err = client.CreateChatCompletion(context.Background(), req)
+		if err == nil {
+			break
+		}
+		log.Printf("[Skillify] %s provider failed, trying next AI provider if available: %v", provider.Name, err)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -260,19 +269,11 @@ func (s *SkillifyService) GenerateSkillsWithAI(elements []ElementData) ([]SkillN
 // SaveSkillsToLibrary persists the Skill nodes as User Keywords
 func (s *SkillifyService) SaveSkillsToLibrary(skills []SkillNode, suiteName string, sourceURL string) error {
 	path := "data/pw_keywords.jsonl"
-	
+
 	// 1. Load existing keywords
-	var existing []models.UserKeyword
-	f, err := os.Open(path)
-	if err == nil {
-		decoder := json.NewDecoder(f)
-		for decoder.More() {
-			var kw models.UserKeyword
-			if err := decoder.Decode(&kw); err == nil {
-				existing = append(existing, kw)
-			}
-		}
-		f.Close()
+	existing, err := loadJSONL[models.UserKeyword](path)
+	if err != nil {
+		return err
 	}
 
 	// 2. Convert SkillNodes to UserKeywords
@@ -280,7 +281,7 @@ func (s *SkillifyService) SaveSkillsToLibrary(skills []SkillNode, suiteName stri
 	for _, skill := range skills {
 		// Create a unique ID if not exists
 		id := "kw-" + strings.ToLower(skill.Name) + "-" + time.Now().Format("05.000") // simple timestamp suffix
-		
+
 		// Map Skill to UserKeyword
 		newKW := models.UserKeyword{
 			ID:          id,
@@ -291,9 +292,9 @@ func (s *SkillifyService) SaveSkillsToLibrary(skills []SkillNode, suiteName stri
 			CreatedAt:   now,
 			Steps: []models.TestStep{
 				{
-					ID:      "step-1",
-					Keyword: skill.Keyword,
-					Args:    skill.Args,
+					ID:          "step-1",
+					Keyword:     skill.Keyword,
+					Args:        skill.Args,
 					Description: fmt.Sprintf("AI Generated Skill: %s", skill.Description),
 				},
 			},
@@ -301,24 +302,6 @@ func (s *SkillifyService) SaveSkillsToLibrary(skills []SkillNode, suiteName stri
 		existing = append(existing, newKW)
 	}
 
-	// 3. Save all back to file
-	dir := "data"
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		_ = os.MkdirAll(dir, 0755)
-	}
-
-	f, err = os.OpenFile(path, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open keywords file: %v", err)
-	}
-	defer f.Close()
-
-	encoder := json.NewEncoder(f)
-	for _, kw := range existing {
-		if err := encoder.Encode(kw); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	// 3. Save all back to SQL
+	return saveAllJSONL(path, existing)
 }

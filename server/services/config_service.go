@@ -1,10 +1,7 @@
 package services
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -30,50 +27,13 @@ func NewConfigService(projectsFile, devicesFile string) *ConfigService {
 func (s *ConfigService) GetAllProjects() ([]models.Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	file, err := os.Open(s.projectsFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []models.Project{}, nil
-		}
-		return nil, err
-	}
-	defer file.Close()
-
-	var projects []models.Project
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		var p models.Project
-		if err := json.Unmarshal([]byte(line), &p); err == nil {
-			projects = append(projects, p)
-		}
-	}
-	return projects, nil
+	return sqlListJSON[models.Project]("projects", "`migrated_at` ASC")
 }
 
 func (s *ConfigService) SaveProjects(projects []models.Project) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	file, err := os.Create(s.projectsFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	for _, p := range projects {
-		line, err := json.Marshal(p)
-		if err != nil {
-			continue
-		}
-		writer.WriteString(string(line) + "\n")
-	}
-	return writer.Flush()
+	return sqlReplaceAllJSON("projects", projects)
 }
 
 // Device Methods
@@ -81,50 +41,13 @@ func (s *ConfigService) SaveProjects(projects []models.Project) error {
 func (s *ConfigService) GetAllDevices() ([]models.Device, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	file, err := os.Open(s.devicesFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []models.Device{}, nil
-		}
-		return nil, err
-	}
-	defer file.Close()
-
-	var devices []models.Device
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			continue
-		}
-		var d models.Device
-		if err := json.Unmarshal([]byte(line), &d); err == nil {
-			devices = append(devices, d)
-		}
-	}
-	return devices, nil
+	return sqlListJSON[models.Device]("test_phones", "`migrated_at` ASC")
 }
 
 func (s *ConfigService) SaveDevices(devices []models.Device) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	file, err := os.Create(s.devicesFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	writer := bufio.NewWriter(file)
-	for _, d := range devices {
-		line, err := json.Marshal(d)
-		if err != nil {
-			continue
-		}
-		writer.WriteString(string(line) + "\n")
-	}
-	return writer.Flush()
+	return sqlReplaceAllJSON("test_phones", devices)
 }
 
 func (s *ConfigService) UpdateProject(updated models.Project) error {

@@ -1,13 +1,11 @@
 package services
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -381,37 +379,23 @@ func ListRecordsHandler(c *gin.Context) {
 	historyLock.RLock()
 	defer historyLock.RUnlock()
 
-	f, err := os.Open(historyFile)
+	recordsData, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusOK, []interface{}{})
-			return
-		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
 		return
 	}
-	defer f.Close()
 
 	var records []gin.H
-	scanner := bufio.NewScanner(f)
-	// 增加缓冲区限制到 10MB，防止大型记录导致解析失败（默认 64KB 对大量用例不足）
-	buf := make([]byte, 10*1024*1024)
-	scanner.Buffer(buf, len(buf))
-
-	for scanner.Scan() {
-		var record models.GenerationRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err == nil {
-			// 仅返回列表需要的摘要信息
-			records = append(records, gin.H{
-				"id":               record.ID,
-				"title":            record.Title,
-				"project_code":     record.ProjectCode,
-				"module":           record.Module,
-				"requirement_text": record.RequirementText,
-				"created_at":       record.CreatedAt,
-				"case_count":       len(record.Cases),
-			})
-		}
+	for _, record := range recordsData {
+		records = append(records, gin.H{
+			"id":               record.ID,
+			"title":            record.Title,
+			"project_code":     record.ProjectCode,
+			"module":           record.Module,
+			"requirement_text": record.RequirementText,
+			"created_at":       record.CreatedAt,
+			"case_count":       len(record.Cases),
+		})
 	}
 
 	// 按时间倒序排列
@@ -433,24 +417,15 @@ func GetRecordHandler(c *gin.Context) {
 	historyLock.RLock()
 	defer historyLock.RUnlock()
 
-	f, err := os.Open(historyFile)
+	records, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
 		return
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 10*1024*1024)
-	scanner.Buffer(buf, len(buf))
-
-	for scanner.Scan() {
-		var record models.GenerationRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err == nil {
-			if record.ID == id {
-				c.JSON(http.StatusOK, record)
-				return
-			}
+	for _, record := range records {
+		if record.ID == id {
+			c.JSON(http.StatusOK, record)
+			return
 		}
 	}
 
@@ -468,27 +443,19 @@ func DownloadRecordHandler(c *gin.Context) {
 	historyLock.RLock()
 	defer historyLock.RUnlock()
 
-	fFile, err := os.Open(historyFile)
+	records, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
 		return
 	}
-	defer fFile.Close()
-
-	scanner := bufio.NewScanner(fFile)
-	buf := make([]byte, 10*1024*1024)
-	scanner.Buffer(buf, len(buf))
 
 	var targetRecord models.GenerationRecord
 	found := false
-	for scanner.Scan() {
-		var record models.GenerationRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err == nil {
-			if record.ID == id {
-				targetRecord = record
-				found = true
-				break
-			}
+	for _, record := range records {
+		if record.ID == id {
+			targetRecord = record
+			found = true
+			break
 		}
 	}
 
@@ -563,16 +530,8 @@ func SaveRecordHandler(c *gin.Context) {
 	historyLock.Lock()
 	defer historyLock.Unlock()
 
-	f, err := os.OpenFile(historyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
+	if err := sqlUpsertJSON("testcase_history", record); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法保存历史记录"})
-		return
-	}
-	defer f.Close()
-
-	b, _ := json.Marshal(record)
-	if _, err := f.Write(append(b, '\n')); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "写入文件失败"})
 		return
 	}
 
@@ -597,30 +556,19 @@ func UpdateRecordHandler(c *gin.Context) {
 	historyLock.Lock()
 	defer historyLock.Unlock()
 
-	f, err := os.Open(historyFile)
+	records, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
 		return
 	}
-	defer f.Close()
-
-	var records []models.GenerationRecord
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 10*1024*1024)
-	scanner.Buffer(buf, len(buf))
 
 	found := false
-	for scanner.Scan() {
-		var record models.GenerationRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err == nil {
-			if record.ID == id {
-				// 替换为更新后的数据，但保留创建时间
-				updatedRecord.CreatedAt = record.CreatedAt
-				records = append(records, updatedRecord)
-				found = true
-				continue
-			}
-			records = append(records, record)
+	for i := range records {
+		if records[i].ID == id {
+			updatedRecord.CreatedAt = records[i].CreatedAt
+			records[i] = updatedRecord
+			found = true
+			break
 		}
 	}
 
@@ -629,17 +577,9 @@ func UpdateRecordHandler(c *gin.Context) {
 		return
 	}
 
-	// 重写文件
-	wf, err := os.Create(historyFile)
-	if err != nil {
+	if err := sqlReplaceAllJSON("testcase_history", records); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法更新历史记录文件"})
 		return
-	}
-	defer wf.Close()
-
-	for _, r := range records {
-		b, _ := json.Marshal(r)
-		wf.Write(append(b, '\n'))
 	}
 
 	c.JSON(http.StatusOK, updatedRecord)
@@ -656,28 +596,20 @@ func DeleteRecordHandler(c *gin.Context) {
 	historyLock.Lock()
 	defer historyLock.Unlock()
 
-	f, err := os.Open(historyFile)
+	records, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
 		return
 	}
-	defer f.Close()
 
-	var records []models.GenerationRecord
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 10*1024*1024)
-	scanner.Buffer(buf, len(buf))
-
+	filtered := make([]models.GenerationRecord, 0, len(records))
 	found := false
-	for scanner.Scan() {
-		var record models.GenerationRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err == nil {
-			if record.ID == id {
-				found = true
-				continue
-			}
-			records = append(records, record)
+	for _, record := range records {
+		if record.ID == id {
+			found = true
+			continue
 		}
+		filtered = append(filtered, record)
 	}
 
 	if !found {
@@ -685,17 +617,9 @@ func DeleteRecordHandler(c *gin.Context) {
 		return
 	}
 
-	// 重写文件
-	wf, err := os.Create(historyFile)
-	if err != nil {
+	if err := sqlReplaceAllJSON("testcase_history", filtered); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法更新历史记录文件"})
 		return
-	}
-	defer wf.Close()
-
-	for _, r := range records {
-		b, _ := json.Marshal(r)
-		wf.Write(append(b, '\n'))
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "已成功删除记录"})
@@ -910,7 +834,8 @@ func callDeepSeek(ctx context.Context, systemPrompt, userPrompt string) (string,
 		config = model.LoadAIConfig()
 	}
 
-	if config == nil || strings.TrimSpace(config.APIKey) == "" {
+	providers := config.EffectiveProviders()
+	if config == nil || len(providers) == 0 {
 		return "", fmt.Errorf("未配置 AI 接口 Key")
 	}
 
@@ -923,13 +848,7 @@ func callDeepSeek(ctx context.Context, systemPrompt, userPrompt string) (string,
 		Timeout:   180 * time.Second,
 	}
 
-	clientConfig := openai.DefaultConfig(config.APIKey)
-	clientConfig.BaseURL = config.BaseURL
-	clientConfig.HTTPClient = httpClient
-	client := openai.NewClientWithConfig(clientConfig)
-
 	req := openai.ChatCompletionRequest{
-		Model: config.Model,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 			{Role: openai.ChatMessageRoleUser, Content: userPrompt},
@@ -940,31 +859,49 @@ func callDeepSeek(ctx context.Context, systemPrompt, userPrompt string) (string,
 
 	var resp openai.ChatCompletionResponse
 	var err error
+	var lastErr error
 	maxRetries := 3
 
-	// 重试逻辑：针对网络抖动导致的 EOF、超时或连接重置进行重试
-	for i := 0; i < maxRetries; i++ {
-		resp, err = client.CreateChatCompletion(ctx, req)
+	for _, provider := range providers {
+		clientConfig := openai.DefaultConfig(provider.APIKey)
+		clientConfig.BaseURL = provider.BaseURL
+		clientConfig.HTTPClient = httpClient
+		client := openai.NewClientWithConfig(clientConfig)
+		req.Model = provider.Model
+
+		// 重试逻辑：针对网络抖动导致的 EOF、超时或连接重置进行重试
+		for i := 0; i < maxRetries; i++ {
+			resp, err = client.CreateChatCompletion(ctx, req)
+			if err == nil {
+				break
+			}
+			lastErr = err
+			log.Printf("[TestCaseGen] %s AI API 异常 (第 %d 次尝试): %v", provider.Name, i+1, err)
+
+			// 检查是否为可重试错误
+			errMsg := strings.ToLower(err.Error())
+			isRetryable := strings.Contains(errMsg, "eof") ||
+				strings.Contains(errMsg, "timeout") ||
+				strings.Contains(errMsg, "connection reset") ||
+				strings.Contains(errMsg, "broken pipe")
+
+			if !isRetryable || i == maxRetries-1 {
+				break
+			}
+			// 指数退避等待
+			time.Sleep(time.Duration(i+1) * time.Second)
+		}
+
 		if err == nil {
 			break
 		}
-		log.Printf("[TestCaseGen] AI API 异常 (第 %d 次尝试): %v", i+1, err)
-
-		// 检查是否为可重试错误
-		errMsg := strings.ToLower(err.Error())
-		isRetryable := strings.Contains(errMsg, "eof") ||
-			strings.Contains(errMsg, "timeout") ||
-			strings.Contains(errMsg, "connection reset") ||
-			strings.Contains(errMsg, "broken pipe")
-
-		if !isRetryable || i == maxRetries-1 {
-			break
-		}
-		// 指数退避等待
-		time.Sleep(time.Duration(i+1) * time.Second)
+		log.Printf("[TestCaseGen] %s provider failed, trying next AI provider if available.", provider.Name)
 	}
 
 	if err != nil {
+		if lastErr != nil {
+			return "", fmt.Errorf("AI 生成请求最终失败: %v", lastErr)
+		}
 		return "", fmt.Errorf("AI 生成请求最终失败: %v", err)
 	}
 
@@ -1467,13 +1404,5 @@ func SaveGenerationRecordCore(record *models.GenerationRecord) error {
 	historyLock.Lock()
 	defer historyLock.Unlock()
 
-	f, err := os.OpenFile(historyFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	b, _ := json.Marshal(record)
-	_, err = f.Write(append(b, '\n'))
-	return err
+	return sqlUpsertJSON("testcase_history", record)
 }
