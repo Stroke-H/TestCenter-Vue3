@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/api/request'
@@ -27,21 +27,19 @@ interface AccountGroup {
 }
 
 const ACCOUNT_TYPE_OPTIONS = [
-  { label: '全部账号', value: 'all' },
   { label: '沙盒账号', value: 'sandbox' },
   { label: '数说测试账号', value: 'dataqa' },
   { label: '真实测试账号', value: 'real' }
 ] as const
 
 type AccountType = 'sandbox' | 'dataqa' | 'real'
-type AccountTypeFilter = 'all' | AccountType
 
 const projects = ref<ProjectItem[]>([])
 const testAccounts = ref<TestAccountItem[]>([])
 const showCreateDialog = ref(false)
 const editingProjectCode = ref('')
-const activeType = ref<AccountTypeFilter>('all')
-const activeProjectFilter = ref('all')
+const activeType = ref<AccountType>('sandbox')
+const activeProjectFilter = ref('')
 
 const showEditDialog = ref(false)
 const editForm = ref({
@@ -65,16 +63,16 @@ const newAccountForm = ref({
 
 const filteredAccounts = computed(() => {
   return testAccounts.value.filter((item) => {
-    const matchType = activeType.value === 'all' || item.account_type === activeType.value
+    const matchType = item.account_type === activeType.value
     const projectKey = item.project_code || 'unassigned'
-    const matchProject = activeProjectFilter.value === 'all' || projectKey === activeProjectFilter.value
+    const matchProject = projectKey === activeProjectFilter.value
     return matchType && matchProject
   })
 })
 
 const typeFilteredAccounts = computed(() => {
   return testAccounts.value.filter((item) => {
-    return activeType.value === 'all' || item.account_type === activeType.value
+    return item.account_type === activeType.value
   })
 })
 
@@ -100,13 +98,7 @@ const projectNavItems = computed(() => {
     counts.set(key, (counts.get(key) || 0) + 1)
   })
 
-  const items = [
-    {
-      key: 'all',
-      label: '全部',
-      count: typeFilteredAccounts.value.length
-    }
-  ]
+  const items: Array<{ key: string; label: string; count: number }> = []
 
   Array.from(counts.entries())
     .sort((a, b) => a[0].localeCompare(b[0]))
@@ -245,7 +237,7 @@ const buildDataqaAccount = (raw: string, overrideColor: string, overrideSystemVe
 
 const resetCreateForm = () => {
   newAccountForm.value = {
-    account_type: activeType.value === 'all' ? 'sandbox' : activeType.value,
+    account_type: activeType.value,
     account: '',
     device_color: '',
     system_version: '',
@@ -253,6 +245,20 @@ const resetCreateForm = () => {
     project_code: ''
   }
 }
+
+watch(
+  projectNavItems,
+  (items) => {
+    if (items.length === 0) {
+      activeProjectFilter.value = ''
+      return
+    }
+    if (!items.some((item) => item.key === activeProjectFilter.value)) {
+      activeProjectFilter.value = items[0]?.key || ''
+    }
+  },
+  { immediate: true }
+)
 
 const resetEditForm = () => {
   editForm.value = {

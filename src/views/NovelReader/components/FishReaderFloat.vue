@@ -96,10 +96,71 @@ function goPage(delta: number) {
   const content = contentRef.value
   if (!content) return
 
-  content.scrollBy({
-    top: delta * content.clientHeight,
+  const targetScrollTop = delta > 0
+    ? getNextPageScrollTop(content)
+    : getPageAlignedScrollTop(content, delta)
+  content.scrollTo({
+    top: targetScrollTop,
     behavior: 'smooth'
   })
+}
+
+function getNextPageScrollTop(content: HTMLElement) {
+  const targetLineOffset = findFirstIncompleteLineOffset(content)
+  if (targetLineOffset === null) {
+    return getPageAlignedScrollTop(content, 1)
+  }
+
+  const maxScrollTop = Math.max(0, content.scrollHeight - content.clientHeight)
+  return clamp(content.scrollTop + targetLineOffset, 0, maxScrollTop)
+}
+
+function findFirstIncompleteLineOffset(content: HTMLElement) {
+  const contentRect = content.getBoundingClientRect()
+  const style = window.getComputedStyle(content)
+  const viewportTop = contentRect.top + parseFloat(style.paddingTop)
+  const viewportBottom = contentRect.bottom - parseFloat(style.paddingBottom)
+  const lineRects = getTextLineRects(content)
+  const incompleteLine = lineRects.find((rect) => rect.bottom > viewportBottom + 0.5 && rect.top > viewportTop + 0.5)
+
+  return incompleteLine ? incompleteLine.top - viewportTop : null
+}
+
+function getTextLineRects(content: HTMLElement) {
+  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT)
+  const range = document.createRange()
+  const rects: DOMRect[] = []
+  let node = walker.nextNode()
+
+  while (node) {
+    if (node.textContent?.trim()) {
+      range.selectNodeContents(node)
+      rects.push(...Array.from(range.getClientRects()))
+    }
+    node = walker.nextNode()
+  }
+
+  range.detach()
+  return rects.sort((a, b) => a.top - b.top || a.left - b.left)
+}
+
+function getPageAlignedScrollTop(content: HTMLElement, delta: number) {
+  const lineHeight = getContentLineHeight(content)
+  const readableHeight = Math.max(lineHeight, content.clientHeight)
+  const fullLineCount = Math.max(1, Math.floor(readableHeight / lineHeight))
+  const pageStep = fullLineCount * lineHeight
+  const maxScrollTop = Math.max(0, content.scrollHeight - content.clientHeight)
+
+  return clamp(content.scrollTop + delta * pageStep, 0, maxScrollTop)
+}
+
+function getContentLineHeight(content: HTMLElement) {
+  const style = window.getComputedStyle(content)
+  const parsedLineHeight = parseFloat(style.lineHeight)
+  if (Number.isFinite(parsedLineHeight)) return parsedLineHeight
+
+  const parsedFontSize = parseFloat(style.fontSize)
+  return Number.isFinite(parsedFontSize) ? parsedFontSize * 1.8 : 28
 }
 
 function toggleControls() {

@@ -5,7 +5,7 @@ import ReaderHome from './components/ReaderHome.vue'
 import { useNovelLibrary } from './composables/useNovelLibrary'
 import type { NovelBook, ReaderSettings, ReadingRecord } from './types'
 import { clearCachedBooks, deleteCachedBook, getCachedBook, saveCachedBook } from './utils/bookCache'
-import { parseNovel, readTextFile } from './utils/novelParser'
+import { isSupportedNovelFile, parseNovel, readTextFile } from './utils/novelParser'
 import type { NovelEncoding } from './utils/novelParser'
 
 defineOptions({ name: 'NovelReader' })
@@ -25,7 +25,7 @@ async function importFile(file: File) {
   error.value = ''
 
   if (!isSupportedFile(file)) {
-    error.value = '暂时只支持 TXT 文本小说。'
+    error.value = '暂时支持 TXT、Markdown、HTML/XML 文本小说和 EPUB 文件。'
     return
   }
 
@@ -113,7 +113,7 @@ async function clearShelf() {
 }
 
 function isSupportedFile(file: File) {
-  return file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt')
+  return isSupportedNovelFile(file)
 }
 </script>
 

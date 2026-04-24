@@ -2,6 +2,7 @@
 import { computed, shallowRef } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
 import type { ReadingRecord } from '../types'
+import { NOVEL_ENCODING_OPTIONS, SUPPORTED_NOVEL_FILE_ACCEPT } from '../utils/novelParser'
 import type { NovelEncoding } from '../utils/novelParser'
 
 const props = defineProps<{
@@ -138,7 +139,7 @@ function selectAllVisible() {
       ref="fileInput"
       class="reader-home__file"
       type="file"
-      accept=".txt,text/plain"
+      :accept="SUPPORTED_NOVEL_FILE_ACCEPT"
       @change="handleFileChange"
     >
 
@@ -260,7 +261,7 @@ function selectAllVisible() {
         <div class="add-panel__header">
           <div>
             <p class="add-panel__eyebrow">添加到书架</p>
-            <h2 class="add-panel__title">{{ loading ? '正在添加...' : '选择本地 TXT 小说' }}</h2>
+            <h2 class="add-panel__title">{{ loading ? '正在添加...' : '选择本地小说文件' }}</h2>
           </div>
           <button class="icon-btn" type="button" @click="addPanelOpen = false">关闭</button>
         </div>
@@ -277,7 +278,7 @@ function selectAllVisible() {
             <el-icon :size="28"><component :is="Icons.UploadFilled" /></el-icon>
           </div>
           <h3 class="import-zone__title">拖入小说文件</h3>
-          <p class="import-zone__text">文件会缓存在当前浏览器，之后可从书架直接打开。</p>
+          <p class="import-zone__text">支持 TXT、Markdown、HTML/XML、EPUB 等常见小说文件，会缓存在当前浏览器。</p>
         </div>
 
         <label class="encoding-select">
@@ -286,9 +287,13 @@ function selectAllVisible() {
             :value="encoding"
             @change="emit('updateEncoding', ($event.target as HTMLSelectElement).value as NovelEncoding)"
           >
-            <option value="auto">自动识别</option>
-            <option value="utf-8">UTF-8</option>
-            <option value="gb18030">GBK / GB18030</option>
+            <option
+              v-for="option in NOVEL_ENCODING_OPTIONS"
+              :key="option.value"
+              :value="option.value"
+            >
+              {{ option.label }}
+            </option>
           </select>
         </label>
       </section>

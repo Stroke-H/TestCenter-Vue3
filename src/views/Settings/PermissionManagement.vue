@@ -10,6 +10,7 @@ const permissionStore = usePermissionStore()
 const loading = shallowRef(false)
 const selectedUserId = shallowRef('')
 const draftPermissions = shallowRef<Record<string, boolean>>({})
+const savingPermissionKey = shallowRef('')
 
 const users = computed(() => permissionStore.permissionList)
 const selectedUser = computed(() => {
@@ -49,28 +50,42 @@ function selectUser(userId: string) {
   syncDraftPermissions()
 }
 
-function togglePermission(permissionKey: string) {
+async function togglePermission(permissionKey: string) {
+  const user = selectedUser.value
+  if (!user || savingPermissionKey.value) {
+    return
+  }
   if (selectedUserIsPermissionAdmin.value && permissionKey === 'settings.permissions.visible') {
     return
   }
-  draftPermissions.value = {
+  const previousPermissions = { ...draftPermissions.value }
+  const nextPermissions = {
     ...draftPermissions.value,
     [permissionKey]: !(draftPermissions.value[permissionKey] !== false)
   }
-}
-
-async function saveCurrentUserPermissions() {
-  if (!selectedUser.value) return
-  const nextPermissions = {
-    ...draftPermissions.value
-  }
   if (selectedUserIsPermissionAdmin.value) {
     nextPermissions['settings.permissions.visible'] = true
-    draftPermissions.value = nextPermissions
   }
-  await permissionStore.saveUserPermissions(selectedUser.value.user_id, nextPermissions)
-  ElMessage.success(`已保存 ${selectedUser.value.username} 的权限设置`)
-  await fetchData()
+
+  savingPermissionKey.value = permissionKey
+  draftPermissions.value = {
+    ...nextPermissions
+  }
+
+  try {
+    await permissionStore.saveUserPermissions(user.user_id, nextPermissions)
+    ElMessage.success(`已更新 ${user.username} 的权限`)
+    if (selectedUserId.value === user.user_id) {
+      syncDraftPermissions()
+    }
+  } catch {
+    draftPermissions.value = previousPermissions
+    ElMessage.error('权限更新失败，已恢复为修改前状态')
+  } finally {
+    if (savingPermissionKey.value === permissionKey) {
+      savingPermissionKey.value = ''
+    }
+  }
 }
 
 async function resetCurrentUserPermissions() {
@@ -132,8 +147,8 @@ onMounted(fetchData)
               </div>
             </div>
             <div class="permission-editor__actions">
+              <span class="permission-editor__autosave">点击卡片后自动保存</span>
               <el-button @click="resetCurrentUserPermissions">恢复默认</el-button>
-              <el-button type="primary" @click="saveCurrentUserPermissions">保存权限</el-button>
             </div>
           </div>
 
@@ -148,8 +163,10 @@ onMounted(fetchData)
                   class="permission-item"
                   :class="{
                     'is-enabled': draftPermissions[item.key] !== false,
-                    'is-locked': selectedUserIsPermissionAdmin && item.key === 'settings.permissions.visible'
+                    'is-locked': selectedUserIsPermissionAdmin && item.key === 'settings.permissions.visible',
+                    'is-saving': savingPermissionKey === item.key
                   }"
+                  :disabled="Boolean(savingPermissionKey) || (selectedUserIsPermissionAdmin && item.key === 'settings.permissions.visible')"
                   @click="togglePermission(item.key)"
                 >
                   <div class="permission-item__content">
@@ -157,7 +174,9 @@ onMounted(fetchData)
                     <span>{{ item.description }}</span>
                   </div>
                   <em>{{
-                    selectedUserIsPermissionAdmin && item.key === 'settings.permissions.visible'
+                    savingPermissionKey === item.key
+                      ? '保存中'
+                      : selectedUserIsPermissionAdmin && item.key === 'settings.permissions.visible'
                       ? '始终开启'
                       : draftPermissions[item.key] !== false ? '已开启' : '已关闭'
                   }}</em>
@@ -282,8 +301,15 @@ onMounted(fetchData)
 
 .permission-editor__actions {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.permission-editor__autosave {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .permission-groups {
@@ -337,6 +363,19 @@ onMounted(fetchData)
 }
 
 .permission-item.is-locked {
+  cursor: not-allowed;
+}
+
+.permission-item.is-saving {
+  border-color: #2563eb;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.12);
+}
+
+.permission-item:disabled {
+  cursor: wait;
+}
+
+.permission-item.is-locked:disabled {
   cursor: not-allowed;
 }
 

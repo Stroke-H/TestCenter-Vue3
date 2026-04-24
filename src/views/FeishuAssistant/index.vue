@@ -286,6 +286,10 @@ const splitNextRun = (nextRun: string) => {
 }
 
 const openEditScheduledTask = (task: ScheduledTask) => {
+  if (task.status === 'running') {
+    ElMessage.warning('Running scheduled task cannot be edited')
+    return
+  }
   const { date, time } = splitNextRun(task.nextRun)
   scheduledTaskDialogMode.value = 'edit'
   editingScheduledTaskId.value = task.id
@@ -529,7 +533,13 @@ const formatTime = (ts: string) => {
       </div>
 
       <div class="table-container">
-        <el-table :data="scheduledTasks" style="width: 100%" empty-text="No scheduled tasks yet.">
+        <el-table
+          :data="scheduledTasks"
+          style="width: 100%"
+          empty-text="No scheduled tasks yet."
+          row-class-name="scheduled-task-row"
+          @row-click="openEditScheduledTask"
+        >
           <el-table-column label="Task" min-width="260">
             <template #default="scope">
               <div class="scheduled-task">
@@ -555,18 +565,6 @@ const formatTime = (ts: string) => {
               <el-tag :type="getStatusType(scope.row.status)" size="small" round>
                 {{ scope.row.status.toUpperCase() }}
               </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="Actions" width="110" align="center" fixed="right">
-            <template #default="scope">
-              <el-button
-                link
-                type="primary"
-                :disabled="scope.row.status === 'running'"
-                @click.stop="openEditScheduledTask(scope.row)"
-              >
-                Edit
-              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -904,6 +902,10 @@ const formatTime = (ts: string) => {
 }
 
 :deep(.session-row) {
+  cursor: pointer;
+}
+
+:deep(.scheduled-task-row) {
   cursor: pointer;
 }
 

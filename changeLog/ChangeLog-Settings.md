@@ -9,6 +9,7 @@
 
 ### Changed
 - **Permission Cards**: 权限项从开关组件调整为固定尺寸小卡片，点击卡片本身切换开启/关闭状态。
+- **Permission Autosave**: 权限管理移除“保存权限”按钮，点击权限卡片后立即自动保存；保存失败时回滚本地状态并提示用户。
 - **Default Permissions**: 新用户默认关闭权限管理、斗兽棋、小说阅读器、视频播放器等非基础入口，权限管理仅 `minghong` 默认开启。
 - **User List Display**: 权限页用户列表只显示平台用户名，去除 user_id 等辅助信息。
 

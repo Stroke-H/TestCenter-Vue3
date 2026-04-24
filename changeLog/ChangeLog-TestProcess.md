@@ -1,5 +1,11 @@
 # ChangeLog - Test Process
 
+## 2026-04-24
+
+### Changed
+- **Sandbox Account Type Filter**: 测试账号管理台移除“全部账号”tab，默认进入“沙盒账号”分类。
+- **Project Filter Scope**: 项目筛选移除“全部”选项，只展示当前账号类型下实际存在账号的项目，并在切换账号类型或数据刷新后自动选中首个可用项目。
+
 ## 2026-03-31
 
 ### Added

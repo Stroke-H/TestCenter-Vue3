@@ -10,3 +10,4 @@
 
 ### Changed
 - **Execution Report Delivery**: 定时任务完成消息从“请去平台查看”升级为包含结果、耗时、报告摘要和报告地址的可读通知。
+- **Edit Interaction**: Scheduled tasks 列表移除单独的 Edit 按钮，点击整条任务记录即可打开编辑弹窗；运行中的任务点击时给出不可编辑提示。

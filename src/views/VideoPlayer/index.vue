@@ -26,13 +26,20 @@ function openFishMode() {
   <main class="video-player-page">
     <header class="video-player-page__header">
       <div class="video-player-page__title">
-        <p class="video-player-page__eyebrow">网页包装</p>
-        <h1>视频播放</h1>
-        <p>直接在平台内打开 BBYS，保留一个摸鱼模式浮窗。</p>
+        <h1>布布影视</h1>
       </div>
       <div class="video-player-page__actions">
-        <el-button :icon="VideoCamera" @click="openFishMode">摸鱼模式</el-button>
-        <el-button type="primary" :icon="FullScreen" @click="openInNewWindow">新窗口打开</el-button>
+        <el-button class="video-player-page__action-button" :icon="VideoCamera" @click="openFishMode">
+          摸鱼模式
+        </el-button>
+        <el-button
+          class="video-player-page__action-button"
+          type="primary"
+          :icon="FullScreen"
+          @click="openInNewWindow"
+        >
+          新窗口打开
+        </el-button>
       </div>
     </header>
 
@@ -45,7 +52,7 @@ function openFishMode() {
 <style scoped>
 .video-player-page {
   display: grid;
-  gap: 18px;
+  gap: 10px;
   height: 100%;
 }
 
@@ -53,8 +60,9 @@ function openFishMode() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 20px 22px;
+  gap: 12px;
+  min-height: 58px;
+  padding: 10px 14px;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -62,30 +70,25 @@ function openFishMode() {
 
 .video-player-page__title h1 {
   margin: 0;
-  font-size: 28px;
+  font-size: 20px;
+  line-height: 1.2;
   color: #0f172a;
-}
-
-.video-player-page__title p {
-  margin: 8px 0 0;
-  color: #64748b;
-}
-
-.video-player-page__eyebrow {
-  margin: 0 0 6px !important;
-  color: #2563eb !important;
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .video-player-page__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
+}
+
+.video-player-page__action-button {
+  width: 116px;
+  height: 32px;
+  justify-content: center;
 }
 
 .video-player-page__frame-shell {
-  height: calc(100vh - 220px);
+  height: calc(100vh - 164px);
   overflow: hidden;
   background: #fff;
   border: 1px solid #e5e7eb;
@@ -102,10 +105,11 @@ function openFishMode() {
   .video-player-page__header {
     align-items: flex-start;
     flex-direction: column;
+    min-height: auto;
   }
 
   .video-player-page__frame-shell {
-    height: calc(100vh - 260px);
+    height: calc(100vh - 210px);
   }
 }
 </style>
