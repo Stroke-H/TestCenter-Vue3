@@ -81,6 +81,7 @@ const sendAssistantMessage = async () => {
   try {
     const res = await fetch(`${API_BASE}/ai/web-chat`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 
         'Content-Type': 'application/json',
         'Authorization': authStore.token
@@ -132,6 +133,7 @@ const saveReport = async () => {
   try {
     const res = await fetch(`${API_BASE}/acceptance-reports/save`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 
         'Content-Type': 'application/json',
         'Authorization': authStore.token
@@ -166,6 +168,7 @@ const finalizeAssistantSession = async () => {
   try {
     await fetch(`${API_BASE}/ai/web-chat/end`, {
       method: 'POST',
+      credentials: 'include',
       headers: { 
         'Content-Type': 'application/json',
         'Authorization': authStore.token

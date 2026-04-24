@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import request from '@/api/request'
 
 defineOptions({ name: 'SandboxAccounts' })
 
@@ -267,8 +268,8 @@ const resetEditForm = () => {
 
 const fetchProjects = async () => {
   try {
-    const res = await axios.get('/api/config/projects')
-    projects.value = res.data || []
+    const res = await request.get('/config/projects')
+    projects.value = Array.isArray(res) ? res : []
   } catch (err) {
     console.error('Failed to fetch projects:', err)
     ElMessage.error('项目数据加载失败')

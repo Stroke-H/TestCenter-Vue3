@@ -1,5 +1,17 @@
 # ChangeLog - Settings (配置中心)
 
+## 2026-04-24
+
+### Added
+- **Permission Management**: 系统设置新增“权限管理”页面，支持按平台真实用户配置仪表盘、报告中心、系统设置入口权限。
+- **Permission Store**: 前端新增权限状态管理，路由守卫、主菜单、仪表盘卡片均可复用同一套权限判断。
+- **Minghong Admin Guard**: `minghong` 作为权限管理员默认拥有并锁定“权限管理”访问权限，避免唯一管理员被误关闭。
+
+### Changed
+- **Permission Cards**: 权限项从开关组件调整为固定尺寸小卡片，点击卡片本身切换开启/关闭状态。
+- **Default Permissions**: 新用户默认关闭权限管理、斗兽棋、小说阅读器、视频播放器等非基础入口，权限管理仅 `minghong` 默认开启。
+- **User List Display**: 权限页用户列表只显示平台用户名，去除 user_id 等辅助信息。
+
 ## 2026-03-24
 
 ### Added

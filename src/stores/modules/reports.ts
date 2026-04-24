@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { retryFetch } from '@/utils/retryFetch'
 
 export interface ReportItem {
   id: string
@@ -25,7 +26,7 @@ export const useReportStore = defineStore('reports', () => {
   // 1. 从后端加载执行记录 (不再使用 LocalStorage)
   const fetchReports = async () => {
     try {
-      const response = await fetch(`${getBackendHost()}/api/execution-reports`)
+      const response = await retryFetch(`${getBackendHost()}/api/execution-reports`)
       if (!response.ok) throw new Error('Fetch reports failed')
       const data = await response.json()
       reports.value = data

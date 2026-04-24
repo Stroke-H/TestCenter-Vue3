@@ -186,6 +186,7 @@ onMounted(() => {
 const fetchOperationLogs = async () => {
   try {
     const res = await fetch(`${API_BASE}/ai/logs/operations`, {
+      credentials: 'include',
       headers: {
         'Authorization': authStore.token
       }

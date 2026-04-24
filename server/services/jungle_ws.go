@@ -12,8 +12,8 @@ import (
 
 // JungleMessage defines the structure for P2P relay messages
 type JungleMessage struct {
-	Type    string      `json:"type"`    // match_start, sync_board, action, error, disconnect
-	Payload interface{} `json:"payload"` 
+	Type    string      `json:"type"` // match_start, sync_board, action, error, disconnect
+	Payload interface{} `json:"payload"`
 }
 
 // JunglePlayer represents a connected player in the lobby or a game
@@ -30,10 +30,10 @@ type JunglePlayer struct {
 
 // JungleRoom represents a game session between two players
 type JungleRoom struct {
-	ID      string
-	Host    *JunglePlayer
-	Guest   *JunglePlayer
-	Lock    sync.Mutex
+	ID    string
+	Host  *JunglePlayer
+	Guest *JunglePlayer
+	Lock  sync.Mutex
 }
 
 var (
@@ -47,12 +47,13 @@ var (
 // JungleChessWSHandler handles the WebSocket connection for Jungle Chess
 func JungleChessWSHandler(c *gin.Context) {
 	token := c.Query("token")
-	if token == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "No token provided"})
-		return
+	var user *User
+	var err error
+	if token != "" {
+		user, err = GetUserByID(token)
+	} else {
+		user, err = currentUserFromRequest(c)
 	}
-
-	user, err := GetUserByID(token)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 		return
@@ -76,7 +77,7 @@ func JungleChessWSHandler(c *gin.Context) {
 
 	// Start writer goroutine
 	go player.writePump()
-	
+
 	// Join matching queue
 	select {
 	case waitQueue <- player:
@@ -158,7 +159,7 @@ func (p *JunglePlayer) handleDisconnect() {
 			opponent.Send <- JungleMessage{Type: "disconnect", Payload: "对方已离线"}
 			opponent.Room = nil
 		}
-		
+
 		roomsLock.Lock()
 		delete(rooms, p.Room.ID)
 		roomsLock.Unlock()

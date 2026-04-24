@@ -11,8 +11,8 @@ import (
 
 var ConfigServiceInstance *ConfigService
 
-func InitConfigService(projectsFile, devicesFile string) {
-	ConfigServiceInstance = NewConfigService(projectsFile, devicesFile)
+func InitConfigService() {
+	ConfigServiceInstance = NewConfigService()
 }
 
 func GetProjectsHandler(c *gin.Context) {

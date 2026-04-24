@@ -10,13 +10,10 @@ import (
 )
 
 var (
-	logMutex      sync.Mutex
-	logPath       = "data/ai_operation_logs.jsonl"
-	chatLogPath   = "data/ai_chat_histories.jsonl"
-	reportLogPath = "data/acceptance_reports.jsonl"
+	logMutex sync.Mutex
 )
 
-// AddOperationLog appends a new operation record to the persistent log file
+// AddOperationLog appends a new operation record to the SQL-backed audit log.
 func AddOperationLog(op model.AIOperationLog) error {
 	logMutex.Lock()
 	defer logMutex.Unlock()
@@ -139,7 +136,7 @@ func findNearestDeleteTraceBefore(traces []deleteRequestTrace, operationTime tim
 	return best
 }
 
-// SaveChatSession saves a completed chat session to the persistent log file
+// SaveChatSession saves a completed chat session to the SQL-backed chat history store.
 func SaveChatSession(session model.AIChatSession) error {
 	logMutex.Lock()
 	defer logMutex.Unlock()

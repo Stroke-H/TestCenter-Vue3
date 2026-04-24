@@ -9,7 +9,6 @@ import (
 )
 
 var (
-	sandboxAccountsFile = "data/sandbox_accounts.jsonl"
 	sandboxAccountsLock sync.RWMutex
 )
 
@@ -49,7 +48,7 @@ func migrateDataqaProjectCodes() error {
 	return saveSandboxAccounts(accounts)
 }
 
-func ensureSandboxAccountsFile() error {
+func ensureSandboxAccountsSeeded() error {
 	accounts, err := sqlListJSON[models.SandboxAccount]("sandbox_accounts", "`migrated_at` ASC")
 	if err != nil {
 		return err
@@ -82,7 +81,7 @@ func readSandboxAccountsUnlocked() ([]models.SandboxAccount, error) {
 }
 
 func ListSandboxAccounts() ([]models.SandboxAccount, error) {
-	if err := ensureSandboxAccountsFile(); err != nil {
+	if err := ensureSandboxAccountsSeeded(); err != nil {
 		return nil, err
 	}
 
@@ -104,7 +103,7 @@ func CreateSandboxAccount(account models.SandboxAccount) (*models.SandboxAccount
 	sandboxAccountsLock.Lock()
 	defer sandboxAccountsLock.Unlock()
 
-	if err := ensureSandboxAccountsFile(); err != nil {
+	if err := ensureSandboxAccountsSeeded(); err != nil {
 		return nil, err
 	}
 
@@ -130,7 +129,7 @@ func DeleteSandboxAccount(id string) error {
 	sandboxAccountsLock.Lock()
 	defer sandboxAccountsLock.Unlock()
 
-	if err := ensureSandboxAccountsFile(); err != nil {
+	if err := ensureSandboxAccountsSeeded(); err != nil {
 		return err
 	}
 
@@ -153,7 +152,7 @@ func UpdateSandboxAccount(account models.SandboxAccount) (*models.SandboxAccount
 	sandboxAccountsLock.Lock()
 	defer sandboxAccountsLock.Unlock()
 
-	if err := ensureSandboxAccountsFile(); err != nil {
+	if err := ensureSandboxAccountsSeeded(); err != nil {
 		return nil, err
 	}
 

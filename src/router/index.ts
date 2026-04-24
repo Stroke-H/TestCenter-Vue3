@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionStore } from '@/stores'
 
 // 路由表定义
 const routes: RouteRecordRaw[] = [
@@ -32,93 +33,99 @@ const routes: RouteRecordRaw[] = [
         path: 'com_api_commit',
         name: 'ComApiCommit',
         component: () => import('@/views/ComApiCommit/index.vue'),
-        meta: { title: '执行测试', icon: 'VideoPlay' }
+        meta: { title: '执行测试', icon: 'VideoPlay', permissionKey: 'dashboard.com_api_commit.visible' }
       },
       {
         path: 'reports',
         name: 'TestReports',
         component: () => import('@/views/TestReports/index.vue'),
-        meta: { title: '测试报告', icon: 'DataAnalysis' }
+        meta: { title: '测试报告', icon: 'DataAnalysis', permissionKey: 'reports.test_reports.visible' }
       },
       {
         path: 'test_process',
         name: 'TestProcessList',
         component: () => import('@/views/TestProcess/List.vue'),
-        meta: { title: '流程验证', icon: 'Tickets' }
+        meta: { title: '流程验证', icon: 'Tickets', permissionKey: 'dashboard.test_process.visible' }
       },
       {
         path: 'test_process/edit/:id?',
         name: 'TestProcessEditor',
         component: () => import('@/views/TestProcess/index.vue'),
-        meta: { title: '编辑流程', hidden: true },
+        meta: { title: '编辑流程', hidden: true, permissionKey: 'dashboard.test_process.visible' },
         props: true
       },
       {
         path: 'feishu_assistant',
         name: 'FeishuAssistant',
         component: () => import('@/views/FeishuAssistant/index.vue'),
-        meta: { title: '飞书助手', icon: 'Service' }
+        meta: { title: '飞书助手', icon: 'Service', permissionKey: 'dashboard.feishu_assistant.visible' }
       },
       {
         path: 'skillify',
         name: 'NodeSkillify',
         component: () => import('@/views/TestProcess/SkillifyTool/index.vue'),
-        meta: { title: '节点 Skill 化', icon: 'MagicStick' }
+        meta: { title: '节点 Skill 化', icon: 'MagicStick', permissionKey: 'dashboard.skillify.visible' }
       },
       {
         path: 'sandbox_accounts',
         name: 'SandboxAccounts',
         component: () => import('@/views/TestProcess/SandboxAccounts/index.vue'),
-        meta: { title: '沙盒账号管理', hidden: true }
+        meta: { title: '沙盒账号管理', hidden: true, permissionKey: 'dashboard.sandbox_accounts.visible' }
       },
       {
         path: 'acceptance_reports',
         name: 'AcceptanceReport',
         component: () => import('@/views/AcceptanceReport/index.vue'),
-        meta: { title: '验收报告', icon: 'Monitor' }
+        meta: { title: '验收报告', icon: 'Monitor', permissionKey: 'reports.acceptance_reports.visible' }
       },
       {
         path: 'ui_auto_jungle',
         name: 'JungleChess',
         component: () => import('@/views/JungleChess/index.vue'),
-        meta: { title: '斗兽棋', hidden: true }
+        meta: { title: '斗兽棋', hidden: true, permissionKey: 'dashboard.jungle.visible' }
       },
       {
         path: 'novel_reader',
         name: 'NovelReader',
         component: () => import('@/views/NovelReader/index.vue'),
-        meta: { title: '小说阅读器', hidden: true }
+        meta: { title: '小说阅读器', hidden: true, permissionKey: 'dashboard.novel_reader.visible' }
+      },
+      {
+        path: 'video_player',
+        name: 'VideoPlayer',
+        component: () => import('@/views/VideoPlayer/index.vue'),
+        meta: { title: '视频播放器', hidden: true, permissionKey: 'dashboard.video_player.visible' }
       },
       {
         path: 'ui_auto',
         name: 'UIAutoTest',
         component: () => import('@/views/UIAutoTest/index.vue'),
-        meta: { title: 'UI 自动化', icon: 'Monitor' }
+        meta: { title: 'UI 自动化', icon: 'Monitor', permissionKey: 'dashboard.ui_auto.visible' }
       },
       {
         path: 'testcase_gen',
         name: 'TestCaseGenRoot',
         component: () => import('@/views/TestCaseGen/Layout.vue'),
-        meta: { title: '测试用例生成', icon: 'Notebook' },
+        meta: { title: '测试用例生成', icon: 'Notebook', permissionKey: 'dashboard.testcase_gen.visible' },
         redirect: '/testcase_gen/list',
         children: [
           {
             path: 'list',
             name: 'TestCaseGen',
             component: () => import('@/views/TestCaseGen/List.vue'),
-            meta: { title: '用例生成历史' }
+            meta: { title: '用例生成历史', permissionKey: 'dashboard.testcase_gen.visible' }
           },
           {
             path: 'new',
             name: 'TestCaseGenerator',
             component: () => import('@/views/TestCaseGen/Generator.vue'),
-            meta: { title: '智能生成用例', hidden: true }
+            meta: { title: '智能生成用例', hidden: true, permissionKey: 'dashboard.testcase_gen.visible' }
           },
           {
             path: 'view/:id',
             name: 'TestCaseView',
             component: () => import('@/views/TestCaseGen/Generator.vue'),
-            meta: { title: '查看用例详情', hidden: true },
+            meta: { title: '查看用例详情', hidden: true, permissionKey: 'dashboard.testcase_gen.visible' },
             props: true
           }
         ]
@@ -127,14 +134,14 @@ const routes: RouteRecordRaw[] = [
         path: 'ui_auto/edit/:id?',
         name: 'UIAutoEditor',
         component: () => import('@/views/UIAutoTest/Editor.vue'),
-        meta: { title: '编辑用例', hidden: true },
+        meta: { title: '编辑用例', hidden: true, permissionKey: 'dashboard.ui_auto.visible' },
         props: true
       },
       {
         path: 'ui_auto/run/:id',
         name: 'UIAutoRunner',
         component: () => import('@/views/UIAutoTest/Runner.vue'),
-        meta: { title: '执行用例', hidden: true },
+        meta: { title: '执行用例', hidden: true, permissionKey: 'dashboard.ui_auto.visible' },
         props: true
       },
       {
@@ -169,6 +176,12 @@ if (settingsRoute && settingsRoute.children) {
     component: () => import('@/views/Settings/AccountConfig.vue'),
     meta: { title: '账号管理', icon: 'User' }
   })
+  settingsRoute.children.push({
+    path: 'permissions',
+    name: 'PermissionManagement',
+    component: () => import('@/views/Settings/PermissionManagement.vue'),
+    meta: { title: '权限管理', icon: 'Lock', permissionKey: 'settings.permissions.visible', adminOnly: true }
+  })
 }
 
 // 创建路由实例
@@ -182,27 +195,42 @@ const router = createRouter({
 // 导航守卫
 router.beforeEach(async (to, _from, next) => {
   const authStore = useAuthStore()
-  
-  // 1. 如果去往公开页面（登录/注册），直接放行
+  const permissionStore = usePermissionStore()
+
   if (to.meta.public) {
     next()
     return
   }
 
-  // 2. 如果未登录，且去往需要权限的页面，重定向到登录
-  if (!authStore.isLoggedIn) {
+  if (authStore.status === 'anonymous') {
     next('/login')
     return
   }
 
-  // 3. 如果已登录但没有用户信息，尝试获取用户信息
-  if (authStore.isLoggedIn && !authStore.user) {
+  if (authStore.status === 'checking' || authStore.status === 'unreachable' || !authStore.user) {
     await authStore.fetchMe()
-    // 如果获取失败（token失效），会被 fetchMe 自动调用 logout 并清除 token
     if (!authStore.isLoggedIn) {
+      if (authStore.status === 'unreachable') {
+        next()
+        return
+      }
       next('/login')
       return
     }
+  }
+
+  if (authStore.isLoggedIn && !permissionStore.loaded) {
+    await permissionStore.fetchCurrentPermissions()
+  }
+
+  if (to.meta.adminOnly && !permissionStore.isPermissionAdmin) {
+    next('/dashboard')
+    return
+  }
+
+  if (typeof to.meta.permissionKey === 'string' && !permissionStore.canAccess(to.meta.permissionKey)) {
+    next('/dashboard')
+    return
   }
 
   next()

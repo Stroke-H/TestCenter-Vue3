@@ -20,7 +20,6 @@ type TestPhone struct {
 var (
 	testPhones     []TestPhone
 	testPhonesLock sync.RWMutex
-	testPhonesFile = "data/test_phones.jsonl"
 )
 
 func GetTestPhones() []TestPhone {

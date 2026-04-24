@@ -1,5 +1,13 @@
 # ChangeLog - Acceptance Report
 
+## 2026-04-24
+
+### Added
+- **Retryable Data Loading**: 验收报告列表、项目配置、设备配置读取接入一次自动重试机制，数据库或网络短暂 timeout 时会弹出重试提示并自动重新请求。
+
+### Changed
+- **Cookie Session Auth**: 验收报告保存、列表读取和飞书推送支持新的 HttpOnly Cookie 登录态，同时保留历史 `Authorization` 兼容。
+
 ## 2026-03-24
 
 ### Added

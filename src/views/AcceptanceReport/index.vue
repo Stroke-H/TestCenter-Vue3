@@ -3,6 +3,7 @@ import { ref, onMounted, computed, watch, markRaw } from 'vue'
 import { Plus, Search, Calendar, User, Money } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { retryFetch } from '@/utils/retryFetch'
 
 defineOptions({ name: 'AcceptanceReport' })
 
@@ -65,7 +66,8 @@ const reportForm = ref<any>({
 // --- Fetch Logic ---
 const fetchReports = async () => {
   try {
-    const res = await fetch(`${API_BASE}/acceptance-reports/list`, {
+    const res = await retryFetch(`${API_BASE}/acceptance-reports/list`, {
+      credentials: 'include',
       headers: {
         'Authorization': authStore.token
       }
@@ -110,7 +112,7 @@ const fetchReports = async () => {
 
 const fetchProjects = async () => {
   try {
-    const res = await fetch(`${API_BASE}/config/projects`)
+    const res = await retryFetch(`${API_BASE}/config/projects`)
     const data = await res.json()
     projects.value = Array.isArray(data) ? data : []
   } catch (err) {
@@ -120,7 +122,7 @@ const fetchProjects = async () => {
 
 const fetchDevices = async () => {
   try {
-    const res = await fetch(`${API_BASE}/config/devices`)
+    const res = await retryFetch(`${API_BASE}/config/devices`)
     const data = await res.json()
     devices.value = Array.isArray(data) ? data : []
   } catch (err) {
@@ -216,6 +218,7 @@ const saveNewReport = async () => {
 
     const res = await fetch(`${API_BASE}/acceptance-reports/save`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': authStore.token
@@ -243,6 +246,7 @@ const sendReportToFeishu = async () => {
   try {
     const res = await fetch(`${API_BASE}/acceptance-reports/send-feishu`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': authStore.token

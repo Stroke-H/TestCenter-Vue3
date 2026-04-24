@@ -12,42 +12,29 @@ import (
 
 var (
 	pwMutex        sync.Mutex
-	suiteLogPath   = "data/pw_suites.jsonl"
-	caseLogPath    = "data/pw_cases.jsonl"
-	keywordLogPath = "data/pw_keywords.jsonl"
+	pwSuiteTable   = "pw_suites"
+	pwCaseTable    = "pw_cases"
+	pwKeywordTable = "pw_keywords"
 )
 
-// --- Helper Functions ---
+// --- SQL-backed Helpers ---
 
-func loadJSONL[T any](path string) ([]T, error) {
+func loadPlaywrightRecords[T any](tableName string) ([]T, error) {
 	pwMutex.Lock()
 	defer pwMutex.Unlock()
-	return sqlListJSON[T](playwrightTableForPath(path), "`migrated_at` ASC")
+	return sqlListJSON[T](tableName, "`migrated_at` ASC")
 }
 
-func saveAllJSONL[T any](path string, items []T) error {
+func savePlaywrightRecords[T any](tableName string, items []T) error {
 	pwMutex.Lock()
 	defer pwMutex.Unlock()
-	return sqlReplaceAllJSON(playwrightTableForPath(path), items)
-}
-
-func playwrightTableForPath(path string) string {
-	switch path {
-	case suiteLogPath:
-		return "pw_suites"
-	case caseLogPath:
-		return "pw_cases"
-	case keywordLogPath:
-		return "pw_keywords"
-	default:
-		return path
-	}
+	return sqlReplaceAllJSON(tableName, items)
 }
 
 // --- Suite Handlers ---
 
 func ListPlaywrightSuitesHandler(c *gin.Context) {
-	suites, err := loadJSONL[models.PlaywrightSuite](suiteLogPath)
+	suites, err := loadPlaywrightRecords[models.PlaywrightSuite](pwSuiteTable)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -57,7 +44,7 @@ func ListPlaywrightSuitesHandler(c *gin.Context) {
 
 func GetPlaywrightSuiteHandler(c *gin.Context) {
 	id := c.Param("id")
-	suites, err := loadJSONL[models.PlaywrightSuite](suiteLogPath)
+	suites, err := loadPlaywrightRecords[models.PlaywrightSuite](pwSuiteTable)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -79,7 +66,7 @@ func SavePlaywrightSuiteHandler(c *gin.Context) {
 		return
 	}
 
-	suites, _ := loadJSONL[models.PlaywrightSuite](suiteLogPath)
+	suites, _ := loadPlaywrightRecords[models.PlaywrightSuite](pwSuiteTable)
 	now := time.Now().Format(time.RFC3339)
 
 	found := false
@@ -104,7 +91,7 @@ func SavePlaywrightSuiteHandler(c *gin.Context) {
 		suites = append(suites, suite)
 	}
 
-	if err := saveAllJSONL(suiteLogPath, suites); err != nil {
+	if err := savePlaywrightRecords(pwSuiteTable, suites); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -113,7 +100,7 @@ func SavePlaywrightSuiteHandler(c *gin.Context) {
 
 func DeletePlaywrightSuiteHandler(c *gin.Context) {
 	id := c.Param("id")
-	suites, _ := loadJSONL[models.PlaywrightSuite](suiteLogPath)
+	suites, _ := loadPlaywrightRecords[models.PlaywrightSuite](pwSuiteTable)
 
 	newSuites := []models.PlaywrightSuite{}
 	deleted := false
@@ -130,7 +117,7 @@ func DeletePlaywrightSuiteHandler(c *gin.Context) {
 		return
 	}
 
-	if err := saveAllJSONL(suiteLogPath, newSuites); err != nil {
+	if err := savePlaywrightRecords(pwSuiteTable, newSuites); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -140,7 +127,7 @@ func DeletePlaywrightSuiteHandler(c *gin.Context) {
 // --- Case Handlers ---
 
 func ListPlaywrightCasesHandler(c *gin.Context) {
-	cases, err := loadJSONL[models.PlaywrightCase](caseLogPath)
+	cases, err := loadPlaywrightRecords[models.PlaywrightCase](pwCaseTable)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -163,7 +150,7 @@ func ListPlaywrightCasesHandler(c *gin.Context) {
 
 func GetPlaywrightCaseHandler(c *gin.Context) {
 	id := c.Param("id")
-	cases, err := loadJSONL[models.PlaywrightCase](caseLogPath)
+	cases, err := loadPlaywrightRecords[models.PlaywrightCase](pwCaseTable)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -185,7 +172,7 @@ func SavePlaywrightCaseHandler(c *gin.Context) {
 		return
 	}
 
-	cases, _ := loadJSONL[models.PlaywrightCase](caseLogPath)
+	cases, _ := loadPlaywrightRecords[models.PlaywrightCase](pwCaseTable)
 	now := time.Now().Format(time.RFC3339)
 
 	found := false
@@ -215,7 +202,7 @@ func SavePlaywrightCaseHandler(c *gin.Context) {
 		}
 	}
 
-	if err := saveAllJSONL(caseLogPath, cases); err != nil {
+	if err := savePlaywrightRecords(pwCaseTable, cases); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -223,7 +210,7 @@ func SavePlaywrightCaseHandler(c *gin.Context) {
 }
 
 func updateSuiteCaseList(suiteID, caseID string) {
-	suites, _ := loadJSONL[models.PlaywrightSuite](suiteLogPath)
+	suites, _ := loadPlaywrightRecords[models.PlaywrightSuite](pwSuiteTable)
 	for i, s := range suites {
 		if s.ID == suiteID {
 			exists := false
@@ -235,7 +222,7 @@ func updateSuiteCaseList(suiteID, caseID string) {
 			}
 			if !exists {
 				suites[i].CaseIDs = append(suites[i].CaseIDs, caseID)
-				_ = saveAllJSONL(suiteLogPath, suites)
+				_ = savePlaywrightRecords(pwSuiteTable, suites)
 			}
 			return
 		}
@@ -244,7 +231,7 @@ func updateSuiteCaseList(suiteID, caseID string) {
 
 func DeletePlaywrightCaseHandler(c *gin.Context) {
 	id := c.Param("id")
-	cases, _ := loadJSONL[models.PlaywrightCase](caseLogPath)
+	cases, _ := loadPlaywrightRecords[models.PlaywrightCase](pwCaseTable)
 
 	newCases := []models.PlaywrightCase{}
 	deleted := false
@@ -261,7 +248,7 @@ func DeletePlaywrightCaseHandler(c *gin.Context) {
 		return
 	}
 
-	if err := saveAllJSONL(caseLogPath, newCases); err != nil {
+	if err := savePlaywrightRecords(pwCaseTable, newCases); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -292,7 +279,7 @@ func GetBuiltinKeywordsHandler(c *gin.Context) {
 // --- User Keywords Handlers ---
 
 func ListUserKeywordsHandler(c *gin.Context) {
-	keywords, err := loadJSONL[models.UserKeyword](keywordLogPath)
+	keywords, err := loadPlaywrightRecords[models.UserKeyword](pwKeywordTable)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -307,7 +294,7 @@ func SaveUserKeywordHandler(c *gin.Context) {
 		return
 	}
 
-	keywords, _ := loadJSONL[models.UserKeyword](keywordLogPath)
+	keywords, _ := loadPlaywrightRecords[models.UserKeyword](pwKeywordTable)
 	now := time.Now().Format(time.RFC3339)
 
 	found := false
@@ -329,7 +316,7 @@ func SaveUserKeywordHandler(c *gin.Context) {
 		keywords = append(keywords, kw)
 	}
 
-	if err := saveAllJSONL(keywordLogPath, keywords); err != nil {
+	if err := savePlaywrightRecords(pwKeywordTable, keywords); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -338,7 +325,7 @@ func SaveUserKeywordHandler(c *gin.Context) {
 
 func DeleteUserKeywordHandler(c *gin.Context) {
 	id := c.Param("id")
-	keywords, _ := loadJSONL[models.UserKeyword](keywordLogPath)
+	keywords, _ := loadPlaywrightRecords[models.UserKeyword](pwKeywordTable)
 
 	newKeywords := []models.UserKeyword{}
 	deleted := false
@@ -355,7 +342,7 @@ func DeleteUserKeywordHandler(c *gin.Context) {
 		return
 	}
 
-	if err := saveAllJSONL(keywordLogPath, newKeywords); err != nil {
+	if err := savePlaywrightRecords(pwKeywordTable, newKeywords); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -375,7 +362,7 @@ func RenameUserKeywordSuiteHandler(c *gin.Context) {
 		return
 	}
 
-	keywords, _ := loadJSONL[models.UserKeyword](keywordLogPath)
+	keywords, _ := loadPlaywrightRecords[models.UserKeyword](pwKeywordTable)
 	changed := false
 	for i, kw := range keywords {
 		if kw.SuiteName == oldName {
@@ -389,7 +376,7 @@ func RenameUserKeywordSuiteHandler(c *gin.Context) {
 		return
 	}
 
-	if err := saveAllJSONL(keywordLogPath, keywords); err != nil {
+	if err := savePlaywrightRecords(pwKeywordTable, keywords); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -401,7 +388,7 @@ func DeleteUserKeywordSuiteHandler(c *gin.Context) {
 	if name == "未归类套件" {
 		name = ""
 	}
-	keywords, _ := loadJSONL[models.UserKeyword](keywordLogPath)
+	keywords, _ := loadPlaywrightRecords[models.UserKeyword](pwKeywordTable)
 
 	newKeywords := []models.UserKeyword{}
 	deleted := false
@@ -418,7 +405,7 @@ func DeleteUserKeywordSuiteHandler(c *gin.Context) {
 		return
 	}
 
-	if err := saveAllJSONL(keywordLogPath, newKeywords); err != nil {
+	if err := savePlaywrightRecords(pwKeywordTable, newKeywords); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

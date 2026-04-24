@@ -1,9 +1,9 @@
 <script setup lang="ts">
 // MainLayout — 主布局组件
 // 包含顶部导航栏 + 可折叠侧边菜单 + 主内容区
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useAppStore } from '@/stores'
+import { useAppStore, usePermissionStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import {
   Fold,
@@ -17,7 +17,8 @@ import {
   UserFilled,
   SwitchButton,
   Collection,
-  Iphone
+  Iphone,
+  Lock
 } from '@element-plus/icons-vue'
 import { User as UserMenuIcon } from '@element-plus/icons-vue'
 
@@ -28,8 +29,10 @@ const route = useRoute()
 // 应用状态
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const permissionStore = usePermissionStore()
 
 import GlobalAssistant from '@/components/GlobalAssistant.vue'
+import VideoPlayerFloat from '@/components/VideoPlayerFloat.vue'
 import FishReaderFloat from '@/views/NovelReader/components/FishReaderFloat.vue'
 
 // 侧边栏宽度：折叠时 64px，展开时 220px
@@ -43,35 +46,63 @@ const activeMenu = computed(() => {
   return route.path
 })
 
-// 菜单项配置
-const menuItems = [
-  { path: '/dashboard', title: '仪表盘', icon: Odometer },
-  {
-    path: '/report_center',
-    title: '报告中心',
-    icon: DataAnalysis,
-    children: [
-      { path: '/reports', title: '测试报告', icon: DataAnalysis },
-      { path: '/acceptance_reports', title: '验收报告', icon: Monitor },
-      { path: '/testcase_gen/list', title: '用例报告', icon: Notebook }
-    ]
-  },
-  { path: '/feishu_assistant', title: '飞书助手', icon: Service },
-  { 
-    path: '/settings', 
-    title: '系统设置', 
-    icon: Setting,
-    children: [
-      { path: '/settings/projects', title: '项目代码', icon: Collection },
-      { path: '/settings/devices', title: '测试设备', icon: Iphone }
-    ]
-  }
-]
-
-const settingsMenu = menuItems.find(item => item.path === '/settings')
-if (settingsMenu && settingsMenu.children) {
-  settingsMenu.children.push({ path: '/settings/accounts', title: '账号管理', icon: UserMenuIcon })
+interface MenuItem {
+  path: string
+  title: string
+  icon: unknown
+  permissionKey?: string
+  adminOnly?: boolean
+  children?: MenuItem[]
 }
+
+function canDisplayMenuItem(item: MenuItem) {
+  if (item.adminOnly && !permissionStore.isPermissionAdmin) return false
+  if (item.permissionKey && !permissionStore.canAccess(item.permissionKey)) return false
+  return true
+}
+
+const menuItems = computed<MenuItem[]>(() => {
+  const items: MenuItem[] = [
+    { path: '/dashboard', title: '仪表盘', icon: Odometer },
+    {
+      path: '/report_center',
+      title: '报告中心',
+      icon: DataAnalysis,
+      children: [
+        { path: '/reports', title: '测试报告', icon: DataAnalysis, permissionKey: 'reports.test_reports.visible' },
+        { path: '/acceptance_reports', title: '验收报告', icon: Monitor, permissionKey: 'reports.acceptance_reports.visible' },
+        { path: '/testcase_gen/list', title: '用例报告', icon: Notebook, permissionKey: 'reports.testcase_gen.visible' }
+      ]
+    },
+    { path: '/feishu_assistant', title: '飞书助手', icon: Service, permissionKey: 'dashboard.feishu_assistant.visible' },
+    {
+      path: '/settings',
+      title: '系统设置',
+      icon: Setting,
+      children: [
+        { path: '/settings/projects', title: '项目代码', icon: Collection },
+        { path: '/settings/devices', title: '测试设备', icon: Iphone },
+        { path: '/settings/accounts', title: '账号管理', icon: UserMenuIcon },
+        { path: '/settings/permissions', title: '权限管理', icon: Lock, permissionKey: 'settings.permissions.visible', adminOnly: true }
+      ]
+    }
+  ]
+
+  return items.flatMap((item) => {
+    if (!item.children) {
+      return canDisplayMenuItem(item) ? [item] : []
+    }
+
+    const children = item.children.filter(canDisplayMenuItem)
+    return children.length > 0 ? [{ ...item, children }] : []
+  })
+})
+
+onMounted(async () => {
+  if (authStore.isLoggedIn) {
+    await permissionStore.fetchCurrentPermissions()
+  }
+})
 
 // 菜单点击导航
 const handleMenuSelect = (path: string) => {
@@ -79,8 +110,8 @@ const handleMenuSelect = (path: string) => {
 }
 
 // 退出登录
-const handleLogout = () => {
-  authStore.logout()
+const handleLogout = async () => {
+  await authStore.logout()
   router.push('/login')
 }
 </script>
@@ -191,6 +222,7 @@ const handleLogout = () => {
     </el-container>
 
     <!-- 全局智能助手 -->
+    <VideoPlayerFloat />
     <FishReaderFloat />
     <GlobalAssistant />
   </el-container>

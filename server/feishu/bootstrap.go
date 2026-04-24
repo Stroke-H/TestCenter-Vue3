@@ -45,14 +45,7 @@ func InitFeishuBridge(r *gin.Engine) {
 	// 4. Register Dashboard AI Routes (Protected)
 	api := r.Group("/api/ai")
 	api.Use(func(c *gin.Context) {
-		token := c.GetHeader("Authorization")
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: No token provided"})
-			c.Abort()
-			return
-		}
-		// We can now use the central GetUserByID
-		_, err := services.GetUserByID(token)
+		_, err := services.CurrentUserFromRequest(c)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid token"})
 			c.Abort()

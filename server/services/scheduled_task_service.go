@@ -2,14 +2,17 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +21,27 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/sashabaranov/go-openai"
 )
+
+type anthropicMessageRequest struct {
+	Model     string                    `json:"model"`
+	MaxTokens int                       `json:"max_tokens"`
+	System    string                    `json:"system"`
+	Messages  []anthropicMessageContent `json:"messages"`
+}
+
+type anthropicMessageContent struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type anthropicMessageResponse struct {
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+}
 
 type ScheduledTask struct {
 	ID              string `json:"id"`
@@ -62,9 +85,8 @@ type dramaProfile struct {
 }
 
 var (
-	scheduledTasksFile = filepath.Join("data", "scheduled_tasks.jsonl")
-	scheduledTaskMu    sync.Mutex
-	scheduledRunnerOn  sync.Once
+	scheduledTaskMu   sync.Mutex
+	scheduledRunnerOn sync.Once
 )
 
 func InitScheduledTaskService() {
@@ -245,7 +267,7 @@ func executeScheduledTask(task ScheduledTask) {
 		log.Printf("[ScheduledTask] add report failed: %v", addErr)
 	}
 
-	notice := fmt.Sprintf("您的定时任务%s已执行完成，报告已经生成，请去平台查看。", task.Name)
+	notice := buildScheduledTaskNotice(task, status, result, formatDuration(duration), reportURL, start)
 	if notifyErr := notifyScheduledTaskCreator(task.Creator, notice); notifyErr != nil {
 		log.Printf("[ScheduledTask] notify failed: %v", notifyErr)
 	}
@@ -287,6 +309,239 @@ func runCommand(dir string, env []string, name string, args ...string) error {
 		log.Printf("[ScheduledTask][%s] %s", name, removeANSI(string(output)))
 	}
 	return err
+}
+
+func buildScheduledTaskNotice(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time) string {
+	analysis, err := analyzeScheduledTaskReportWithOpus47(task, status, result, duration, startedAt)
+	if err != nil {
+		log.Printf("[ScheduledTask] report analysis skipped: %v", err)
+		analysis = "报告分析暂未生成，请打开平台查看完整报告。"
+	}
+
+	statusText := "通过"
+	if status != "Passed" {
+		statusText = "失败"
+	}
+
+	var builder strings.Builder
+	builder.WriteString("定时任务执行完成\n")
+	builder.WriteString("任务：" + task.Name + "\n")
+	builder.WriteString("项目：" + valueOrFallback(task.TestProject, task.TestProjectCode) + "\n")
+	builder.WriteString("环境：" + task.TestEnv + "\n")
+	builder.WriteString("结果：" + statusText + "\n")
+	builder.WriteString("耗时：" + duration + "\n\n")
+	builder.WriteString("报告总结\n")
+	builder.WriteString(sanitizeFeishuPlainText(analysis) + "\n\n")
+	builder.WriteString("报告地址：" + reportURL)
+	return sanitizeFeishuPlainText(builder.String())
+}
+
+func analyzeScheduledTaskReportWithOpus47(task ScheduledTask, status string, result string, duration string, startedAt time.Time) (string, error) {
+	provider, err := selectOpus47Provider()
+	if err != nil {
+		return "", err
+	}
+
+	reportText, err := readScheduledTaskReportText(startedAt)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(reportText) == "" {
+		return "", fmt.Errorf("scheduled task report is empty")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	httpClient := &http.Client{Timeout: 90 * time.Second}
+	systemPrompt := "你是一名资深测试负责人。请根据用户提供的自动化测试报告内容，生成一段适合飞书机器人私聊发送给任务创建人的中文总结。" +
+		"必须只输出纯文本，不要使用 Markdown，不要使用星号、反引号、井号、表格或项目符号。" +
+		"不要编造报告里没有的数据。重点说明整体结论、失败点、风险影响和下一步建议。控制在 500 字以内。"
+	userPrompt := fmt.Sprintf(
+		"任务名称：%s\n项目：%s\n环境：%s\n执行状态：%s\n执行耗时：%s\n执行错误：%s\n\n报告内容：\n%s",
+		task.Name,
+		valueOrFallback(task.TestProject, task.TestProjectCode),
+		task.TestEnv,
+		status,
+		duration,
+		result,
+		truncateForAI(reportText, 18000),
+	)
+
+	if isAnthropicProvider(provider) {
+		return callAnthropicScheduledReport(ctx, httpClient, provider, systemPrompt, userPrompt)
+	}
+
+	clientConfig := openai.DefaultConfig(provider.APIKey)
+	clientConfig.BaseURL = provider.BaseURL
+	clientConfig.HTTPClient = httpClient
+	client := openai.NewClientWithConfig(clientConfig)
+
+	req := openai.ChatCompletionRequest{
+		Model: provider.Model,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: systemPrompt,
+			},
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: userPrompt,
+			},
+		},
+		Temperature: 0.2,
+	}
+
+	resp, err := client.CreateChatCompletion(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("Opus4.7 returned no choices")
+	}
+
+	content := sanitizeFeishuPlainText(resp.Choices[0].Message.Content)
+	if content == "" {
+		return "", fmt.Errorf("Opus4.7 returned empty analysis")
+	}
+	return content, nil
+}
+
+func callAnthropicScheduledReport(ctx context.Context, httpClient *http.Client, provider feishumodel.AIProviderConfig, systemPrompt string, userPrompt string) (string, error) {
+	payload := anthropicMessageRequest{
+		Model:     provider.Model,
+		MaxTokens: 800,
+		System:    systemPrompt,
+		Messages: []anthropicMessageContent{
+			{Role: "user", Content: userPrompt},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	apiURL := strings.TrimRight(provider.BaseURL, "/") + "/messages"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("x-api-key", provider.APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("content-type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("Anthropic scheduled report failed: status %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	var parsed anthropicMessageResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", err
+	}
+	for _, item := range parsed.Content {
+		if strings.TrimSpace(item.Text) != "" {
+			return sanitizeFeishuPlainText(item.Text), nil
+		}
+	}
+	return "", fmt.Errorf("Anthropic scheduled report returned empty content")
+}
+
+func isAnthropicProvider(provider feishumodel.AIProviderConfig) bool {
+	search := strings.ToLower(strings.Join([]string{provider.Name, provider.Model, provider.BaseURL}, " "))
+	return strings.Contains(search, "anthropic") || strings.Contains(search, "claude")
+}
+
+func selectOpus47Provider() (feishumodel.AIProviderConfig, error) {
+	config := feishumodel.GlobalAIConfig
+	if config == nil {
+		config = feishumodel.LoadAIConfig()
+	}
+	if config == nil {
+		return feishumodel.AIProviderConfig{}, fmt.Errorf("AI config is empty")
+	}
+
+	for _, provider := range config.AllEffectiveProviders() {
+		search := strings.ToLower(strings.Join([]string{provider.Name, provider.Model, provider.Capability}, " "))
+		if strings.Contains(search, "opus") && (strings.Contains(search, "4.7") || strings.Contains(search, "4-7") || strings.Contains(search, "4_7")) {
+			return provider, nil
+		}
+	}
+	return feishumodel.AIProviderConfig{}, fmt.Errorf("Opus4.7 provider is not configured")
+}
+
+func readScheduledTaskReportText(startedAt time.Time) (string, error) {
+	rootDir, _ := filepath.Abs("..")
+	reportPath := filepath.Join(rootDir, "k6-scripts", "reports", "drama_check_report.html")
+	info, err := os.Stat(reportPath)
+	if err != nil {
+		return "", err
+	}
+	if info.ModTime().Before(startedAt.Add(-5 * time.Second)) {
+		return "", fmt.Errorf("scheduled task report was not updated by this run")
+	}
+	content, err := os.ReadFile(reportPath)
+	if err != nil {
+		return "", err
+	}
+
+	text := htmlToPlainText(string(content))
+	if retryContent, err := os.ReadFile(filepath.Join(rootDir, "k6-scripts", "reports", "drama_retry_result.json")); err == nil {
+		text += "\n\nRetry result JSON:\n" + string(retryContent)
+	}
+	if candidateContent, err := os.ReadFile(filepath.Join(rootDir, "k6-scripts", "reports", "drama_retry_candidates.json")); err == nil {
+		text += "\n\nRetry candidate JSON:\n" + string(candidateContent)
+	}
+	return text, nil
+}
+
+func htmlToPlainText(content string) string {
+	replacer := strings.NewReplacer("<br>", "\n", "<br/>", "\n", "<br />", "\n", "</tr>", "\n", "</p>", "\n", "</div>", "\n", "</section>", "\n")
+	content = replacer.Replace(content)
+	content = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`).ReplaceAllString(content, "")
+	content = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`).ReplaceAllString(content, "")
+	content = regexp.MustCompile(`(?s)<[^>]+>`).ReplaceAllString(content, " ")
+	content = html.UnescapeString(content)
+	content = regexp.MustCompile(`[ \t\r\f\v]+`).ReplaceAllString(content, " ")
+	content = regexp.MustCompile(`\n\s+`).ReplaceAllString(content, "\n")
+	content = regexp.MustCompile(`\n{3,}`).ReplaceAllString(content, "\n\n")
+	return strings.TrimSpace(content)
+}
+
+func sanitizeFeishuPlainText(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.NewReplacer(
+		"**", "",
+		"`", "",
+		"###", "",
+		"##", "",
+		"#", "",
+		"|", " ",
+	).Replace(text)
+	text = regexp.MustCompile(`(?m)^\s*[-*]\s+`).ReplaceAllString(text, "")
+	text = regexp.MustCompile(`[ \t]+\n`).ReplaceAllString(text, "\n")
+	return strings.TrimSpace(text)
+}
+
+func truncateForAI(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes]) + "\n\n内容过长，已截断。"
+}
+
+func valueOrFallback(value string, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
 }
 
 func getDramaProfile(testEnv string) dramaProfile {

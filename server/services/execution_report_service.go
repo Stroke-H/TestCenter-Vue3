@@ -3,7 +3,6 @@ package services
 import (
 	"log"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -25,12 +24,10 @@ type ExecutionReport struct {
 }
 
 var (
-	// 数据文件路径
-	execReportsFile = filepath.Join("data", "execution_reports.jsonl")
-	execReportMu    sync.Mutex
+	execReportMu sync.Mutex
 )
 
-// GetExecutionReportsHandler 获取所有执行历史记录 (从文件读取)
+// GetExecutionReportsHandler 获取所有执行历史记录
 func GetExecutionReportsHandler(c *gin.Context) {
 	execReportMu.Lock()
 	defer execReportMu.Unlock()
@@ -38,7 +35,7 @@ func GetExecutionReportsHandler(c *gin.Context) {
 	reports, err := sqlListJSON[ExecutionReport]("execution_reports", "`id` ASC")
 	if err != nil {
 		log.Println("[ERROR] Open exec reports failed:", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open reports file"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load execution reports"})
 		return
 	}
 
@@ -50,7 +47,7 @@ func GetExecutionReportsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, reports)
 }
 
-// AddExecutionReportHandler 保存一条新的执行记录到文件
+// AddExecutionReportHandler 保存一条新的执行记录
 func AddExecutionReportHandler(c *gin.Context) {
 	var r ExecutionReport
 	if err := c.ShouldBindJSON(&r); err != nil {
@@ -91,7 +88,7 @@ func ClearExecutionReportsHandler(c *gin.Context) {
 	defer execReportMu.Unlock()
 
 	if err := sqlClearJSON("execution_reports"); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear reports file"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear execution reports"})
 		return
 	}
 

@@ -1,5 +1,13 @@
 # ChangeLog - Test Reports
 
+## 2026-04-24
+
+### Added
+- **Transient Failure Retry**: 测试报告列表、性能报告文件列表和执行报告读取接入一次自动重试机制，遇到 timeout、网络错误或 500/502/503/504 时会提示“网络波动，正在重新尝试...”。
+
+### Changed
+- **Request Reliability**: 报告读取类请求统一走可重试读取逻辑，降低 MySQL 偶发 timeout 导致页面空白的概率。
+
 ## 2026-03-30
 
 ### Added

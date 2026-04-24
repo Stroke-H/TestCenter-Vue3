@@ -1,5 +1,4 @@
 import { ref, onUnmounted } from 'vue';
-import { useAuthStore } from '@/stores/auth';
 
 export interface JungleMessage {
   type: 'match_start' | 'sync_board' | 'action' | 'error' | 'disconnect';
@@ -7,7 +6,6 @@ export interface JungleMessage {
 }
 
 export function useWebSocket() {
-  const authStore = useAuthStore();
   const socket = ref<WebSocket | null>(null);
   const isMatching = ref(false);
   const isOnline = ref(false);
@@ -28,7 +26,7 @@ export function useWebSocket() {
     // Using simple proxy path or direct host depending on environment
     // In this repo, backend is on 8080 usually
     const host = window.location.hostname + ':8080';
-    const url = `${protocol}//${host}/api/ws/jungle?token=${authStore.token}`;
+    const url = `${protocol}//${host}/api/ws/jungle`;
 
     socket.value = new WebSocket(url);
 

@@ -4,6 +4,7 @@ import { Notebook, Edit, DocumentChecked, Download, ArrowLeft, ArrowRight, Magic
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
+import request from '@/api/request'
 
 const props = defineProps<{
   id?: string
@@ -32,8 +33,8 @@ const loading = ref(false)
 // --- 项目获取 ---
 const fetchProjects = async () => {
   try {
-    const res = await axios.get('/api/config/projects')
-    projects.value = res.data || []
+    const res = await request.get('/config/projects')
+    projects.value = Array.isArray(res) ? res : []
   } catch (err) {
     console.error('Failed to fetch projects:', err)
   }

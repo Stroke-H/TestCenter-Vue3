@@ -1,5 +1,17 @@
 # ChangeLog - Backend (TestCenter Server)
 
+## 2026-04-24
+
+### Added
+- **Session Service**: 新增 `session_service.go`，负责创建、校验、撤销 SQL 会话，并统一从 HttpOnly Cookie 或历史 `Authorization` 中解析当前用户。
+- **Scheduled Task AI Summary**: 定时任务完成后会读取本次生成的 K6 剧集检测报告，调用 Opus4.7 生成纯文本总结，并通过飞书机器人发送给任务创建人。
+- **Anthropic Messages API Support for Scheduled Reports**: 定时任务报告分析链路支持 Claude/Anthropic 原生 Messages API，不影响现有 OpenAI-compatible AI 调用逻辑。
+
+### Changed
+- **Protected Route Auth**: 权限管理、验收报告、飞书助手、斗兽棋 WebSocket 等受保护入口统一接入新的当前用户解析函数。
+- **AI Notification Fallback**: 当 Opus4.7 未配置、调用失败或报告不是本次任务产物时，定时任务通知会降级为基础结果通知，不阻断任务状态更新。
+- **SQL-backed Naming Cleanup**: 清理服务层中遗留的 JSONL 命名和“文件存储”文案，使 Playwright、配置、报告、账号、用例历史等模块语义与当前 SQL 存储一致。
+
 ## 2026-04-13
 
 ### Changed

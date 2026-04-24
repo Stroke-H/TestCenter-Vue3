@@ -26,7 +26,6 @@ const handleLogin = async () => {
   try {
     const data: any = await request.post('/auth/login', loginForm)
     
-    authStore.setToken(data.token)
     authStore.setUser(data.user)
     ElMessage.success('登录成功')
     router.push('/dashboard')

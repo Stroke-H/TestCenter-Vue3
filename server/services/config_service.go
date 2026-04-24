@@ -10,16 +10,11 @@ import (
 )
 
 type ConfigService struct {
-	projectsFile string
-	devicesFile  string
-	mu           sync.RWMutex
+	mu sync.RWMutex
 }
 
-func NewConfigService(projectsFile, devicesFile string) *ConfigService {
-	return &ConfigService{
-		projectsFile: projectsFile,
-		devicesFile:  devicesFile,
-	}
+func NewConfigService() *ConfigService {
+	return &ConfigService{}
 }
 
 // Project Methods

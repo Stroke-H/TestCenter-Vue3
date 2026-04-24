@@ -268,10 +268,8 @@ func (s *SkillifyService) GenerateSkillsWithAI(elements []ElementData) ([]SkillN
 
 // SaveSkillsToLibrary persists the Skill nodes as User Keywords
 func (s *SkillifyService) SaveSkillsToLibrary(skills []SkillNode, suiteName string, sourceURL string) error {
-	path := "data/pw_keywords.jsonl"
-
 	// 1. Load existing keywords
-	existing, err := loadJSONL[models.UserKeyword](path)
+	existing, err := loadPlaywrightRecords[models.UserKeyword](pwKeywordTable)
 	if err != nil {
 		return err
 	}
@@ -303,5 +301,5 @@ func (s *SkillifyService) SaveSkillsToLibrary(skills []SkillNode, suiteName stri
 	}
 
 	// 3. Save all back to SQL
-	return saveAllJSONL(path, existing)
+	return savePlaywrightRecords(pwKeywordTable, existing)
 }

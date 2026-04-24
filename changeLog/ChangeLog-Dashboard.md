@@ -1,5 +1,15 @@
 # ChangeLog - Dashboard
 
+## 2026-04-24
+
+### Added
+- **Video Player Entry**: 在仪表盘“其他拓展”分区新增视频播放器入口，支持进入视频播放页面与摸鱼浮窗模式。
+- **Permission-aware Cards**: 仪表盘卡片接入权限配置，API 工具、流程验证、测试账号管理、UI 自动化、用例生成、节点 Skill 化、性能测试、斗兽棋、小说阅读器、视频播放器等入口会按用户权限显示或隐藏。
+
+### Changed
+- **Sidebar Cleanup**: 视频播放器不再出现在左侧侧边栏，只保留仪表盘入口。
+- **Report Center Menu**: 报告中心菜单与用例报告入口按权限配置统一控制。
+
 ## 2026-03-30
 
 ### Added

@@ -61,6 +61,11 @@ var (
 	userLock sync.RWMutex
 )
 
+var legacyUserIDAliases = map[string]string{
+	"3": "minghong",
+	"4": "rongchang.xing",
+}
+
 // AuthenticateUser verifies credentials by username or email
 func AuthenticateUser(identifier, password string) (*User, error) {
 	userLock.RLock()
@@ -91,7 +96,7 @@ func AuthenticateUser(identifier, password string) (*User, error) {
 	return user, nil
 }
 
-// RegisterUser hashes password and saves to JSONL
+// RegisterUser hashes password and saves to the SQL-backed testers store.
 func RegisterUser(username, nickname, password string) (*User, error) {
 	userLock.Lock()
 	defer userLock.Unlock()
@@ -189,6 +194,20 @@ func findUserByIdentifier(identifier string) (*User, error) {
 	return nil, nil
 }
 
+func findUserByUsername(username string) (*User, error) {
+	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
+	if err != nil {
+		return nil, err
+	}
+	target := strings.ToLower(strings.TrimSpace(username))
+	for i := range users {
+		if strings.ToLower(strings.TrimSpace(users[i].Username)) == target {
+			return &users[i], nil
+		}
+	}
+	return nil, nil
+}
+
 // GetUserByID retrieves user info
 func GetUserByID(id string) (*User, error) {
 	userLock.RLock()
@@ -201,6 +220,14 @@ func GetUserByID(id string) (*User, error) {
 	for i := range users {
 		if users[i].ID == id {
 			return &users[i], nil
+		}
+	}
+
+	if username, ok := legacyUserIDAliases[strings.TrimSpace(id)]; ok {
+		for i := range users {
+			if strings.EqualFold(strings.TrimSpace(users[i].Username), username) {
+				return &users[i], nil
+			}
 		}
 	}
 	return nil, errors.New("用户不存在")
@@ -398,10 +425,13 @@ func LoginHandler(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
+	if err := createUserSession(c, user.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "登录成功",
-		"token":   user.ID,
 		"user": gin.H{
 			"id":       user.ID,
 			"username": user.Username,
@@ -411,13 +441,7 @@ func LoginHandler(c *gin.Context) {
 }
 
 func GetUserMeHandler(c *gin.Context) {
-	token := c.GetHeader("Authorization")
-	if token == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	user, err := GetUserByID(token)
+	user, err := currentUserFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 		return
@@ -428,4 +452,9 @@ func GetUserMeHandler(c *gin.Context) {
 		"username": user.Username,
 		"nickname": user.Nickname,
 	})
+}
+
+func LogoutHandler(c *gin.Context) {
+	revokeCurrentSession(c)
+	c.JSON(http.StatusOK, gin.H{"message": "退出成功"})
 }

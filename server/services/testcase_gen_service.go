@@ -36,7 +36,6 @@ type ExportReq struct {
 }
 
 var (
-	historyFile = "data/testcase_history.jsonl"
 	historyLock sync.RWMutex
 )
 
@@ -381,7 +380,7 @@ func ListRecordsHandler(c *gin.Context) {
 
 	recordsData, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取历史记录"})
 		return
 	}
 
@@ -419,7 +418,7 @@ func GetRecordHandler(c *gin.Context) {
 
 	records, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取历史记录"})
 		return
 	}
 	for _, record := range records {
@@ -445,7 +444,7 @@ func DownloadRecordHandler(c *gin.Context) {
 
 	records, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取历史记录"})
 		return
 	}
 
@@ -558,7 +557,7 @@ func UpdateRecordHandler(c *gin.Context) {
 
 	records, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取历史记录"})
 		return
 	}
 
@@ -578,7 +577,7 @@ func UpdateRecordHandler(c *gin.Context) {
 	}
 
 	if err := sqlReplaceAllJSON("testcase_history", records); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法更新历史记录文件"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法更新历史记录"})
 		return
 	}
 
@@ -598,7 +597,7 @@ func DeleteRecordHandler(c *gin.Context) {
 
 	records, err := sqlListJSON[models.GenerationRecord]("testcase_history", "`migrated_at` ASC")
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法打开历史记录文件"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "无法读取历史记录"})
 		return
 	}
 

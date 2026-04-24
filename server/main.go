@@ -18,7 +18,7 @@ func main() {
 
 	// Configure CORS to allow the Vue frontend to connect
 	config := cors.DefaultConfig()
-	config.AllowAllOrigins = true
+	config.AllowOriginFunc = func(origin string) bool { return true }
 	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization", "Accept"}
 	config.AllowCredentials = true
@@ -49,7 +49,7 @@ func main() {
 		api.POST("/proxy", services.ProxyHandler)
 
 		// System Configuration
-		services.InitConfigService("data/projects.jsonl", "data/test_phones.jsonl")
+		services.InitConfigService()
 		configGroup := api.Group("/config")
 		{
 			configGroup.GET("/projects", services.GetProjectsHandler)
@@ -62,6 +62,10 @@ func main() {
 
 			configGroup.GET("/accounts", services.GetAccountsHandler)
 			configGroup.POST("/accounts", services.SaveAccountHandler)
+			configGroup.GET("/permissions", services.GetPermissionListHandler)
+			configGroup.GET("/permissions/me", services.GetCurrentUserPermissionsHandler)
+			configGroup.POST("/permissions", services.SaveUserPermissionHandler)
+			configGroup.DELETE("/permissions/:user_id", services.ResetUserPermissionHandler)
 			configGroup.GET("/sandbox-accounts", services.GetSandboxAccountsHandler)
 			configGroup.POST("/sandbox-accounts", services.SaveSandboxAccountHandler)
 			configGroup.DELETE("/sandbox-accounts/:id", services.DeleteSandboxAccountHandler)
@@ -90,19 +94,14 @@ func main() {
 		{
 			auth.POST("/register", services.RegisterHandler)
 			auth.POST("/login", services.LoginHandler)
+			auth.POST("/logout", services.LogoutHandler)
 			auth.GET("/me", services.GetUserMeHandler)
 		}
 
 		// Acceptance Reports (Protected)
 		reports := api.Group("/acceptance-reports")
 		reports.Use(func(c *gin.Context) {
-			token := c.GetHeader("Authorization")
-			if token == "" {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: No token provided"})
-				c.Abort()
-				return
-			}
-			_, err := services.GetUserByID(token)
+			_, err := services.CurrentUserFromRequest(c)
 			if err != nil {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid token"})
 				c.Abort()

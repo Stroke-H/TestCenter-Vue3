@@ -16,14 +16,14 @@ import (
 
 // WSMessage defines the message structure sent to the frontend
 type WSMessage struct {
-	Type        string            `json:"type"`       // "step_start", "step_pass", "step_fail", "screenshot", "log", "suite_done"
-	StepIndex   int               `json:"step_index"`
-	Keyword     string            `json:"keyword"`
-	Args        map[string]string `json:"args"`
-	Message     string            `json:"message"`
-	Screenshot  string            `json:"screenshot"` // Base64 image
-	Timestamp   string            `json:"timestamp"`
-	Error       string            `json:"error"`
+	Type       string            `json:"type"` // "step_start", "step_pass", "step_fail", "screenshot", "log", "suite_done"
+	StepIndex  int               `json:"step_index"`
+	Keyword    string            `json:"keyword"`
+	Args       map[string]string `json:"args"`
+	Message    string            `json:"message"`
+	Screenshot string            `json:"screenshot"` // Base64 image
+	Timestamp  string            `json:"timestamp"`
+	Error      string            `json:"error"`
 }
 
 // PlaywrightWSHandler upgrades the connection and executes the Playwright test case.
@@ -52,7 +52,7 @@ func PlaywrightWSHandler(c *gin.Context) {
 }
 
 func getPlaywrightCaseByID(id string) (*models.PlaywrightCase, error) {
-	cases, err := loadJSONL[models.PlaywrightCase](caseLogPath)
+	cases, err := loadPlaywrightRecords[models.PlaywrightCase](pwCaseTable)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func executePlaywrightCase(ws *websocket.Conn, cs *models.PlaywrightCase) {
 
 		// Execute keyword
 		resultText, err := executor(context.Background(), page, finalArgs)
-		
+
 		if err != nil {
 			_ = ws.WriteJSON(WSMessage{Type: "step_fail", StepIndex: i, Error: err.Error()})
 			break

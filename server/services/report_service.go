@@ -38,8 +38,7 @@ type AcceptanceReport struct {
 // --- Service Logic ---
 
 var (
-	reportMutex   sync.Mutex
-	reportLogPath = "data/acceptance_reports.jsonl"
+	reportMutex sync.Mutex
 )
 
 func SaveAcceptanceReport(report AcceptanceReport) error {
@@ -255,8 +254,7 @@ func SendAcceptanceReportToFeishuHandler(c *gin.Context) {
 		return
 	}
 
-	currentUserID := c.GetHeader("Authorization")
-	currentUser, err := GetUserByID(currentUserID)
+	currentUser, err := currentUserFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid user"})
 		return

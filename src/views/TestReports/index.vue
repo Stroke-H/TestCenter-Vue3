@@ -12,6 +12,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 
 import { storeToRefs } from 'pinia'
 import { useReportStore } from '@/stores'
+import { retryFetch } from '@/utils/retryFetch'
 
 // ---------- 1. 状态声明与 Store 挂载 ----------
 const activeFilter = ref('全部')
@@ -36,7 +37,7 @@ const availablePerformanceReports = ref<string[]>([])
 // 获取后端 report 目录下真正存在的性能报告文件列表
 const fetchAvailableReports = async () => {
   try {
-    const response = await fetch(`${getBackendHost()}/api/performance/reports`)
+    const response = await retryFetch(`${getBackendHost()}/api/performance/reports`)
     availablePerformanceReports.value = await response.json()
   } catch (e) {
     console.error('获取性能报告列表失败', e)

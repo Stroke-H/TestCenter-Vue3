@@ -1,11 +1,42 @@
 // Axios 请求封装 — 统一拦截器、错误处理、基础配置
 import axios from 'axios'
 import type { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios'
+import { ElMessage } from 'element-plus'
+
+const retryDelayMs = 800
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function isRetryableRequest(error: any) {
+  const method = String(error?.config?.method || 'get').toLowerCase()
+  if (!['get', 'head', 'options'].includes(method)) return false
+
+  const status = error?.response?.status
+  const message = String(error?.message || '').toLowerCase()
+  const code = error?.code
+
+  return code === 'ECONNABORTED'
+    || message.includes('timeout')
+    || message.includes('network error')
+    || [500, 502, 503, 504].includes(status)
+}
+
+function notifyRetrying() {
+  ElMessage({
+    message: '网络波动，正在重新尝试...',
+    type: 'warning',
+    duration: 1800,
+    showClose: true
+  })
+}
 
 // 创建 Axios 实例，配置基础 URL 与超时时间
 const service: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 15000,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -14,9 +45,6 @@ const service: AxiosInstance = axios.create({
 // 请求拦截器 — 可在此统一注入 token 等
 service.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // 如有 token，在此注入
-    // const token = localStorage.getItem('token')
-    // if (token) config.headers.Authorization = `Bearer ${token}`
     return config
   },
   (error) => {
@@ -31,7 +59,15 @@ service.interceptors.response.use(
     // 直接返回 data 层，减少调用方解包
     return response.data
   },
-  (error) => {
+  async (error) => {
+    const config = error.config as any
+    if (config && isRetryableRequest(error) && !config.__retried) {
+      config.__retried = true
+      notifyRetrying()
+      await sleep(retryDelayMs)
+      return service.request(config)
+    }
+
     const { response, code, message } = error
     let errorMsg = '网络或服务器异常'
 

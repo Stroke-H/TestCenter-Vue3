@@ -1,5 +1,16 @@
 # ChangeLog - CoreFramework
 
+## 2026-04-24
+
+### Added
+- **SQL Session Login**: 登录成功后新增 SQL-backed `user_sessions` 会话记录，并通过 HttpOnly Cookie 保存浏览器登录态，默认有效期一个月。
+- **Four-state Auth Model**: 前端登录态从简单的 token 存在判断升级为 `checking`、`authenticated`、`anonymous`、`unreachable` 四态，区分登录失效与后端临时不可达。
+- **Logout Session Revocation**: 新增 `/api/auth/logout`，退出登录时会撤销当前服务端 session 并清理 Cookie。
+
+### Changed
+- **Auth Persistence**: 主登录链路不再依赖前端可读的 `localStorage.token` 作为长期凭证，降低后端重启或网络抖动导致误登出的概率。
+- **Compatibility Layer**: 后端鉴权保留旧 `Authorization` 用户 ID 的兼容兜底，避免一次性影响历史接口和 WebSocket 场景。
+
 ## 2026-03-24
 
 ### Added

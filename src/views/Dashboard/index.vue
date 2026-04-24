@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
+import { usePermissionStore } from '@/stores'
 
 const router = useRouter()
+const permissionStore = usePermissionStore()
 
 // ===== 数据结构定义 =====
 interface ToolDef {
@@ -208,6 +210,17 @@ const perfTools = ref<ToolDef[]>([
   }
 ])
 
+const canShowApiTools = computed(() => permissionStore.canAccess('dashboard.com_api_commit.visible'))
+const canShowTestProcess = computed(() => permissionStore.canAccess('dashboard.test_process.visible'))
+const canShowSandboxAccounts = computed(() => permissionStore.canAccess('dashboard.sandbox_accounts.visible'))
+const canShowUIAuto = computed(() => permissionStore.canAccess('dashboard.ui_auto.visible'))
+const canShowTestCaseGen = computed(() => permissionStore.canAccess('dashboard.testcase_gen.visible'))
+const canShowSkillify = computed(() => permissionStore.canAccess('dashboard.skillify.visible'))
+const canShowPerformance = computed(() => permissionStore.canAccess('dashboard.performance.visible'))
+const canShowJungle = computed(() => permissionStore.canAccess('dashboard.jungle.visible'))
+const canShowNovelReader = computed(() => permissionStore.canAccess('dashboard.novel_reader.visible'))
+const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.video_player.visible'))
+
 </script>
 
 <template>
@@ -249,7 +262,7 @@ const perfTools = ref<ToolDef[]>([
     </div>
 
     <!-- ========== API Tools ========== -->
-    <div class="section">
+    <div v-if="canShowApiTools" class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--indigo">
@@ -291,7 +304,7 @@ const perfTools = ref<ToolDef[]>([
     </div>
  
     <!-- ========== Test Process Tools ========== -->
-    <div class="section">
+    <div v-if="canShowTestProcess || canShowSandboxAccounts" class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--orange">
@@ -302,7 +315,7 @@ const perfTools = ref<ToolDef[]>([
       </div>
 
       <div class="card-grid card-grid--4">
-        <div class="tool-card">
+        <div v-if="canShowTestProcess" class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(245, 158, 11, 0.1)">
               <el-icon :size="20" color="#f59e0b"><component :is="Icons.Tickets" /></el-icon>
@@ -316,7 +329,7 @@ const perfTools = ref<ToolDef[]>([
           </div>
         </div>
 
-        <div class="tool-card">
+        <div v-if="canShowSandboxAccounts" class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(16, 185, 129, 0.12)">
               <el-icon :size="20" color="#10b981"><component :is="Icons.User" /></el-icon>
@@ -333,7 +346,7 @@ const perfTools = ref<ToolDef[]>([
     </div>
 
     <!-- ========== UI Automation Workspace ========== -->
-    <div class="section">
+    <div v-if="canShowUIAuto || canShowTestCaseGen || canShowSkillify" class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--purple">
@@ -344,7 +357,7 @@ const perfTools = ref<ToolDef[]>([
       </div>
  
       <div class="card-grid card-grid--4">
-        <div class="tool-card">
+        <div v-if="canShowUIAuto" class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(139, 92, 246, 0.1)">
               <el-icon :size="20" color="#8b5cf6"><component :is="Icons.Monitor" /></el-icon>
@@ -359,7 +372,7 @@ const perfTools = ref<ToolDef[]>([
         </div>
 
         <!-- TestCase Generation Card -->
-        <div class="tool-card">
+        <div v-if="canShowTestCaseGen" class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(139, 92, 246, 0.1)">
               <el-icon :size="20" color="#8b5cf6"><component :is="Icons.Notebook" /></el-icon>
@@ -373,7 +386,7 @@ const perfTools = ref<ToolDef[]>([
           </div>
         </div>
 
-        <div class="tool-card">
+        <div v-if="canShowSkillify" class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(99, 102, 241, 0.1)">
               <el-icon :size="20" color="#6366f1"><component :is="Icons.MagicStick" /></el-icon>
@@ -390,7 +403,7 @@ const perfTools = ref<ToolDef[]>([
     </div>
 
     <!-- ========== Performance ========== -->
-    <div class="section">
+    <div v-if="canShowPerformance" class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--green">
@@ -424,7 +437,7 @@ const perfTools = ref<ToolDef[]>([
     </div>
 
     <!-- ========== Other Extensions ========== -->
-    <div class="section">
+    <div v-if="canShowJungle || canShowNovelReader || canShowVideoPlayer" class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--teal">
@@ -435,7 +448,7 @@ const perfTools = ref<ToolDef[]>([
       </div>
 
       <div class="card-grid card-grid--4">
-        <div class="tool-card">
+        <div v-if="canShowJungle" class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(20, 184, 166, 0.12)">
               <el-icon :size="20" color="#14b8a6"><component :is="Icons.Grid" /></el-icon>
@@ -449,7 +462,7 @@ const perfTools = ref<ToolDef[]>([
           </div>
         </div>
 
-        <div class="tool-card">
+        <div v-if="canShowNovelReader" class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(20, 184, 166, 0.12)">
               <el-icon :size="20" color="#0f766e"><component :is="Icons.Reading" /></el-icon>
@@ -460,6 +473,20 @@ const perfTools = ref<ToolDef[]>([
           <div class="tool-card__footer">
             <span class="ready-text">本地可用</span>
             <a href="#" class="open-link" @click.prevent="router.push('/novel_reader')">打开</a>
+          </div>
+        </div>
+
+        <div v-if="canShowVideoPlayer" class="tool-card">
+          <div class="tool-card__top">
+            <div class="tool-card__icon" style="background: rgba(14, 165, 233, 0.12)">
+              <el-icon :size="20" color="#0284c7"><component :is="Icons.VideoCamera" /></el-icon>
+            </div>
+          </div>
+          <h3 class="tool-card__name">视频播放器</h3>
+          <p class="tool-card__desc">平台内打开 BBYS，并可切到摸鱼模式悬浮播放</p>
+          <div class="tool-card__footer">
+            <span class="ready-text">已恢复</span>
+            <a href="#" class="open-link" @click.prevent="router.push('/video_player')">打开</a>
           </div>
         </div>
       </div>

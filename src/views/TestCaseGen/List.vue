@@ -5,6 +5,7 @@ import { Plus, Filter, Calendar, User, Collection, Download, Delete, Files } fro
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import dayjs from 'dayjs'
+import request from '@/api/request'
 
 defineOptions({ name: 'TestCaseHistory' })
 
@@ -99,8 +100,8 @@ const fetchRecords = async () => {
 
 const fetchProjects = async () => {
   try {
-    const res = await axios.get('/api/config/projects')
-    projects.value = res.data || []
+    const res = await request.get('/config/projects')
+    projects.value = Array.isArray(res) ? res : []
   } catch (err) {
     console.error('Failed to fetch projects:', err)
   }
