@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, Plus, Minus, Monitor, Cellphone } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
@@ -34,67 +34,125 @@ const zoomLevel = ref(1)
 const isVertical = ref(false) // 默认水平布局（横向生长）
 const translateX = ref(0)
 const translateY = ref(0)
+const canvasRef = ref<HTMLElement | null>(null)
+const scrollerRef = ref<HTMLElement | null>(null)
 
 const zoomStyle = computed(() => ({
   transform: `translate(${translateX.value}px, ${translateY.value}px) scale(${zoomLevel.value})`,
-  transformOrigin: 'center center'
+  transformOrigin: '0 0',
+  transition: isPanning.value ? 'none' : 'transform 0.16s cubic-bezier(0.4, 0, 0.2, 1)'
 }))
 
-const handleZoomIn = () => { if (zoomLevel.value < 2) zoomLevel.value += 0.1 }
-const handleZoomOut = () => { if (zoomLevel.value > 0.5) zoomLevel.value -= 0.1 }
-const handleZoomReset = () => { 
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
+
+const zoomAtPoint = (nextZoom: number, clientX?: number, clientY?: number) => {
+  const canvas = canvasRef.value
+  const scroller = scrollerRef.value
+  if (!canvas || !scroller) return
+
+  const canvasRect = canvas.getBoundingClientRect()
+  const scrollerRect = scroller.getBoundingClientRect()
+  const oldZoom = zoomLevel.value
+  const zoom = clamp(Number(nextZoom.toFixed(2)), 0.35, 2)
+  const focusX = clientX ?? canvasRect.left + canvasRect.width / 2
+  const focusY = clientY ?? canvasRect.top + canvasRect.height / 2
+  const contentX = (focusX - scrollerRect.left) / oldZoom
+  const contentY = (focusY - scrollerRect.top) / oldZoom
+
+  zoomLevel.value = zoom
+  translateX.value += (oldZoom - zoom) * contentX
+  translateY.value += (oldZoom - zoom) * contentY
+}
+
+const handleZoomIn = () => zoomAtPoint(zoomLevel.value + 0.1)
+const handleZoomOut = () => zoomAtPoint(zoomLevel.value - 0.1)
+const handleZoomReset = () => {
   zoomLevel.value = 1
-  translateX.value = 0
-  translateY.value = 0
+  centerMindMap()
+}
+
+const centerMindMap = () => {
+  const canvas = canvasRef.value
+  const scroller = scrollerRef.value
+  if (!canvas || !scroller) return
+
+  translateX.value = Math.max(80, (canvas.clientWidth - scroller.offsetWidth * zoomLevel.value) / 2)
+  translateY.value = Math.max(80, (canvas.clientHeight - scroller.offsetHeight * zoomLevel.value) / 2)
+}
+
+const fitMindMap = () => {
+  const canvas = canvasRef.value
+  const scroller = scrollerRef.value
+  if (!canvas || !scroller) return
+
+  const availableWidth = Math.max(320, canvas.clientWidth - 160)
+  const availableHeight = Math.max(240, canvas.clientHeight - 160)
+  const nextZoom = clamp(Math.min(availableWidth / scroller.offsetWidth, availableHeight / scroller.offsetHeight), 0.35, 1.15)
+  zoomLevel.value = Number(nextZoom.toFixed(2))
+  centerMindMap()
 }
 
 const handleWheel = (e: WheelEvent) => {
   // 仅当按下 Ctrl 或 Meta (Cmd) 时触发缩放
   if (e.ctrlKey || e.metaKey) {
     e.preventDefault()
-    if (e.deltaY < 0) handleZoomIn()
-    else handleZoomOut()
+    const delta = e.deltaY < 0 ? 0.1 : -0.1
+    zoomAtPoint(zoomLevel.value + delta, e.clientX, e.clientY)
   }
 }
 
-// ===== 画布平移 (Panning - Transform Based) =====
+// ===== 画布平移 (Pointer Events) =====
 const isPanning = ref(false)
 const startPos = ref({ x: 0, y: 0, tx: 0, ty: 0 })
-const canvasRef = ref<HTMLElement | null>(null)
+let panFrame = 0
+let pendingPan: PointerEvent | null = null
 
-const handleMouseDown = (e: MouseEvent) => {
-  const target = e.target as HTMLElement
-  // 只要不是点击在节点卡片、菜单或操作按钮上，就允许平移
-  if (!target.closest('.node-card') && !target.closest('.node-menu') && !target.closest('.node-ops')) {
-    isPanning.value = true
-    startPos.value = {
-      x: e.pageX,
-      y: e.pageY,
-      tx: translateX.value,
-      ty: translateY.value
-    }
-    if (canvasRef.value) {
-      canvasRef.value.style.cursor = 'grabbing'
-      canvasRef.value.style.userSelect = 'none'
-    }
-  }
+const isCanvasPanTarget = (target: HTMLElement) => {
+  return !target.closest('.node-card') && !target.closest('.node-menu') && !target.closest('.node-ops') && !target.closest('.floating-status-menu')
 }
 
-const handleMouseMove = (e: MouseEvent) => {
+const handlePointerDown = (e: PointerEvent) => {
+  const target = e.target as HTMLElement
+  if (e.button !== 0 || !isCanvasPanTarget(target)) return
+
+  menuState.value = null
+  activeMenuNodeId.value = null
+  isPanning.value = true
+  startPos.value = {
+    x: e.clientX,
+    y: e.clientY,
+    tx: translateX.value,
+    ty: translateY.value
+  }
+  canvasRef.value?.setPointerCapture(e.pointerId)
+}
+
+const handlePointerMove = (e: PointerEvent) => {
   if (!isPanning.value) return
   e.preventDefault()
-  const dx = e.pageX - startPos.value.x
-  const dy = e.pageY - startPos.value.y
-  // 平移逻辑：基于初始位置叠加偏移量
-  translateX.value = startPos.value.tx + dx
-  translateY.value = startPos.value.ty + dy
+  pendingPan = e
+  if (panFrame) return
+
+  panFrame = window.requestAnimationFrame(() => {
+    if (!pendingPan) return
+    const dx = pendingPan.clientX - startPos.value.x
+    const dy = pendingPan.clientY - startPos.value.y
+    translateX.value = startPos.value.tx + dx
+    translateY.value = startPos.value.ty + dy
+    panFrame = 0
+    pendingPan = null
+  })
 }
 
-const handleMouseUp = () => {
+const handlePointerUp = (e?: PointerEvent) => {
   isPanning.value = false
-  if (canvasRef.value) {
-    canvasRef.value.style.cursor = 'auto'
-    canvasRef.value.style.userSelect = 'auto'
+  pendingPan = null
+  if (panFrame) {
+    window.cancelAnimationFrame(panFrame)
+    panFrame = 0
+  }
+  if (e && canvasRef.value?.hasPointerCapture(e.pointerId)) {
+    canvasRef.value.releasePointerCapture(e.pointerId)
   }
 }
 
@@ -167,6 +225,7 @@ async function loadProcess() {
       const item: ProcessItem = await response.json()
       processName.value = item.name
       treeData.value = JSON.parse(JSON.stringify(item.data))
+      nextTick(fitMindMap)
     } else {
       ElMessage.error('该流程不存在')
       router.push({ name: 'TestProcessList' })
@@ -225,6 +284,7 @@ const handleAddNode = (parent: MindNode) => {
     status: 'none',
     children: []
   })
+  nextTick(fitMindMap)
 }
 
 const handleDeleteNode = (parent: MindNode, id: string) => {
@@ -232,12 +292,14 @@ const handleDeleteNode = (parent: MindNode, id: string) => {
   const index = parent.children.findIndex(n => n.id === id)
   if (index !== -1) {
     parent.children.splice(index, 1)
+    nextTick(fitMindMap)
   }
 }
 
 const handleUpdateStatus = (node: MindNode, status: NodeStatus) => {
   node.status = status
   activeMenuNodeId.value = null
+  menuState.value = null
 }
 
 const handleToggleStatus = (node: MindNode) => {
@@ -248,11 +310,36 @@ const handleToggleStatus = (node: MindNode) => {
 const activeMenuNodeId = ref<string | null>(null)
 const activeOpsNodeId = ref<string | null>(null)
 const editingNodeId = ref<string | null>(null)
+const menuState = ref<{ node: MindNode; x: number; y: number } | null>(null)
+const menuStyle = computed(() => ({
+  left: `${menuState.value?.x ?? 0}px`,
+  top: `${menuState.value?.y ?? 0}px`
+}))
 let hoverTimer: any = null
 
-const onNodeMouseEnter = (node: MindNode) => {
+const openStatusMenu = (node: MindNode, source: HTMLElement) => {
+  const rect = source.getBoundingClientRect()
+  const menuWidth = 156
+  const menuHeight = 190
+  const gap = 12
+  const rightSpace = window.innerWidth - rect.right
+  const bottomSpace = window.innerHeight - rect.top
+  const x = rightSpace >= menuWidth + gap
+    ? rect.right + gap
+    : Math.max(gap, rect.left - menuWidth - gap)
+  const y = bottomSpace >= menuHeight
+    ? rect.top
+    : Math.max(gap, window.innerHeight - menuHeight - gap)
+
+  menuState.value = { node, x, y }
+  activeMenuNodeId.value = node.id
+  activeOpsNodeId.value = null
+}
+
+const onNodeMouseEnter = (node: MindNode, event: MouseEvent) => {
+  const source = event.currentTarget as HTMLElement
   hoverTimer = setTimeout(() => {
-    activeMenuNodeId.value = node.id
+    openStatusMenu(node, source)
   }, 2000)
 }
 
@@ -263,7 +350,9 @@ const onNodeMouseLeave = () => {
   }
 }
 
-const handleShowMenu = (node: MindNode) => { activeMenuNodeId.value = node.id }
+const handleShowMenu = (node: MindNode, event: MouseEvent) => {
+  openStatusMenu(node, event.currentTarget as HTMLElement)
+}
 const handleShowOps = (node: MindNode) => { activeOpsNodeId.value = node.id }
 const handleStartEdit = (node: MindNode) => {
   editingNodeId.value = node.id
@@ -274,7 +363,22 @@ const clearActiveStates = () => {
   activeMenuNodeId.value = null
   activeOpsNodeId.value = null
   editingNodeId.value = null
+  menuState.value = null
 }
+
+watch(isVertical, () => {
+  nextTick(fitMindMap)
+})
+
+onMounted(() => {
+  nextTick(fitMindMap)
+  window.addEventListener('resize', fitMindMap)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', fitMindMap)
+  if (panFrame) window.cancelAnimationFrame(panFrame)
+})
 </script>
 
 <template>
@@ -302,6 +406,10 @@ const clearActiveStates = () => {
             {{ Math.round(zoomLevel * 100) }}%
           </el-button>
           <el-button size="small" :icon="Plus" @click="handleZoomIn" title="放大" />
+        </el-button-group>
+        <el-button-group class="view-tools">
+          <el-button size="small" @click="fitMindMap" title="完整显示当前流程">适应屏幕</el-button>
+          <el-button size="small" @click="centerMindMap" title="回到流程中心">回到中心</el-button>
         </el-button-group>
         
         <div class="divider-v"></div>
@@ -345,14 +453,18 @@ const clearActiveStates = () => {
     <div 
       ref="canvasRef"
       class="mindmap-canvas" 
-      :class="isVertical ? 'layout-vertical' : 'layout-horizontal'"
+      :class="[
+        isVertical ? 'layout-vertical' : 'layout-horizontal',
+        { 'is-panning': isPanning }
+      ]"
       @wheel="handleWheel"
-      @mousedown="handleMouseDown"
-      @mousemove="handleMouseMove"
-      @mouseup="handleMouseUp"
-      @mouseleave="handleMouseUp"
+      @pointerdown="handlePointerDown"
+      @pointermove="handlePointerMove"
+      @pointerup="handlePointerUp"
+      @pointercancel="handlePointerUp"
+      @pointerleave="handlePointerUp"
     >
-      <div class="mindmap-scroller" :style="zoomStyle">
+      <div ref="scrollerRef" class="mindmap-scroller" :style="zoomStyle">
         <MindMapNode 
           :node="treeData"
           :is-vertical="isVertical"
@@ -374,6 +486,49 @@ const clearActiveStates = () => {
         />
       </div>
     </div>
+
+    <Transition name="fade">
+      <div
+        v-if="menuState"
+        class="floating-status-menu"
+        :style="menuStyle"
+        @click.stop
+      >
+        <div class="menu-header">修改状态</div>
+        <button
+          v-if="menuState.node.status !== 'completed'"
+          type="button"
+          class="menu-item"
+          @click="handleUpdateStatus(menuState.node, 'completed')"
+        >
+          已完成
+        </button>
+        <button
+          v-if="menuState.node.status !== 'none'"
+          type="button"
+          class="menu-item"
+          @click="handleUpdateStatus(menuState.node, 'none')"
+        >
+          取消完成
+        </button>
+        <button
+          v-if="menuState.node.status !== 'in_progress'"
+          type="button"
+          class="menu-item"
+          @click="handleUpdateStatus(menuState.node, 'in_progress')"
+        >
+          进行中
+        </button>
+        <button
+          v-if="menuState.node.status !== 'fixing'"
+          type="button"
+          class="menu-item"
+          @click="handleUpdateStatus(menuState.node, 'fixing')"
+        >
+          修复中
+        </button>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -404,6 +559,14 @@ const clearActiveStates = () => {
   align-items: center;
 }
 
+.header-center {
+  gap: 10px;
+}
+
+.view-tools {
+  margin-left: 2px;
+}
+
 .name-input {
   width: 200px;
 }
@@ -416,26 +579,83 @@ const clearActiveStates = () => {
 }
 
 .mindmap-canvas {
+  position: relative;
   flex: 1;
   overflow: hidden;
-  padding: 100px;
   background-image: 
     linear-gradient(#e2e8f0 1px, transparent 1px),
     linear-gradient(90deg, #e2e8f0 1px, transparent 1px);
   background-size: 30px 30px;
   background-color: #f8fafc;
-  display: flex;
-  justify-content: center;
-  align-items: center;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.mindmap-canvas.is-panning {
+  cursor: grabbing;
 }
 
 .mindmap-scroller {
+  position: absolute;
+  top: 0;
+  left: 0;
   display: inline-block;
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  transform-origin: center top;
+  padding: 80px;
+  will-change: transform;
 }
 
 .layout-horizontal .mindmap-scroller {
-  transform-origin: left center;
+  transform-origin: 0 0;
+}
+
+.floating-status-menu {
+  position: fixed;
+  z-index: 3000;
+  min-width: 146px;
+  padding: 6px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
+}
+
+.floating-status-menu .menu-header {
+  padding: 6px 12px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.floating-status-menu .menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.floating-status-menu .menu-item:hover {
+  color: #0f172a;
+  background: #f1f5f9;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+  transform: scale(0.96);
 }
 </style>

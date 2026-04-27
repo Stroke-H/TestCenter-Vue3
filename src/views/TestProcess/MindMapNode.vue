@@ -17,9 +17,9 @@ const emit = defineEmits<{
   (e: 'delete', parent: MindNode, id: string): void
   (e: 'update-status', node: MindNode, status: NodeStatus): void
   (e: 'toggle-status', node: MindNode): void
-  (e: 'mouseenter', node: MindNode): void
+  (e: 'mouseenter', node: MindNode, event: MouseEvent): void
   (e: 'mouseleave'): void
-  (e: 'show-menu', node: MindNode): void
+  (e: 'show-menu', node: MindNode, event: MouseEvent): void
   (e: 'show-ops', node: MindNode): void
   (e: 'start-edit', node: MindNode): void
   (e: 'stop-edit'): void
@@ -76,6 +76,10 @@ const handleLabelDblClick = (node: MindNode) => {
   emit('start-edit', node)
 }
 
+const handleShowMenu = (event: MouseEvent) => {
+  emit('show-menu', props.node, event)
+}
+
 const getStatusIcon = (status: NodeStatus) => {
   switch (status) {
     case 'completed': return Check
@@ -123,8 +127,8 @@ const getStatusClass = (status: NodeStatus) => {
         @dragleave="handleDragLeave"
         @drop="handleDrop"
         @click.stop="emit('show-ops', node)"
-        @contextmenu.prevent.stop="emit('show-menu', node)"
-        @mouseenter="emit('mouseenter', node)"
+        @contextmenu.prevent.stop="handleShowMenu"
+        @mouseenter="emit('mouseenter', node, $event)"
         @mouseleave="emit('mouseleave')"
       >
         <!-- 状态标识 -->
@@ -156,16 +160,6 @@ const getStatusClass = (status: NodeStatus) => {
           </button>
         </div>
 
-        <!-- 悬浮菜单 -->
-        <Transition name="fade">
-          <div v-if="activeId === node.id" class="node-menu" @click.stop :class="isVertical ? 'menu-v' : 'menu-h'">
-            <div class="menu-header">修改状态</div>
-            <div class="menu-item" v-if="node.status !== 'completed'" @click="emit('update-status', node, 'completed')">已完成</div>
-            <div class="menu-item" v-if="node.status !== 'none'" @click="emit('update-status', node, 'none')">取消完成</div>
-            <div class="menu-item" v-if="node.status !== 'in_progress'" @click="emit('update-status', node, 'in_progress')">进行中</div>
-            <div class="menu-item" v-if="node.status !== 'fixing'" @click="emit('update-status', node, 'fixing')">修复中</div>
-          </div>
-        </Transition>
       </div>
 
       <!-- 子节点容器 -->
@@ -183,9 +177,9 @@ const getStatusClass = (status: NodeStatus) => {
           @delete="(p, id) => emit('delete', p, id)"
           @update-status="(n, s) => emit('update-status', n, s)"
           @toggle-status="n => emit('toggle-status', n)"
-          @mouseenter="n => emit('mouseenter', n)"
+          @mouseenter="(n, event) => emit('mouseenter', n, event)"
           @mouseleave="emit('mouseleave')"
-          @show-menu="n => emit('show-menu', n)"
+          @show-menu="(n, event) => emit('show-menu', n, event)"
           @show-ops="n => emit('show-ops', n)"
           @start-edit="n => emit('start-edit', n)"
           @stop-edit="emit('stop-edit')"

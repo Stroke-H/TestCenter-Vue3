@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,19 +82,9 @@ func GetAcceptanceReportByID(id string) (*AcceptanceReport, error) {
 }
 
 func FormatAcceptanceReportText(report AcceptanceReport) string {
-	formattedFixed := report.BugFixStatus
-	formattedUnfixed := report.BugSubmissionStatus
-	formattedStories := report.UpdateRequirements
-
-	if formattedFixed == "" {
-		formattedFixed = "无\n"
-	}
-	if formattedUnfixed == "" {
-		formattedUnfixed = "无\n"
-	}
-	if formattedStories == "" {
-		formattedStories = "无\n"
-	}
+	formattedFixed := formatAcceptanceReportSection(report.BugFixStatus)
+	formattedUnfixed := formatAcceptanceReportSection(report.BugSubmissionStatus)
+	formattedStories := formatAcceptanceReportSection(report.UpdateRequirements)
 
 	devicesBlock := ""
 	if report.TestDevices != "" {
@@ -129,6 +120,14 @@ func FormatAcceptanceReportText(report AcceptanceReport) string {
 		formattedUnfixed,
 		formattedStories,
 	)
+}
+
+func formatAcceptanceReportSection(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		trimmed = "无"
+	}
+	return trimmed + "\n\n"
 }
 
 func sendFeishuGroupText(text string) error {

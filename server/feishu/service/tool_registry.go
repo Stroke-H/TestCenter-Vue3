@@ -36,6 +36,14 @@ func RegisterTool(def ToolDef) {
 	Registry[def.Name] = def
 }
 
+func formatAcceptanceReportToolSection(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		trimmed = "无"
+	}
+	return trimmed + "\n\n"
+}
+
 func GetAvailableTools() []openai.Tool {
 	var tools []openai.Tool
 	for _, def := range Registry {
@@ -438,6 +446,8 @@ func init() {
 			for _, link := range args.StoryLinks {
 				formattedStories += link + "\n"
 			}
+			formattedBugStatus := formatAcceptanceReportToolSection(formattedUnfixed + formattedFixed)
+			formattedStories = formatAcceptanceReportToolSection(formattedStories)
 
 			devicesLine := ""
 			if testDevices != "" {
@@ -454,9 +464,9 @@ func init() {
 				"本次测试覆盖率： 100%%\n\n"+
 				"测试结论：当前版本Pass！\n"+
 				"正式版本缺陷修复验证情况：\n"+
-				"本次预提审版本缺陷提交情况：\n%s%s"+
+				"本次预提审版本缺陷提交情况：\n%s"+
 				"版本更新测试需求点：\n%s",
-				projectActualCode, projectName, displayVersion, testOwner, formattedPeriod, testEnv, devicesLine, formattedUnfixed, formattedFixed, formattedStories)
+				projectActualCode, projectName, displayVersion, testOwner, formattedPeriod, testEnv, devicesLine, formattedBugStatus, formattedStories)
 
 			operatorName := testOwner
 			operatorID := senderID
@@ -632,7 +642,7 @@ func init() {
 			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 				return "", err
 			}
-			
+
 			project, err := services.ConfigServiceInstance.GetProjectBySubCode(args.ProjectCode)
 			if err != nil || project == nil {
 				return fmt.Sprintf("❌ 未找到项目代号 '%s'。请提示用户补充详细信息或到平台上配置项目空间。", args.ProjectCode), nil
@@ -644,10 +654,10 @@ func init() {
 
 			// URL Mappings
 			projectKeyMap := map[string]string{
-				"海外短剧": "shortwave",
-				"免费短剧": "freedrama",
+				"海外短剧":    "shortwave",
+				"免费短剧":    "freedrama",
 				"iOS订阅产品": "ios_sub",
-				"番茄短剧": "tomato",
+				"番茄短剧":    "tomato",
 			}
 
 			projectKey := projectKeyMap[project.Workspace]
@@ -1021,7 +1031,7 @@ func init() {
 				batch := smartPoints[i:end]
 
 				FeishuClientInstance.SendChatText(chatID, fmt.Sprintf("⏳ AI 正在深度生成第 %d 批次 (共 %d 批)...", i/batchSize+1, (len(smartPoints)+batchSize-1)/batchSize))
-				
+
 				cases, err := services.GenerateBatchCore(context.Background(), batch)
 				if err != nil {
 					FeishuClientInstance.SendChatText(chatID, fmt.Sprintf("⚠️ 该批次数据结构复杂发生熔断跳过: %v", err))
@@ -1044,10 +1054,10 @@ func init() {
 
 			// 7. Save History
 			record := &models.GenerationRecord{
-				Title: title,
+				Title:           title,
 				RequirementText: content,
-				Points: smartPoints,
-				Cases: finalCases,
+				Points:          smartPoints,
+				Cases:           finalCases,
 			}
 			err = services.SaveGenerationRecordCore(record)
 			if err != nil {
