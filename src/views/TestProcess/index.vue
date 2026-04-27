@@ -29,6 +29,67 @@ const treeData = ref<MindNode>({
   isRoot: true
 })
 
+const flatNodes = computed(() => {
+  const nodes: MindNode[] = []
+  const walk = (node: MindNode) => {
+    if (!node.isRoot) nodes.push(node)
+    node.children?.forEach(walk)
+  }
+  walk(treeData.value)
+  return nodes
+})
+
+const progressSummary = computed(() => {
+  const nodes = flatNodes.value
+  const total = nodes.length
+  const completed = nodes.filter((node) => node.status === 'completed').length
+  const inProgress = nodes.filter((node) => node.status === 'in_progress').length
+  const fixing = nodes.filter((node) => node.status === 'fixing').length
+  const pending = nodes.filter((node) => node.status === 'none').length
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0
+
+  return { total, completed, inProgress, fixing, pending, percent }
+})
+
+// ===== 节点搜索 =====
+const searchKeyword = ref('')
+const activeSearchIndex = ref(0)
+
+const searchResults = computed(() => {
+  const keyword = searchKeyword.value.trim().toLowerCase()
+  if (!keyword) return []
+
+  return flatNodes.value.filter((node) => node.label.toLowerCase().includes(keyword))
+})
+
+const activeSearchNodeId = computed(() => searchResults.value[activeSearchIndex.value]?.id ?? null)
+
+const focusSearchResult = (nextIndex = activeSearchIndex.value) => {
+  if (searchResults.value.length === 0) {
+    if (searchKeyword.value.trim()) {
+      ElMessage.info('没有匹配的流程节点')
+    }
+    return
+  }
+
+  const normalizedIndex = (nextIndex + searchResults.value.length) % searchResults.value.length
+  activeSearchIndex.value = normalizedIndex
+  const target = searchResults.value[normalizedIndex]
+  if (target) focusNodeById(target.id)
+}
+
+const focusNextSearchResult = () => {
+  focusSearchResult(activeSearchIndex.value + 1)
+}
+
+const focusPreviousSearchResult = () => {
+  focusSearchResult(activeSearchIndex.value - 1)
+}
+
+watch(searchKeyword, () => {
+  activeSearchIndex.value = 0
+})
+
 // ===== 预览/视图状态 =====
 const zoomLevel = ref(1)
 const isVertical = ref(false) // 默认水平布局（横向生长）
@@ -90,6 +151,38 @@ const fitMindMap = () => {
   const nextZoom = clamp(Math.min(availableWidth / scroller.offsetWidth, availableHeight / scroller.offsetHeight), 0.35, 1.15)
   zoomLevel.value = Number(nextZoom.toFixed(2))
   centerMindMap()
+}
+
+const focusNodeById = (nodeId: string) => {
+  const canvas = canvasRef.value
+  const scroller = scrollerRef.value
+  if (!canvas || !scroller) return
+
+  const nodeElement = scroller.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
+  if (!nodeElement) return
+
+  const canvasRect = canvas.getBoundingClientRect()
+  const nodeRect = nodeElement.getBoundingClientRect()
+  const canvasCenterX = canvasRect.left + canvasRect.width / 2
+  const canvasCenterY = canvasRect.top + canvasRect.height / 2
+  const nodeCenterX = nodeRect.left + nodeRect.width / 2
+  const nodeCenterY = nodeRect.top + nodeRect.height / 2
+
+  translateX.value += canvasCenterX - nodeCenterX
+  translateY.value += canvasCenterY - nodeCenterY
+  activeOpsNodeId.value = nodeId
+  activeMenuNodeId.value = null
+  menuState.value = null
+}
+
+const focusNextUnfinished = () => {
+  const target = flatNodes.value.find((node) => node.status !== 'completed')
+  if (!target) {
+    ElMessage.success('所有流程节点都已完成')
+    return
+  }
+
+  focusNodeById(target.id)
 }
 
 const handleWheel = (e: WheelEvent) => {
@@ -170,6 +263,35 @@ const findNodeAndParent = (root: MindNode, id: string, parent: MindNode | null =
   return null
 }
 
+const getAutoParentStatus = (node: MindNode): NodeStatus => {
+  const children = node.children || []
+  if (children.length === 0) return node.status
+  if (children.every((child) => child.status === 'completed')) return 'completed'
+  if (children.some((child) => child.status !== 'none')) return 'in_progress'
+  return 'none'
+}
+
+const syncAncestorStatuses = (nodeId: string) => {
+  let currentId = nodeId
+
+  while (currentId) {
+    const current = findNodeAndParent(treeData.value, currentId)
+    const parent = current?.parent
+    if (!parent) return
+
+    parent.status = getAutoParentStatus(parent)
+    currentId = parent.id
+  }
+}
+
+const syncBranchStatusFrom = (nodeId: string) => {
+  const current = findNodeAndParent(treeData.value, nodeId)
+  if (!current) return
+
+  current.node.status = getAutoParentStatus(current.node)
+  syncAncestorStatuses(current.node.id)
+}
+
 const handleNodeDragStart = (id: string) => {
   draggedNodeId.value = id
 }
@@ -203,6 +325,8 @@ const handleNodeDrop = (targetId: string) => {
     sParent.children?.splice(sIndex, 1)
     if (!target.node.children) target.node.children = []
     target.node.children.push(source.node)
+    syncBranchStatusFrom(sParent.id)
+    syncBranchStatusFrom(target.node.id)
     ElMessage.success('节点已移动')
   }
   
@@ -292,18 +416,23 @@ const handleDeleteNode = (parent: MindNode, id: string) => {
   const index = parent.children.findIndex(n => n.id === id)
   if (index !== -1) {
     parent.children.splice(index, 1)
+    syncBranchStatusFrom(parent.id)
     nextTick(fitMindMap)
   }
 }
 
 const handleUpdateStatus = (node: MindNode, status: NodeStatus) => {
   node.status = status
+  syncAncestorStatuses(node.id)
   activeMenuNodeId.value = null
   menuState.value = null
 }
 
 const handleToggleStatus = (node: MindNode) => {
-  node.status = node.status === 'completed' ? 'none' : 'completed'
+  const statusFlow: NodeStatus[] = ['none', 'in_progress', 'fixing', 'completed']
+  const currentIndex = statusFlow.indexOf(node.status)
+  node.status = statusFlow[(currentIndex + 1) % statusFlow.length] || 'none'
+  syncAncestorStatuses(node.id)
 }
 
 // ===== 交互状态 =====
@@ -400,6 +529,31 @@ onUnmounted(() => {
       </div>
 
       <div class="header-center">
+        <div class="progress-pill" :title="`已完成 ${progressSummary.completed}/${progressSummary.total}`">
+          <span class="progress-pill__label">完成度</span>
+          <strong>{{ progressSummary.percent }}%</strong>
+          <span>{{ progressSummary.completed }}/{{ progressSummary.total }}</span>
+        </div>
+        <el-button size="small" :disabled="progressSummary.pending + progressSummary.inProgress + progressSummary.fixing === 0" @click="focusNextUnfinished">
+          下一个未完成
+        </el-button>
+        <div class="node-search">
+          <el-input
+            v-model="searchKeyword"
+            size="small"
+            clearable
+            placeholder="搜索节点"
+            @keyup.enter="focusSearchResult()"
+          />
+          <span v-if="searchKeyword" class="node-search__count">
+            {{ searchResults.length ? activeSearchIndex + 1 : 0 }}/{{ searchResults.length }}
+          </span>
+          <el-button-group v-if="searchKeyword">
+            <el-button size="small" :disabled="searchResults.length === 0" @click="focusPreviousSearchResult">上一个</el-button>
+            <el-button size="small" :disabled="searchResults.length === 0" @click="focusNextSearchResult">下一个</el-button>
+          </el-button-group>
+        </div>
+        <div class="divider-v"></div>
         <el-button-group>
           <el-button size="small" :icon="Minus" @click="handleZoomOut" title="缩小" />
           <el-button size="small" @click="handleZoomReset" title="重置缩放">
@@ -433,12 +587,18 @@ onUnmounted(() => {
       </div>
 
       <div class="header-right">
+        <div class="status-summary">
+          <span class="status-dot status-dot--pending"></span>待 {{ progressSummary.pending }}
+          <span class="status-dot status-dot--progress"></span>进行 {{ progressSummary.inProgress }}
+          <span class="status-dot status-dot--fixing"></span>修复 {{ progressSummary.fixing }}
+        </div>
         <el-button type="primary" size="small" @click="handleSave">
           保存修改
         </el-button>
         <el-tooltip placement="bottom">
           <template #content>
             单击:显示操作 | 双击:编辑名称<br/>
+            点击状态角标:快速切换状态<br/>
             右键/悬浮2s:状态菜单<br/>
             <b>拖拽:调整流程层级</b>
           </template>
@@ -483,6 +643,7 @@ onUnmounted(() => {
           :active-id="activeMenuNodeId"
           :active-ops-id="activeOpsNodeId"
           :editing-id="editingNodeId"
+          :highlighted-id="activeSearchNodeId"
         />
       </div>
     </div>
@@ -542,14 +703,15 @@ onUnmounted(() => {
 }
 
 .process-header {
-  height: 56px;
+  min-height: 56px;
   background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid #e2e8f0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
+  gap: 12px;
+  padding: 8px 20px;
   z-index: 1000;
   flex-shrink: 0;
 }
@@ -559,8 +721,89 @@ onUnmounted(() => {
   align-items: center;
 }
 
+.header-left {
+  min-width: 260px;
+}
+
+.header-right {
+  justify-content: flex-end;
+  min-width: 260px;
+}
+
 .header-center {
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+.progress-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  color: #0f172a;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.progress-pill strong {
+  color: #2563eb;
+  font-size: 14px;
+}
+
+.progress-pill__label {
+  color: #64748b;
+}
+
+.status-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 12px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot--pending {
+  background: #94a3b8;
+}
+
+.status-dot--progress {
+  background: #3b82f6;
+}
+
+.status-dot--fixing {
+  background: #f59e0b;
+}
+
+.node-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.node-search :deep(.el-input) {
+  width: 180px;
+}
+
+.node-search__count {
+  min-width: 42px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
 }
 
 .view-tools {
@@ -568,7 +811,7 @@ onUnmounted(() => {
 }
 
 .name-input {
-  width: 200px;
+  width: 220px;
 }
 
 .divider-v {

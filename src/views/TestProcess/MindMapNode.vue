@@ -9,6 +9,7 @@ const props = defineProps<{
   activeId: string | null
   activeOpsId: string | null
   editingId: string | null
+  highlightedId: string | null
   isVertical: boolean
 }>()
 
@@ -92,6 +93,15 @@ const getStatusIcon = (status: NodeStatus) => {
 const getStatusClass = (status: NodeStatus) => {
   return `status-${status}`
 }
+
+const getStatusLabel = (status: NodeStatus) => {
+  switch (status) {
+    case 'completed': return '已完成'
+    case 'in_progress': return '进行中'
+    case 'fixing': return '修复中'
+    default: return '未开始'
+  }
+}
 </script>
 
 <template>
@@ -112,13 +122,15 @@ const getStatusClass = (status: NodeStatus) => {
       <!-- 节点卡片 -->
       <div 
         class="node-card" 
+        :data-node-id="node.id"
         :class="[
           getStatusClass(node.status), 
           { 
             'is-root': node.isRoot, 
             'is-active-ops': activeOpsId === node.id, 
             'is-editing': editingId === node.id,
-            'is-drag-over': isDragOver
+            'is-drag-over': isDragOver,
+            'is-search-hit': highlightedId === node.id
           }
         ]"
         :draggable="!node.isRoot && editingId !== node.id"
@@ -131,10 +143,16 @@ const getStatusClass = (status: NodeStatus) => {
         @mouseenter="emit('mouseenter', node, $event)"
         @mouseleave="emit('mouseleave')"
       >
-        <!-- 状态标识 -->
-        <div v-if="node.status !== 'none'" class="node-status-badge" :class="'bg-' + node.status">
-          <el-icon><component :is="getStatusIcon(node.status)" /></el-icon>
-        </div>
+        <button
+          class="node-status-badge"
+          :class="'bg-' + node.status"
+          type="button"
+          :title="`当前状态：${getStatusLabel(node.status)}。点击切换状态`"
+          @click.stop="emit('toggle-status', node)"
+        >
+          <el-icon v-if="node.status !== 'none'"><component :is="getStatusIcon(node.status)" /></el-icon>
+          <span v-else>待</span>
+        </button>
 
         <div class="node-inner" @click.stop="handleLabelClick(node)" @dblclick.stop="handleLabelDblClick(node)">
           <input 
@@ -173,6 +191,7 @@ const getStatusClass = (status: NodeStatus) => {
           :active-id="activeId"
           :active-ops-id="activeOpsId"
           :editing-id="editingId"
+          :highlighted-id="highlightedId"
           @add="n => emit('add', n)"
           @delete="(p, id) => emit('delete', p, id)"
           @update-status="(n, s) => emit('update-status', n, s)"
@@ -353,6 +372,11 @@ export default {
   box-shadow: 0 0 15px rgba(59, 130, 246, 0.3);
 }
 
+.mindmap-canvas .node-card.is-search-hit {
+  border-color: #f97316 !important;
+  box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.18), 0 14px 28px rgba(15, 23, 42, 0.16);
+}
+
 .mindmap-canvas .node-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
@@ -375,20 +399,25 @@ export default {
 .mindmap-canvas .bg-completed { background: #10b981; }
 .mindmap-canvas .bg-in_progress { background: #3b82f6; }
 .mindmap-canvas .bg-fixing { background: #f59e0b; }
+.mindmap-canvas .bg-none { background: #94a3b8; }
 
 .mindmap-canvas .node-status-badge {
   position: absolute;
   top: -12px;
   right: -12px;
-  width: 24px;
-  height: 24px;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 7px;
   border-radius: 50%;
+  border: 2px solid white;
   display: flex;
   align-items: center;
   justify-content: center;
   color: white;
-  font-size: 14px;
+  font-size: 12px;
+  font-weight: 900;
   box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  cursor: pointer;
   z-index: 20;
 }
 
@@ -421,11 +450,11 @@ export default {
 /* 操作按钮 */
 .mindmap-canvas .node-ops {
   position: absolute;
-  bottom: -32px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 8px;
+  top: 50%;
+  right: -42px;
+  transform: translateY(-50%);
+  display: grid;
+  gap: 6px;
   opacity: 0;
   transition: all 0.2s;
   pointer-events: none;
@@ -433,7 +462,7 @@ export default {
 
 .mindmap-canvas .node-card.is-active-ops .node-ops {
   opacity: 1;
-  bottom: -40px;
+  right: -48px;
   pointer-events: auto;
 }
 
