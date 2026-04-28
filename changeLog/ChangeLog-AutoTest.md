@@ -50,6 +50,9 @@ UI 自动化模块（AutoTestCenter）是当前项目中的可视化 Playwright 
 - 优化 selector 生成逻辑，优先使用稳定属性定位，降低动态页面点击执行超时的概率。
 - 修复 Acceptance Report 页面统计卡图标响应式 warning，减少控制台噪音。
 
+### 2026-04-28
+- 将 UI 自动化编辑器和 Playwright Store 的接口入口统一切换为同源 `/api/playwright`，修复在 `strokeh.local` 等代理域名访问下直连 `localhost:8080` 造成的数据读取失败风险。
+
 ## 当前已知限制
 - Inspector 目前仍以点击、输入、基础按键为主，尚未覆盖下拉选择、复选框、单选框、拖拽、悬停等更复杂交互。
 - 对于极度动态的站点，虽然 selector 已优化，但仍可能需要人工二次修正。

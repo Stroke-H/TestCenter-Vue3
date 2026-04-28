@@ -32,7 +32,7 @@ const currentSuite = ref<any>(null)
 const fetchSuite = async (id: string) => {
   if (!id) return
   try {
-    const res = await axios.get(`http://localhost:8080/api/playwright/suites/${id}`)
+    const res = await axios.get(`/api/playwright/suites/${id}`)
     currentSuite.value = res.data
   } catch (err) {
     console.error('Failed to fetch suite', err)

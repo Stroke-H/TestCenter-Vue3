@@ -7,6 +7,10 @@
 - **Protected Sync API**: 新增验收报告云文档同步接口，后端会二次校验报告归属和项目文档配置后，将报告内容写入对应飞书 docx 文档。
 - **Auto Project Item Prefill**: 新建验收报告时，选择项目并填写版本号后会自动通过飞书项目 MCP 拉取对应版本的需求和缺陷链接，非关闭态缺陷填入“缺陷提交情况”，关闭态缺陷填入“缺陷修复情况”。
 
+### Changed
+- **Page Title Localization**: 验收报告页面标题、面包屑和新建入口文案统一调整为中文，和平台其他业务页保持一致。
+- **Proxy-safe Data Loading**: 验收报告页改为统一走同源 `/api` 代理访问受保护接口，修复通过 `strokeh.local` 访问时因直连 `localhost:8080` 导致的列表加载失败问题。
+
 ## 2026-04-24
 
 ### Added

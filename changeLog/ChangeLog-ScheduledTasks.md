@@ -11,3 +11,9 @@
 ### Changed
 - **Execution Report Delivery**: 定时任务完成消息从“请去平台查看”升级为包含结果、耗时、报告摘要和报告地址的可读通知。
 - **Edit Interaction**: Scheduled tasks 列表移除单独的 Edit 按钮，点击整条任务记录即可打开编辑弹窗；运行中的任务点击时给出不可编辑提示。
+
+## 2026-04-28
+
+### Changed
+- **Console Localization**: 飞书助手页面标题、面包屑、概览卡片、会话列表、定时任务表格和编辑弹窗统一调整为中文后台文案，降低模块间风格割裂感。
+- **Proxy-safe Assistant Requests**: 飞书助手控制台改为统一通过同源 `/api` 访问日志、项目和定时任务接口，降低非 localhost 域名访问时的数据链路不一致风险。

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import axios from 'axios'
 
-const API_BASE = 'http://localhost:8080/api/playwright'
+const API_BASE = '/api/playwright'
 
 export interface TestStep {
   id: string

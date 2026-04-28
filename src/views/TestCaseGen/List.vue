@@ -20,21 +20,21 @@ const filterModule = ref('')
 // --- Stats Logic ---
 const stats = computed(() => [
   { 
-    title: 'Total Records', 
+    title: '历史记录数', 
     value: records.value.length, 
     icon: markRaw(Files), 
     color: '#3b82f6', 
     bgColor: '#eff6ff' 
   },
   { 
-    title: 'Total Cases', 
+    title: '累计用例数', 
     value: records.value.reduce((acc, r) => acc + (r.case_count || 0), 0), 
     icon: markRaw(Collection), 
     color: '#eab308', 
     bgColor: '#fefce8' 
   },
   { 
-    title: 'Coverage Modules', 
+    title: '覆盖模块数', 
     value: new Set(records.value.map(r => r.module || 'Default')).size,
     icon: markRaw(User), 
     color: '#f97316', 
@@ -67,7 +67,7 @@ const historySummary = computed(() => {
     .sort((a, b) => b[1] - a[1])
     .map(([code, count]) => ({
       code,
-      name: code === 'Manual' ? 'Manual' : (projects.value.find(p => p.project_code === code)?.project_name || code),
+      name: code === 'Manual' ? '手动创建' : (projects.value.find(p => p.project_code === code)?.project_name || code),
       count
     }))
 })
@@ -170,12 +170,12 @@ onMounted(() => {
     <!-- Header -->
     <div class="page-header">
       <div class="header-left">
-        <h2 class="page-title">TestCase Generation History</h2>
-        <div class="breadcrumb">TestCase Gen <span class="divider">/</span> History</div>
+        <h2 class="page-title">测试用例生成</h2>
+        <div class="breadcrumb">测试用例生成 <span class="divider">/</span> 历史记录</div>
       </div>
       <div class="header-right">
         <el-button type="primary" :icon="Plus" class="new-report-btn" @click="goToNew">
-          Generate New
+          新建生成任务
         </el-button>
       </div>
     </div>
@@ -204,11 +204,11 @@ onMounted(() => {
         <el-card class="content-card" shadow="hover" v-loading="loading">
           <template #header>
             <div class="card-header">
-              <h3 class="card-title">Recent History</h3>
+              <h3 class="card-title">最近生成记录</h3>
               <div class="header-actions">
                 <el-select
                   v-model="filterProject"
-                  placeholder="Filter by Project"
+                  placeholder="按项目筛选"
                   clearable
                   class="filter-select"
                 >
@@ -222,7 +222,7 @@ onMounted(() => {
                 </el-select>
                 <el-select
                   v-model="filterModule"
-                  placeholder="Filter by Module"
+                  placeholder="按模块筛选"
                   clearable
                   class="filter-select"
                 >
@@ -246,7 +246,7 @@ onMounted(() => {
               :row-style="{ height: '64px' }"
               @row-click="viewRecord"
             >
-              <el-table-column label="Icon" width="70">
+              <el-table-column label="标识" width="70">
                 <template #default>
                   <div class="avatar-circle">AI</div>
                 </template>
@@ -254,34 +254,34 @@ onMounted(() => {
               <el-table-column label="Title / Summary" min-width="240">
                 <template #default="{ row }">
                   <div class="title-cell">
-                    <span class="record-title">{{ row.title || 'Untitled Requirement' }}</span>
+                    <span class="record-title">{{ row.title || '未命名需求' }}</span>
                     <span class="record-summary">{{ truncateSummary(row.requirement_text) }}</span>
                   </div>
                 </template>
               </el-table-column>
-              <el-table-column label="Project" width="140">
+              <el-table-column label="项目" width="140">
                 <template #default="{ row }">
                   <el-tag v-if="row.project_code" size="small" effect="plain">{{ getProjectName(row.project_code) }}</el-tag>
                   <span v-else class="empty-text">-</span>
                 </template>
               </el-table-column>
-              <el-table-column label="Module" width="140" show-overflow-tooltip>
+              <el-table-column label="模块" width="140" show-overflow-tooltip>
                 <template #default="{ row }">
                   <span class="module-text">{{ row.module || '-' }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="Date" width="140">
+              <el-table-column label="生成时间" width="140">
                 <template #default="{ row }">
                   <span class="date-text">{{ formatTime(row.created_at) }}</span>
                 </template>
               </el-table-column>
-              <el-table-column label="Actions" width="120" fixed="right">
+              <el-table-column label="操作" width="120" fixed="right">
                 <template #default="{ row }">
                   <div class="action-btns" @click.stop>
-                    <el-tooltip content="Download Excel" placement="top">
+                    <el-tooltip content="下载 Excel" placement="top">
                       <el-button link :icon="Download" @click="downloadAgain(row)" />
                     </el-tooltip>
-                    <el-popconfirm title="Delete this record?" @confirm="deleteRecord(row.id)">
+                    <el-popconfirm title="确认删除这条记录吗？" @confirm="deleteRecord(row.id)">
                       <template #reference>
                         <el-button link type="danger" :icon="Delete" />
                       </template>
@@ -292,7 +292,7 @@ onMounted(() => {
             </el-table>
           </div>
           <template v-if="!records.length && !loading">
-            <el-empty description="No records found" />
+            <el-empty description="暂无历史记录" />
           </template>
         </el-card>
       </el-col>
@@ -302,7 +302,7 @@ onMounted(() => {
         <el-card class="content-card" shadow="hover">
           <template #header>
             <div class="card-header">
-              <h3 class="card-title">Generation Project Summary</h3>
+              <h3 class="card-title">项目生成分布</h3>
             </div>
           </template>
           
@@ -319,7 +319,7 @@ onMounted(() => {
               </div>
               <div class="count-bubble">{{ item.count }}</div>
             </div>
-            <div v-if="!historySummary.length" class="empty-state">No data available</div>
+            <div v-if="!historySummary.length" class="empty-state">暂无数据</div>
           </div>
         </el-card>
       </el-col>

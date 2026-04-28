@@ -382,7 +382,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <p class="tool-card__desc">基于需求自动生成覆盖正向、逆向、异常、并发的测试用例</p>
           <div class="tool-card__footer">
             <span class="ready-text">V1.0</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/testcase_gen')">打开</a>
+            <a href="#" class="open-link" @click.prevent="router.push('/testcase_gen/new')">打开</a>
           </div>
         </div>
 

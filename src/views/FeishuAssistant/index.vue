@@ -69,7 +69,7 @@ interface ScheduledTaskForm {
 }
 
 // --- API Service (Direct fetch for simplicity in this dashboard) ---
-const API_BASE = 'http://localhost:8080/api'
+const API_BASE = '/api'
 const authStore = useAuthStore()
 const scheduledTasks = ref<ScheduledTask[]>([])
 
@@ -77,7 +77,7 @@ const scheduledTasks = ref<ScheduledTask[]>([])
 const tools = computed(() => [
   {
     id: 'total-sessions',
-    name: 'Total Sessions',
+    name: '会话总数',
     value: '142',
     iconName: 'ChatLineSquare',
     iconColor: '#3b82f6',
@@ -85,7 +85,7 @@ const tools = computed(() => [
   },
   {
     id: 'total-scheduled-tasks',
-    name: 'Total Scheduled Tasks',
+    name: '定时任务数',
     value: String(scheduledTasks.value.length),
     iconName: 'AlarmClock',
     iconColor: '#10b981',
@@ -93,16 +93,16 @@ const tools = computed(() => [
   },
   {
     id: 'bot-status',
-    name: 'Bot Status',
-    value: 'Online',
+    name: '助手状态',
+    value: '在线',
     iconName: 'Connection',
     iconColor: '#6366f1',
     iconBg: 'rgba(99, 102, 241, 0.1)'
   },
   {
     id: 'bot-config',
-    name: 'Configuration',
-    value: 'Settings',
+    name: '配置中心',
+    value: '设置',
     iconName: 'Setting',
     iconColor: '#f59e0b',
     iconBg: 'rgba(245, 158, 11, 0.1)'
@@ -120,7 +120,7 @@ const sessions = ref<SessionRecord[]>([
     summary: 'Querying streaming media playback API performance.',
     messages: [
       { id: 'm1', sender: 'user', senderName: 'Minghong Huang', msgType: 'text', content: 'Help me check the latest K6 report.', time: '10:20 AM' },
-      { id: 'm2', sender: 'bot', senderName: 'Feishu Bot', msgType: 'text', content: 'Sure. Looking up the latest K6 playback test results...', time: '10:20 AM' },
+      { id: 'm2', sender: 'bot', senderName: '飞书助手', msgType: 'text', content: '好的，正在帮你查看最新的 K6 回放测试结果...', time: '10:20 AM' },
       { id: 'm3', sender: 'user', senderName: 'Minghong Huang', msgType: 'text', content: 'Thanks, what is the P95 latency?', time: '10:25 AM' }
     ]
   }
@@ -161,15 +161,18 @@ const nextRunPreview = computed(() => {
 })
 
 const scheduledTaskDialogTitle = computed(() => {
-  return scheduledTaskDialogMode.value === 'edit' ? 'Edit Scheduled Task' : 'New Scheduled Tasks'
+  return scheduledTaskDialogMode.value === 'edit' ? '编辑定时任务' : '新建定时任务'
 })
 
 const scheduledTaskSubmitText = computed(() => {
-  return scheduledTaskDialogMode.value === 'edit' ? 'Save' : 'Create'
+  return scheduledTaskDialogMode.value === 'edit' ? '保存' : '创建'
 })
 
 // --- Lifecycle ---
-onMounted(() => {
+onMounted(async () => {
+  if (!authStore.isLoggedIn && authStore.status !== 'anonymous') {
+    await authStore.fetchMe()
+  }
   fetchOperationLogs()
   fetchProjects()
   fetchScheduledTasks()
@@ -251,7 +254,7 @@ const fetchScheduledTasks = async () => {
 
 const handleToolClick = (toolId: string) => {
   if (toolId === 'bot-config') {
-    ElMessage.info('Opening Bot Configuration...')
+    ElMessage.info('正在打开助手配置...')
   }
 }
 
@@ -287,7 +290,7 @@ const splitNextRun = (nextRun: string) => {
 
 const openEditScheduledTask = (task: ScheduledTask) => {
   if (task.status === 'running') {
-    ElMessage.warning('Running scheduled task cannot be edited')
+    ElMessage.warning('运行中的定时任务暂不支持编辑')
     return
   }
   const { date, time } = splitNextRun(task.nextRun)
@@ -313,7 +316,7 @@ const handleScheduleTypeChange = () => {
 const createScheduledTask = async () => {
   const form = scheduledTaskForm.value
   if (!form.taskType || !form.scheduleType || !form.creator || !form.testProjectCode || !form.testEnv) {
-    ElMessage.warning('请填写 Function、Schedule Type、Creater、Test Project 和 Test Env')
+    ElMessage.warning('请完整填写功能、执行频率、创建人、测试项目和测试环境')
     return
   }
   if (!form.startDate || !form.executionTime) {
@@ -338,16 +341,16 @@ const createScheduledTask = async () => {
     const data = await parseApiResponse(res)
     scheduledTasks.value.unshift(normalizeScheduledTask(data))
     scheduledTaskDialogVisible.value = false
-    ElMessage.success('Scheduled task created')
+    ElMessage.success('定时任务创建成功')
   } catch (e: any) {
-    ElMessage.error(e?.message || 'Scheduled task 创建失败')
+    ElMessage.error(e?.message || '定时任务创建失败')
   }
 }
 
 const updateScheduledTask = async () => {
   const form = scheduledTaskForm.value
   if (!editingScheduledTaskId.value || !form.scheduleType) {
-    ElMessage.warning('请选择需要修改的 Scheduled task 和 Schedule Type')
+    ElMessage.warning('请选择需要修改的定时任务和执行频率')
     return
   }
   if (!form.startDate || !form.executionTime) {
@@ -368,9 +371,9 @@ const updateScheduledTask = async () => {
     const updated = normalizeScheduledTask(data)
     scheduledTasks.value = scheduledTasks.value.map(item => item.id === updated.id ? updated : item)
     scheduledTaskDialogVisible.value = false
-    ElMessage.success('Scheduled task updated')
+    ElMessage.success('定时任务更新成功')
   } catch (e: any) {
-    ElMessage.error(e?.message || 'Scheduled task 修改失败')
+    ElMessage.error(e?.message || '定时任务修改失败')
   }
 }
 
@@ -389,20 +392,20 @@ const openSessionDetail = (row: SessionRecord) => {
 
 const sendReply = () => {
   if (!replyContent.value) {
-    ElMessage.warning('Empty message.')
+    ElMessage.warning('回复内容不能为空')
     return
   }
   if (selectedSession.value) {
     selectedSession.value.messages.push({
       id: `m${Date.now()}`,
       sender: 'bot',
-      senderName: 'Feishu Bot',
+      senderName: '飞书助手',
       msgType: 'text',
       content: replyContent.value,
       time: 'Just now'
     })
     replyContent.value = ''
-    ElMessage.success('Reply sent (Mock)')
+    ElMessage.success('回复已发送（模拟）')
   }
 }
 
@@ -430,13 +433,13 @@ const formatTime = (ts: string) => {
   <div class="dashboard">
     <div class="page-header">
       <div class="header-left">
-        <h2 class="page-title">Feishu Assistant</h2>
-        <div class="breadcrumb">Feishu Assistant <span class="divider">/</span> Bot Operations</div>
+        <h2 class="page-title">飞书助手</h2>
+        <div class="breadcrumb">飞书助手 <span class="divider">/</span> 助手运营台</div>
       </div>
       <div class="header-right">
         <el-button type="primary" class="new-scheduled-task-btn" @click="openCreateScheduledTask">
           <el-icon><component :is="Icons.Plus" /></el-icon>
-          New Scheduled Tasks
+          新建定时任务
         </el-button>
       </div>
     </div>
@@ -448,7 +451,7 @@ const formatTime = (ts: string) => {
           <div class="section-icon section-icon--indigo">
             <el-icon :size="14"><component :is="Icons.DataBoard" /></el-icon>
           </div>
-          <h2 class="section-title">Bot Subsystem Overview</h2>
+          <h2 class="section-title">助手概览</h2>
         </div>
       </div>
 
@@ -482,7 +485,7 @@ const formatTime = (ts: string) => {
           <div class="section-icon section-icon--blue">
             <el-icon :size="14"><component :is="Icons.ChatDotRound" /></el-icon>
           </div>
-          <h2 class="section-title">Session Cycles (Recent Messages)</h2>
+          <h2 class="section-title">最近会话</h2>
         </div>
       </div>
 
@@ -493,7 +496,7 @@ const formatTime = (ts: string) => {
           row-class-name="session-row"
           @row-click="openSessionDetail"
         >
-          <el-table-column label="User" width="200">
+          <el-table-column label="用户" width="200">
             <template #default="scope">
               <div class="sender-info">
                 <el-avatar :size="30" :style="getAvatarStyle(scope.row.userName)">
@@ -504,7 +507,7 @@ const formatTime = (ts: string) => {
             </template>
           </el-table-column>
 
-          <el-table-column prop="status" label="State" width="100">
+          <el-table-column prop="status" label="状态" width="100">
             <template #default="scope">
               <el-tag :type="getStatusType(scope.row.status)" size="small" round>
                 {{ scope.row.status.toUpperCase() }}
@@ -512,11 +515,11 @@ const formatTime = (ts: string) => {
             </template>
           </el-table-column>
 
-          <el-table-column prop="msgCount" label="Msgs" width="80" align="center" />
+          <el-table-column prop="msgCount" label="消息数" width="80" align="center" />
 
-          <el-table-column prop="summary" label="Latest Activity Summary" min-width="250" show-overflow-tooltip />
+          <el-table-column prop="summary" label="最近会话摘要" min-width="250" show-overflow-tooltip />
 
-          <el-table-column prop="lastActiveTime" label="Last Active Time" width="180" />
+          <el-table-column prop="lastActiveTime" label="最后活跃时间" width="180" />
         </el-table>
       </div>
     </div>
@@ -528,7 +531,7 @@ const formatTime = (ts: string) => {
           <div class="section-icon section-icon--green">
             <el-icon :size="14"><component :is="Icons.Clock" /></el-icon>
           </div>
-          <h2 class="section-title">Scheduled tasks</h2>
+          <h2 class="section-title">定时任务</h2>
         </div>
       </div>
 
@@ -536,11 +539,11 @@ const formatTime = (ts: string) => {
         <el-table
           :data="scheduledTasks"
           style="width: 100%"
-          empty-text="No scheduled tasks yet."
+          empty-text="暂无定时任务"
           row-class-name="scheduled-task-row"
           @row-click="openEditScheduledTask"
         >
-          <el-table-column label="Task" min-width="260">
+          <el-table-column label="任务" min-width="260">
             <template #default="scope">
               <div class="scheduled-task">
                 <span class="scheduled-task__name">{{ scope.row.name }}</span>
@@ -549,18 +552,18 @@ const formatTime = (ts: string) => {
             </template>
           </el-table-column>
 
-          <el-table-column prop="scheduleType" label="Schedule Type" width="150" />
-          <el-table-column prop="testProject" label="Test Project" width="190">
+          <el-table-column prop="scheduleType" label="执行频率" width="150" />
+          <el-table-column prop="testProject" label="测试项目" width="190">
             <template #default="scope">
               <span>{{ scope.row.testProject }}</span>
               <span class="scheduled-task__code"> / {{ scope.row.testProjectCode }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="testEnv" label="Test Env" min-width="150" />
-          <el-table-column prop="creator" label="Creater" width="150" />
-          <el-table-column prop="nextRun" label="Next Run" width="170" />
+          <el-table-column prop="testEnv" label="测试环境" min-width="150" />
+          <el-table-column prop="creator" label="创建人" width="150" />
+          <el-table-column prop="nextRun" label="下次执行时间" width="170" />
 
-          <el-table-column prop="status" label="Status" width="120" align="center">
+          <el-table-column prop="status" label="状态" width="120" align="center">
             <template #default="scope">
               <el-tag :type="getStatusType(scope.row.status)" size="small" round>
                 {{ scope.row.status.toUpperCase() }}
@@ -578,35 +581,35 @@ const formatTime = (ts: string) => {
           <div class="section-icon section-icon--orange">
             <el-icon :size="14"><component :is="Icons.List" /></el-icon>
           </div>
-          <h2 class="section-title">Audit Log: AI Operations History</h2>
+          <h2 class="section-title">AI 操作审计日志</h2>
         </div>
       </div>
 
       <div class="table-container">
-        <el-table :data="operationLogs" style="width: 100%" empty-text="No records yet. Perform an operation via AI to see it here.">
-          <el-table-column prop="timestamp" label="Time" width="180">
+        <el-table :data="operationLogs" style="width: 100%" empty-text="暂无记录，执行 AI 操作后会展示在这里。">
+          <el-table-column prop="timestamp" label="时间" width="180">
             <template #default="scope">{{ formatTime(scope.row.timestamp) }}</template>
           </el-table-column>
-          <el-table-column prop="tool_name" label="Operation" width="140">
+          <el-table-column prop="tool_name" label="操作" width="140">
             <template #default="scope">
               <el-tag type="danger" size="small">{{ scope.row.tool_name }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="project" label="Project" width="120" />
-          <el-table-column prop="env" label="Env" width="100">
+          <el-table-column prop="project" label="项目" width="120" />
+          <el-table-column prop="env" label="环境" width="100">
              <template #default="scope">
                 <el-tag :type="scope.row.env === 'prod' ? 'danger' : 'warning'" size="small">
                   {{ scope.row.env.toUpperCase() }}
                 </el-tag>
              </template>
           </el-table-column>
-          <el-table-column prop="detail" label="Result Summary" min-width="300" />
-          <el-table-column prop="user_id" label="Operator" width="180">
+          <el-table-column prop="detail" label="结果摘要" min-width="300" />
+          <el-table-column prop="user_id" label="操作人" width="180">
             <template #default="scope">
               <span>{{ scope.row.user_name || scope.row.user_id || '-' }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="status" label="Status" width="100" align="center">
+          <el-table-column prop="status" label="状态" width="100" align="center">
             <template #default="scope">
               <el-icon color="#67C23A" v-if="scope.row.status === 'success'"><component :is="Icons.CircleCheckFilled" /></el-icon>
               <el-icon color="#F56C6C" v-else><component :is="Icons.CircleCloseFilled" /></el-icon>
@@ -619,7 +622,7 @@ const formatTime = (ts: string) => {
     <!-- ========== Chat Drawer (Original) ========== -->
     <el-drawer
       v-model="drawerVisible"
-      :title="`Session with ${selectedSession?.userName}`"
+      :title="`与 ${selectedSession?.userName} 的会话`"
       size="450px"
       direction="rtl"
       destroy-on-close
@@ -646,10 +649,10 @@ const formatTime = (ts: string) => {
           </div>
         </div>
         <div class="chat-reply-area" v-if="selectedSession?.status === 'active'">
-          <el-input v-model="replyContent" type="textarea" :rows="3" placeholder="Type a reply to send to Feishu..." resize="none" />
-          <div class="reply-actions text-right mt-2"><el-button type="primary" @click="sendReply">Send</el-button></div>
+          <el-input v-model="replyContent" type="textarea" :rows="3" placeholder="输入要发送到飞书的回复内容..." resize="none" />
+          <div class="reply-actions text-right mt-2"><el-button type="primary" @click="sendReply">发送</el-button></div>
         </div>
-        <div class="chat-ended-notice" v-else>This session has been ended.</div>
+        <div class="chat-ended-notice" v-else>该会话已结束。</div>
       </div>
     </el-drawer>
 
@@ -660,7 +663,7 @@ const formatTime = (ts: string) => {
       destroy-on-close
     >
       <el-form :model="scheduledTaskForm" label-position="top" class="scheduled-task-form">
-        <el-form-item label="Function">
+        <el-form-item label="功能">
           <el-select
             v-model="scheduledTaskForm.taskType"
             placeholder="请选择功能"
@@ -671,7 +674,7 @@ const formatTime = (ts: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="Schedule Type">
+        <el-form-item label="执行频率">
           <el-select
             v-model="scheduledTaskForm.scheduleType"
             placeholder="请选择执行频率"
@@ -687,7 +690,7 @@ const formatTime = (ts: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="Test Project">
+        <el-form-item label="测试项目">
           <el-select
             v-model="scheduledTaskForm.testProjectCode"
             placeholder="请选择测试项目"
@@ -704,7 +707,7 @@ const formatTime = (ts: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="Test Env">
+        <el-form-item label="测试环境">
           <el-select
             v-model="scheduledTaskForm.testEnv"
             placeholder="请选择测试环境"
@@ -720,11 +723,11 @@ const formatTime = (ts: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="Creater">
+        <el-form-item label="创建人">
           <el-input v-model="scheduledTaskForm.creator" disabled />
         </el-form-item>
 
-        <el-form-item label="Next Run">
+        <el-form-item label="下次执行时间">
           <div
             v-if="scheduledTaskForm.scheduleType"
             class="next-run-picker"
@@ -745,15 +748,15 @@ const formatTime = (ts: string) => {
               class="next-run-picker__time"
             />
           </div>
-          <el-input v-else placeholder="请先选择 Schedule Type" disabled />
+          <el-input v-else placeholder="请先选择执行频率" disabled />
           <div v-if="scheduledTaskForm.scheduleType === 'weekly'" class="schedule-hint">
-            Weekly tasks run every 7 days from the selected start date.
+            周期任务会从所选开始日期起按每 7 天执行一次。
           </div>
         </el-form-item>
       </el-form>
 
       <template #footer>
-        <el-button @click="scheduledTaskDialogVisible = false">Cancel</el-button>
+        <el-button @click="scheduledTaskDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="submitScheduledTask">{{ scheduledTaskSubmitText }}</el-button>
       </template>
     </el-dialog>

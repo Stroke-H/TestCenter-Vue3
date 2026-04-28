@@ -8,7 +8,7 @@ import { retryFetch } from '@/utils/retryFetch'
 defineOptions({ name: 'AcceptanceReport' })
 
 // --- API Service ---
-const API_BASE = 'http://localhost:8080/api'
+const API_BASE = '/api'
 const authStore = useAuthStore()
 
 interface ProjectOption {
@@ -29,9 +29,9 @@ interface DeviceOption {
 
 // ===== State =====
 const stats = ref([
-  { title: 'Total Report', value: 0, icon: markRaw(Calendar), color: '#3b82f6', bgColor: '#eff6ff' },
-  { title: 'Tester', value: 0, icon: markRaw(User), color: '#eab308', bgColor: '#fefce8' },
-  { title: 'Total Project', value: 0, icon: markRaw(Money), color: '#f97316', bgColor: '#fff7ed' }
+  { title: '报告总数', value: 0, icon: markRaw(Calendar), color: '#3b82f6', bgColor: '#eff6ff' },
+  { title: '测试负责人', value: 0, icon: markRaw(User), color: '#eab308', bgColor: '#fefce8' },
+  { title: '覆盖项目数', value: 0, icon: markRaw(Money), color: '#f97316', bgColor: '#fff7ed' }
 ])
 
 const recentReports = ref<any[]>([])
@@ -78,6 +78,10 @@ const fetchReports = async () => {
         'Authorization': authStore.token
       }
     })
+    if (!res.ok) {
+      const rawText = await res.text()
+      throw new Error(rawText || `请求失败 (${res.status})`)
+    }
     const data = await res.json()
     if (data && Array.isArray(data)) {
       recentReports.value = data.map(r => ({
@@ -111,8 +115,11 @@ const fetchReports = async () => {
         stats.value[2].value = historyProjects.value.length
       }
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error('Failed to fetch reports', err)
+    if (String(err?.message || '').includes('Unauthorized')) {
+      ElMessage.warning('当前登录态未就绪或已失效，请重新登录后重试')
+    }
   }
 }
 
@@ -488,10 +495,14 @@ watch(
   scheduleAutoFetchProjectItems
 )
 
-onMounted(() => {
-  fetchReports()
-  fetchProjects()
-  fetchDevices()
+onMounted(async () => {
+  await Promise.all([fetchProjects(), fetchDevices()])
+  if (!authStore.isLoggedIn && authStore.status !== 'anonymous') {
+    await authStore.fetchMe()
+  }
+  if (authStore.isLoggedIn) {
+    await fetchReports()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -504,12 +515,12 @@ onBeforeUnmount(() => {
     <!-- Header -->
     <div class="page-header">
       <div class="header-left">
-        <h2 class="page-title">Acceptance Report</h2>
-        <div class="breadcrumb">Acceptance Report <span class="divider">/</span> Report</div>
+        <h2 class="page-title">验收报告</h2>
+        <div class="breadcrumb">验收报告 <span class="divider">/</span> 报告中心</div>
       </div>
       <div class="header-right">
         <el-button type="primary" :icon="Plus" class="new-report-btn" @click="openCreateReport">
-          New Report
+          新建报告
         </el-button>
       </div>
     </div>
@@ -538,19 +549,19 @@ onBeforeUnmount(() => {
         <el-card class="content-card" shadow="hover">
           <template #header>
             <div class="card-header">
-              <h3 class="card-title">Recent Report</h3>
+              <h3 class="card-title">最近报告</h3>
               <div class="header-actions">
                 <el-input
                   v-model="searchQuery"
-                  placeholder="Search reporter or project..."
+                  placeholder="按报告人或项目筛选"
                   :prefix-icon="Search"
                   class="search-input"
                   clearable
                 />
-                <el-select v-model="categoryFilter" placeholder="Category" class="filter-select">
-                  <el-option label="All Categories" value="" />
-                  <el-option label="Mobile" value="mobile" />
-                  <el-option label="Web" value="web" />
+                <el-select v-model="categoryFilter" placeholder="分类" class="filter-select">
+                  <el-option label="全部分类" value="" />
+                  <el-option label="移动端" value="mobile" />
+                  <el-option label="Web 端" value="web" />
                 </el-select>
               </div>
             </div>
@@ -564,18 +575,18 @@ onBeforeUnmount(() => {
               :row-style="{ height: '60px', cursor: 'pointer' }"
               @row-click="handleRowClick"
             >
-              <el-table-column label="Img" width="70">
+              <el-table-column label="头像" width="70">
                 <template #default="{ row }">
                   <div class="avatar-circle">{{ row.avatar }}</div>
                 </template>
               </el-table-column>
-              <el-table-column prop="reporter_display" label="Reporter/Project" min-width="250">
+              <el-table-column prop="reporter_display" label="报告人 / 项目" min-width="250">
                 <template #default="{ row }">
                   <span class="reporter-text">{{ row.reporter_display }}</span>
                 </template>
               </el-table-column>
-              <el-table-column prop="date" label="Report Date" width="150" />
-              <el-table-column prop="status" label="Status" width="120">
+              <el-table-column prop="date" label="报告日期" width="150" />
+              <el-table-column prop="status" label="状态" width="120">
                 <template #default="{ row }">
                   <span class="status-badge" :class="row.status.toLowerCase().replace(' ', '-')">
                     {{ row.status }}
@@ -592,7 +603,7 @@ onBeforeUnmount(() => {
         <el-card class="content-card" shadow="hover">
           <template #header>
             <div class="card-header">
-              <h3 class="card-title">History Project Report Count</h3>
+              <h3 class="card-title">项目报告分布</h3>
             </div>
           </template>
           
@@ -612,7 +623,7 @@ onBeforeUnmount(() => {
     <!-- Preview Dialog -->
     <el-dialog
       v-model="previewVisible"
-      :title="previewMode === 'create' ? 'Create New Acceptance Report' : `Report Preview - ${currentPreview?.project_name || 'Detail'}`"
+      :title="previewMode === 'create' ? '新建验收报告' : `报告预览 - ${currentPreview?.project_name || '详情'}`"
       width="600px"
       destroy-on-close
       class="preview-dialog"
@@ -620,42 +631,42 @@ onBeforeUnmount(() => {
       <div v-if="previewMode === 'view' && currentPreview" class="preview-content">
         <div class="preview-section">
           <div class="preview-item">
-            <span class="label">Project Code:</span>
+            <span class="label">项目代码:</span>
             <span class="value font-bold">{{ currentPreview.project_code }}</span>
           </div>
           <div class="preview-item">
-            <span class="label">Version:</span>
+            <span class="label">版本号:</span>
             <span class="value">v{{ currentPreview.version }}</span>
           </div>
         </div>
 
         <div class="preview-section">
           <div class="preview-item">
-            <span class="label">Test Owner:</span>
+            <span class="label">测试负责人:</span>
             <span class="value">{{ currentPreview.reporter }}</span>
           </div>
           <div class="preview-item">
-            <span class="label">Test Time:</span>
+            <span class="label">测试时间:</span>
             <span class="value">{{ currentPreview.test_time || currentPreview.created_at?.split('T')[0] }}</span>
           </div>
         </div>
 
         <div class="preview-section">
           <div class="preview-item">
-            <span class="label">Test Env:</span>
+            <span class="label">测试环境:</span>
             <span class="value">{{ getPreviewTestEnv(currentPreview) }}</span>
           </div>
           <div class="preview-item">
-            <span class="label">Test Devices:</span>
+            <span class="label">测试设备:</span>
             <span class="value">{{ getPreviewTestDevices(currentPreview) }}</span>
           </div>
         </div>
 
         <div class="preview-section">
           <div class="preview-item">
-            <span class="label">Conclusion:</span>
+            <span class="label">测试结论:</span>
             <el-tag :type="currentPreview.test_conclusion === 'Pass' ? 'success' : 'danger'" size="small" effect="dark">
-              {{ currentPreview.test_conclusion || 'Unknown' }}
+              {{ currentPreview.test_conclusion || '未知' }}
             </el-tag>
           </div>
         </div>
@@ -677,7 +688,7 @@ onBeforeUnmount(() => {
       <div v-else class="preview-content">
         <div class="preview-section">
           <div class="preview-item">
-            <span class="label">Project Name:</span>
+            <span class="label">项目名称:</span>
             <el-select
               v-model="reportForm.project_name"
               filterable
@@ -694,7 +705,7 @@ onBeforeUnmount(() => {
             </el-select>
           </div>
           <div class="preview-item">
-            <span class="label">Project Code:</span>
+            <span class="label">项目代码:</span>
             <el-select
               v-model="reportForm.project_code"
               filterable
@@ -714,11 +725,11 @@ onBeforeUnmount(() => {
 
         <div class="preview-section">
           <div class="preview-item">
-            <span class="label">Version:</span>
+            <span class="label">版本号:</span>
             <el-input v-model="reportForm.version" placeholder="例如 2.58.0" />
           </div>
           <div class="preview-item">
-            <span class="label">Test Time:</span>
+            <span class="label">测试时间:</span>
             <el-date-picker
               v-model="testTimeRange"
               type="daterange"
@@ -733,25 +744,25 @@ onBeforeUnmount(() => {
 
         <div class="preview-section">
           <div class="preview-item">
-            <span class="label">Reporter:</span>
+            <span class="label">报告人:</span>
             <el-input v-model="reportForm.reporter" placeholder="请输入报告人" />
           </div>
           <div class="preview-item">
-            <span class="label">Test Owner:</span>
+            <span class="label">测试负责人:</span>
             <el-input v-model="reportForm.test_owner" placeholder="请输入测试负责人" />
           </div>
         </div>
 
         <div class="preview-section">
           <div class="preview-item">
-            <span class="label">Test Env:</span>
+            <span class="label">测试环境:</span>
             <el-select v-model="reportForm.test_env" placeholder="请选择测试环境" style="width: 100%">
               <el-option label="测试服务器" value="测试服务器" />
               <el-option label="正式服务器" value="正式服务器" />
             </el-select>
           </div>
           <div class="preview-item">
-            <span class="label">Test Devices:</span>
+            <span class="label">测试设备:</span>
             <el-select
               v-model="selectedTestDevices"
               multiple
@@ -773,7 +784,7 @@ onBeforeUnmount(() => {
 
         <div class="preview-section">
           <div class="preview-item">
-            <span class="label">Conclusion:</span>
+            <span class="label">测试结论:</span>
             <el-select v-model="reportForm.test_conclusion" style="width: 100%">
               <el-option label="Pass" value="Pass" />
               <el-option label="Fail" value="Fail" />
@@ -781,7 +792,7 @@ onBeforeUnmount(() => {
             </el-select>
           </div>
           <div class="preview-item">
-            <span class="label">Project Match:</span>
+            <span class="label">项目匹配:</span>
             <span class="value">{{ selectedProject?.project_name && selectedProject?.project_code ? `${selectedProject.project_name} / ${selectedProject.project_code}` : '请选择项目' }}</span>
           </div>
         </div>
@@ -838,7 +849,7 @@ onBeforeUnmount(() => {
       </div>
       <template #footer>
         <span class="dialog-footer">
-          <el-button @click="previewVisible = false">{{ previewMode === 'create' ? '取消' : 'Close' }}</el-button>
+          <el-button @click="previewVisible = false">{{ previewMode === 'create' ? '取消' : '关闭' }}</el-button>
           <el-button
             v-if="canSendToFeishu"
             type="success"

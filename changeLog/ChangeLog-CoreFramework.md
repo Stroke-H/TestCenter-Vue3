@@ -1,5 +1,11 @@
 # ChangeLog - CoreFramework
 
+## 2026-04-28
+
+### Changed
+- **Unified Frontend API Routing**: 前端多处写死 `http://localhost:8080/api` 的调用改为统一走同源 `/api` 代理，修复通过 `strokeh.local:5173` 等非 localhost 域名访问时的数据加载失败问题。
+- **Auth-ready Page Fetching**: 验收报告与飞书助手在页面初始化时会优先等待当前登录态完成恢复，再请求受保护数据，减少登录态初始化竞态导致的空白或误报。
+
 ## 2026-04-24
 
 ### Added

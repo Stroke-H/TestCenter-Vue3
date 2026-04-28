@@ -82,6 +82,20 @@ const showRawDialog = ref(false)
 const currentBatch = ref(0)
 const totalBatches = ref(0)
 const categoryOrder = ['常规功能测试', '边界极限测试', '异常容错测试', '稳定性并发测试']
+const workflowSteps = [
+  {
+    title: '需求输入',
+    description: '录入原始需求内容'
+  },
+  {
+    title: '需求拆解',
+    description: '确认 AI 拆解结果'
+  },
+  {
+    title: '生成完成',
+    description: '预览并保存用例'
+  }
+] as const
 const categoryStats = computed(() => {
   const counters: Record<string, number> = {}
   for (const category of categoryOrder) counters[category] = 0
@@ -406,41 +420,85 @@ const excelColumns = [
 <template>
   <div class="testcase-gen">
     <div class="header-section">
-      <div class="title-row">
-        <el-button :icon="ArrowLeft" circle @click="goBack" class="back-btn" />
-        <el-icon :size="24" color="#8b5cf6"><Notebook /></el-icon>
-        <h2 class="page-title">{{ isViewMode ? recordTitle : '智能测试用例生成' }}</h2>
-        <div class="header-actions">
-           <el-button v-if="activeStep > 0 && !isViewMode" link @click="resetAll" :icon="Refresh">重新开始</el-button>
+      <div class="page-hero">
+        <div class="title-row">
+          <el-button :icon="ArrowLeft" circle @click="goBack" class="back-btn" />
+          <div class="title-copy">
+            <div class="breadcrumb">测试用例生成 <span class="divider">/</span> {{ isViewMode ? '记录详情' : '智能测试用例生成' }}</div>
+            <div class="title-main">
+              <el-icon :size="20" color="#3b82f6"><Notebook /></el-icon>
+              <h2 class="page-title">{{ isViewMode ? recordTitle : '智能测试用例生成' }}</h2>
+            </div>
+            <p class="page-desc">
+              {{ isViewMode ? '查看并维护已保存的测试用例生成记录。' : '输入需求后逐步拆解、确认并生成更聚焦主流程和高风险场景的测试用例。' }}
+            </p>
+          </div>
+        </div>
+        <div class="hero-actions">
+          <el-button v-if="activeStep > 0 && !isViewMode" @click="resetAll" :icon="Refresh">重新开始</el-button>
         </div>
       </div>
-      <p class="page-desc" v-if="!isViewMode">基于 AI 自动完成需求拆解，并生成更聚焦于 App 功能测试的高价值用例。</p>
     </div>
 
     <!-- 步骤条 -->
     <div class="steps-wrapper" v-if="!isViewMode">
-      <el-steps :active="activeStep" finish-status="success" align-center>
-        <el-step title="需求输入" :icon="Edit" />
-        <el-step title="需求拆解" :icon="MagicStick" />
-        <el-step title="生成完成" :icon="DocumentChecked" />
-      </el-steps>
+      <div class="workflow-steps">
+        <div
+          v-for="(step, index) in workflowSteps"
+          :key="step.title"
+          :class="[
+            'workflow-step-card',
+            {
+              'is-active': activeStep === index,
+              'is-done': activeStep > index,
+              'is-pending': activeStep < index
+            }
+          ]"
+        >
+          <div class="workflow-step-card__head">
+            <div class="workflow-step-card__index">
+              <el-icon v-if="activeStep > index"><DocumentChecked /></el-icon>
+              <span v-else>{{ index + 1 }}</span>
+            </div>
+            <span class="workflow-step-card__badge">
+              {{ activeStep > index ? '已完成' : activeStep === index ? '进行中' : '待开始' }}
+            </span>
+          </div>
+          <div class="workflow-step-card__title">{{ step.title }}</div>
+          <div class="workflow-step-card__desc">{{ step.description }}</div>
+          <div v-if="index < workflowSteps.length - 1" class="workflow-step-card__connector" />
+        </div>
+      </div>
     </div>
 
     <div class="content-body">
       <transition name="fade" mode="out-in">
         <!-- Step 0: 需求输入 -->
         <div v-if="activeStep === 0" key="step0">
-          <el-card class="glass-card" shadow="never">
+          <el-card class="panel-card" shadow="never">
             <template #header>
               <div class="card-header">
-                <span class="header-text">1. 原始需求描述</span>
-                <span class="header-tip">支持 PRD 文本、接口定义、或非结构化功能描述</span>
+                <div>
+                  <div class="header-text">1. 原始需求描述</div>
+                  <div class="header-tip">支持 PRD 文本、接口定义、用户故事或非结构化功能说明。</div>
+                </div>
               </div>
             </template>
+            <div class="intro-strip">
+              <div class="intro-item">
+                <span class="intro-item__title">建议内容</span>
+                <span class="intro-item__desc">功能背景、核心流程、规则约束、异常处理、并发要求</span>
+              </div>
+              <div class="intro-item">
+                <span class="intro-item__title">生成方向</span>
+                <span class="intro-item__desc">优先覆盖主路径、高风险边界、异常容错与稳定性场景</span>
+              </div>
+            </div>
             <el-input
               v-model="requirementDescription"
               type="textarea"
-              :rows="12"
+              :rows="14"
+              class="requirement-input"
               placeholder="例如：系统需要支持用户登录功能。
 1. 账号为 5-12 位字母数字。
 2. 密码必须包含特殊字符。
@@ -452,7 +510,7 @@ const excelColumns = [
               <el-button 
                 type="primary" 
                 size="large"
-                class="gradient-btn"
+                class="primary-btn"
                 :loading="loading" 
                 @click="handleDecompose"
               >
@@ -465,10 +523,13 @@ const excelColumns = [
 
         <!-- Step 1: 需求点确认 -->
         <div v-else-if="activeStep === 1" key="step1">
-          <el-card class="glass-card" shadow="never">
+          <el-card class="panel-card" shadow="never">
             <template #header>
               <div class="card-header">
-                <span class="header-text">2. AI 需求分析报告</span>
+                <div>
+                  <div class="header-text">2. AI 需求分析结果</div>
+                  <div class="header-tip">先确认拆解结果，再决定是否进行增强拆解和用例生成。</div>
+                </div>
                 <div class="header-actions">
                   <el-button @click="prevStep" :icon="ArrowLeft">上一步</el-button>
                 </div>
@@ -538,7 +599,7 @@ const excelColumns = [
             <div class="action-row">
               <el-button
                 v-if="!isViewMode"
-                type="info"
+                type="default"
                 :loading="smartLoading"
                 @click="handleSmartDecompose"
                 :icon="MagicStick"
@@ -548,7 +609,7 @@ const excelColumns = [
               <el-button 
                 type="primary" 
                 size="large"
-                class="gradient-btn"
+                class="primary-btn"
                 :loading="loading" 
                 @click="handleGenerate"
               >
@@ -565,9 +626,13 @@ const excelColumns = [
         <!-- Step 2: Excel 风格预览 -->
         <div v-else-if="activeStep === 2" key="step2">
           <div class="spreadsheet-container">
-            <div class="spreadsheet-toolbar">
+            <div class="result-summary-card">
+              <div class="result-summary-card__main">
+                <div class="result-summary-card__title">生成结果预览</div>
+                <div class="result-summary-card__desc">可在保存前继续调整项目和模块归属，并导出 Excel 文件留档。</div>
+              </div>
               <div class="toolbar-left">
-                <el-tag type="success" effect="dark" class="res-tag">生成成功: {{ generatedCases.length }} 条用例</el-tag>
+                <el-tag type="success" effect="dark" class="res-tag">已生成 {{ generatedCases.length }} 条用例</el-tag>
                 <el-tag
                   v-for="item in categoryStats"
                   :key="item.category"
@@ -578,15 +643,28 @@ const excelColumns = [
                   {{ item.category }}: {{ item.count }}
                 </el-tag>
               </div>
-              <div class="toolbar-right">
-                <el-button v-if="!isViewMode" @click="prevStep" :icon="ArrowLeft">回退修改</el-button>
-                <el-button v-if="!isViewMode" type="primary" @click="handleSave" :icon="Collection" :loading="loading">保存到历史</el-button>
-                <el-button v-if="isViewMode && isModified" type="primary" @click="handleUpdate" :icon="DocumentChecked" :loading="loading">更新记录</el-button>
-                
+            </div>
+
+            <div class="result-config-card">
+              <div class="result-config-card__fields">
+                <el-select
+                  v-model="selectedProjectCode"
+                  placeholder="所属项目"
+                  class="toolbar-select"
+                  clearable
+                >
+                  <el-option
+                    v-for="p in projects"
+                    :key="p.project_code"
+                    :label="p.project_name"
+                    :value="p.project_code"
+                  />
+                </el-select>
+
                 <el-select
                   v-model="selectedModule"
                   placeholder="功能模块"
-                  style="width: 140px; margin-right: 12px;"
+                  class="toolbar-select"
                   filterable
                   allow-create
                   default-first-option
@@ -599,21 +677,12 @@ const excelColumns = [
                     :value="m"
                   />
                 </el-select>
+              </div>
 
-                <el-select
-                  v-model="selectedProjectCode"
-                  placeholder="所属项目"
-                  style="width: 140px; margin-right: 12px;"
-                  clearable
-                >
-                  <el-option
-                    v-for="p in projects"
-                    :key="p.project_code"
-                    :label="p.project_name"
-                    :value="p.project_code"
-                  />
-                </el-select>
-
+              <div class="toolbar-right">
+                <el-button v-if="!isViewMode" @click="prevStep" :icon="ArrowLeft">回退修改</el-button>
+                <el-button v-if="!isViewMode" type="primary" @click="handleSave" :icon="Collection" :loading="loading">保存到历史</el-button>
+                <el-button v-if="isViewMode && isModified" type="primary" @click="handleUpdate" :icon="DocumentChecked" :loading="loading">更新记录</el-button>
                 <el-button type="success" @click="handleExport" :icon="Download">下载 Excel 文件 (.xlsx)</el-button>
               </div>
             </div>
@@ -712,8 +781,8 @@ const excelColumns = [
 
 <style scoped>
 .testcase-gen {
-  padding: 24px;
-  max-width: 1300px;
+  padding: 12px 8px 24px;
+  max-width: 1360px;
   margin: 0 auto;
 }
 
@@ -721,40 +790,194 @@ const excelColumns = [
   margin-bottom: 24px;
 }
 
+.page-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 18px 20px;
+  background: #fff;
+  border: 1px solid #e5edf7;
+  border-radius: 16px;
+}
+
 .title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.title-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.title-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hero-actions {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 8px;
 }
 
-.page-title {
-  font-size: 26px;
-  font-weight: 800;
-  color: #0f172a;
-  margin: 0;
-  letter-spacing: -0.8px;
-}
-
-.page-desc {
-  font-size: 15px;
+.breadcrumb {
+  font-size: 13px;
   color: #64748b;
 }
 
-.steps-wrapper {
-  margin-bottom: 32px;
+.divider {
+  margin: 0 4px;
+  color: #cbd5e1;
 }
 
-.glass-card {
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+}
+
+.page-desc {
+  margin: 0;
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.steps-wrapper {
+  margin: 20px 0 24px;
+}
+
+.workflow-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  padding: 18px;
+  background: #fff;
+  border: 1px solid #e5edf7;
   border-radius: 16px;
-  border: 1px solid #e2e8f0;
+}
+
+.workflow-step-card {
+  position: relative;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid #dbe5f1;
+  background: #f8fafc;
+  min-height: 112px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+}
+
+.workflow-step-card.is-active {
+  background: linear-gradient(180deg, #eff6ff 0%, #f8fbff 100%);
+  border-color: #60a5fa;
+  box-shadow: 0 8px 18px rgba(59, 130, 246, 0.12);
+  transform: translateY(-1px);
+}
+
+.workflow-step-card.is-done {
+  background: linear-gradient(180deg, #f0fdf4 0%, #f8fffb 100%);
+  border-color: #86efac;
+}
+
+.workflow-step-card.is-pending {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+.workflow-step-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.workflow-step-card__index {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #475569;
+  background: #e2e8f0;
+}
+
+.workflow-step-card.is-active .workflow-step-card__index {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.workflow-step-card.is-done .workflow-step-card__index {
+  background: #22c55e;
+  color: #fff;
+}
+
+.workflow-step-card__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  background: #eef2f7;
+}
+
+.workflow-step-card.is-active .workflow-step-card__badge {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.workflow-step-card.is-done .workflow-step-card__badge {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+.workflow-step-card__title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 6px;
+}
+
+.workflow-step-card__desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #64748b;
+  max-width: 220px;
+}
+
+.workflow-step-card__connector {
+  position: absolute;
+  top: 50%;
+  right: -15px;
+  width: 16px;
+  height: 2px;
+  background: linear-gradient(90deg, #cbd5e1 0%, #e2e8f0 100%);
+  transform: translateY(-50%);
+}
+
+.panel-card {
+  border-radius: 16px;
+  border: 1px solid #e5edf7;
   background: #fff;
 }
 
 .card-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 12px;
 }
 
 .header-text {
@@ -766,19 +989,53 @@ const excelColumns = [
 .header-tip {
   font-size: 12px;
   color: #94a3b8;
-  margin-left: 12px;
+  margin-top: 6px;
   font-weight: 400;
+}
+
+.intro-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.intro-item {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: #f8fbff;
+  border: 1px solid #dbeafe;
+}
+
+.intro-item__title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e40af;
+}
+
+.intro-item__desc {
+  display: block;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #475569;
+}
+
+.requirement-input :deep(.el-textarea__inner) {
+  border-radius: 14px;
+  background: #f8fafc;
 }
 
 .action-row {
   margin-top: 24px;
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
-.gradient-btn {
-  background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
-  border: none;
+.primary-btn {
   font-weight: 600;
 }
 
@@ -827,8 +1084,8 @@ const excelColumns = [
 .smart-result-panel {
   margin-top: 24px;
   padding: 20px;
-  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
-  border: 1px solid #bbf7d0;
+  background: #f8fafc;
+  border: 1px solid #dbe7f3;
   border-radius: 12px;
 }
 
@@ -882,18 +1139,50 @@ const excelColumns = [
   gap: 16px;
 }
 
-.spreadsheet-toolbar {
+.result-summary-card,
+.result-config-card {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 4px;
+  gap: 16px;
+  padding: 18px 20px;
+  background: #fff;
+  border: 1px solid #e5edf7;
+  border-radius: 16px;
+}
+
+.result-summary-card__main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.result-summary-card__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.result-summary-card__desc {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.result-config-card__fields {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbar-select {
+  width: 180px;
 }
 
 .excel-frame {
   border: 1px solid #cbd5e1;
-  border-radius: 4px;
+  border-radius: 14px;
   overflow: hidden;
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  background: #fff;
 }
 
 :deep(.excel-table) {
@@ -967,6 +1256,14 @@ const excelColumns = [
   font-weight: 700;
 }
 
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 /* 动画 */
 .fade-enter-active, .fade-leave-active {
   transition: opacity 0.4s ease, transform 0.4s ease;
@@ -1020,5 +1317,43 @@ const excelColumns = [
 
 .raw-alert {
   margin-bottom: 12px;
+}
+
+@media (max-width: 960px) {
+  .page-hero,
+  .result-summary-card,
+  .result-config-card,
+  .card-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .intro-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-step-card__connector {
+    top: auto;
+    bottom: -8px;
+    left: 22px;
+    right: auto;
+    width: 2px;
+    height: 10px;
+    transform: none;
+    background: linear-gradient(180deg, #cbd5e1 0%, #e2e8f0 100%);
+  }
+
+  .requirement-grid,
+  .enhanced-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar-select {
+    width: 100%;
+  }
 }
 </style>

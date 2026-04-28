@@ -1,5 +1,10 @@
 # ChangeLog - Dashboard
 
+## 2026-04-28
+
+### Changed
+- **TestCase Card Routing**: 仪表盘“测试用例生成”卡片改为直接跳转到“智能测试用例生成”页面，不再默认进入历史记录页。
+
 ## 2026-04-24
 
 ### Added
