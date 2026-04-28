@@ -47,3 +47,21 @@
 ## 八、 修改红线
 - 禁止强制解包，必须异步处理错误。
 - 严禁重构与当前任务无关的稳定代码。
+
+## 九、GitHub 提交与隐私规范
+1. **提交前必须检查隐私数据**：提交前必须确认不包含 API Key、Token、Cookie、Session、密码、密码哈希、真实用户邮箱、飞书 open_id、设备资产清单、运行报告、业务备份数据。
+2. **运行数据禁止入库**：以下内容只能本地保存，禁止提交到 GitHub：
+   - `server/data/*.json`
+   - `server/data/processes/`
+   - `drama_info.json`
+   - `backup/legacy/*.jsonl`
+   - `server/feishu/*.jsonl`
+   - `k6-scripts/reports/*`
+3. **示例配置替代真实配置**：需要提交配置结构时，只能提交 `*.example.json`、`.env.example` 或无敏感值模板。
+4. **提交信息规范**：提交信息使用 Conventional Commits 风格，例如：
+   - `feat: add assistant chat mode switch`
+   - `fix: handle ime composition enter key`
+   - `chore: remove tracked runtime secrets`
+   - `docs: add github history cleanup guide`
+5. **单次提交聚焦**：每次提交只包含一个清晰主题；不要把隐私清理、功能开发、运行产物混在一起。
+6. **强推保护**：只有在用户明确确认历史重写时，才允许执行 `git push --force-with-lease`；强推后必须提醒协作者重新 clone 或 reset。

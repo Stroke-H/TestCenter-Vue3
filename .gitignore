@@ -24,8 +24,16 @@ dist-ssr
 *.sln
 *.sw?
 
-# Data files
-server/data/
+# Runtime data and local secrets
+server/data/*
+!server/data/README.md
+!server/data/*.example.json
+server/data/processes/
+server/feishu/*.jsonl
+backup/legacy/*.jsonl
+drama_info.json
+k6-scripts/reports/*
+!k6-scripts/reports/.gitkeep
+
 Skills/
 report/
-k6-scripts/reports/

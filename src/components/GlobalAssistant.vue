@@ -33,6 +33,8 @@ const assistantVisible = ref(false)
 const assistantSessionId = ref(`WEB_${Math.random().toString(36).substring(7)}`)
 const assistantInput = ref('')
 const assistantLoading = ref(false)
+const assistantMode = ref<'work' | 'casual'>('work')
+const isComposingInput = ref(false)
 const assistantMessages = ref<Message[]>([
   { role: 'assistant', text: '你好！我是你的智能助手，有什么可以帮你的吗？' }
 ])
@@ -41,10 +43,21 @@ const fabPosition = ref({ top: 0, left: 0 })
 const isDraggingFab = ref(false)
 const assistantButtonLabel = computed(() => dramaRunStore.assistantLabel)
 const assistantButtonActive = computed(() => dramaRunStore.isAssistantActive)
+const assistantModeLabel = computed(() => assistantMode.value === 'work' ? '工作' : '轻聊')
+const assistantModeTip = computed(() => assistantMode.value === 'work'
+  ? '当前使用平台工具、权限和安全约束'
+  : '当前绕过工具和系统约束，仅使用纯模型回复'
+)
 let dragOffsetX = 0
 let dragOffsetY = 0
 let dragMoved = false
 let dragStarted = false
+
+const cleanAssistantMarkdown = (text: string) => {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/__(.*?)__/g, '$1')
+}
 
 // --- Report Dialog State ---
 const showReportDialog = ref(false)
@@ -72,6 +85,7 @@ const sendAssistantMessage = async () => {
   if (!assistantInput.value || assistantLoading.value) return
 
   const userText = assistantInput.value
+  const requestText = assistantMode.value === 'casual' ? `<解限模式>${userText}` : userText
   assistantMessages.value.push({ role: 'user', text: userText })
   assistantInput.value = ''
   assistantLoading.value = true
@@ -87,7 +101,7 @@ const sendAssistantMessage = async () => {
         'Authorization': authStore.token
       },
       body: JSON.stringify({
-        message: userText,
+        message: requestText,
         session_id: assistantSessionId.value,
         user_id: authStore.user?.id || 'WEB_DASHBOARD_USER'
       })
@@ -97,7 +111,7 @@ const sendAssistantMessage = async () => {
     const toolResult = data.tool_result || ''
 
     // Add assistant's text response to chat
-    assistantMessages.value.push({ role: 'assistant', text: reply || 'AI 暂时无法响应' })
+    assistantMessages.value.push({ role: 'assistant', text: cleanAssistantMarkdown(reply || 'AI 暂时无法响应') })
 
     // Check if tool result contains report data
     if (toolResult && toolResult.includes('_is_report":true')) {
@@ -126,6 +140,10 @@ const sendAssistantMessage = async () => {
     assistantLoading.value = false
     scrollToBottom()
   }
+}
+
+const toggleAssistantMode = () => {
+  assistantMode.value = assistantMode.value === 'work' ? 'casual' : 'work'
 }
 
 const saveReport = async () => {
@@ -195,6 +213,7 @@ const scrollToBottom = () => {
 }
 
 const handleEnter = (e: KeyboardEvent) => {
+  if (isComposingInput.value || e.isComposing) return
   if (e.shiftKey) return
   e.preventDefault()
   sendAssistantMessage()
@@ -334,12 +353,23 @@ onBeforeUnmount(() => {
       </div>
       <div class="assistant-footer">
         <div class="input-container">
+          <button
+            type="button"
+            class="mode-toggle-btn"
+            :class="{ 'is-casual': assistantMode === 'casual' }"
+            :title="assistantModeTip"
+            @click="toggleAssistantMode"
+          >
+            {{ assistantModeLabel }}
+          </button>
           <el-input
             v-model="assistantInput"
             type="textarea"
             :autosize="{ minRows: 1, maxRows: 6 }"
             placeholder="输入指令 (Enter 发送, Shift+Enter 换行)..."
             @keydown.enter="handleEnter"
+            @compositionstart="isComposingInput = true"
+            @compositionend="isComposingInput = false"
             class="assistant-textarea"
           />
           <el-button 
@@ -634,8 +664,37 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
+.mode-toggle-btn {
+  flex-shrink: 0;
+  height: 38px;
+  min-width: 50px;
+  margin-bottom: 3px;
+  padding: 0 10px;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mode-toggle-btn:hover {
+  color: #4f46e5;
+  border-color: #818cf8;
+  background: #eef2ff;
+}
+
+.mode-toggle-btn.is-casual {
+  color: #075985;
+  border-color: #7dd3fc;
+  background: linear-gradient(135deg, #ecfeff 0%, #eff6ff 100%);
+}
+
 .assistant-textarea :deep(.el-textarea__inner) {
   border-radius: 16px;
+  min-height: 44px !important;
   padding: 10px 16px;
   resize: none;
   border: 1px solid #e2e8f0;

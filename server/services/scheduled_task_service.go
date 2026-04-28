@@ -312,7 +312,7 @@ func runCommand(dir string, env []string, name string, args ...string) error {
 }
 
 func buildScheduledTaskNotice(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time) string {
-	analysis, err := analyzeScheduledTaskReportWithOpus47(task, status, result, duration, startedAt)
+	analysis, err := analyzeScheduledTaskReportWithAI(task, status, result, duration, startedAt)
 	if err != nil {
 		log.Printf("[ScheduledTask] report analysis skipped: %v", err)
 		analysis = "报告分析暂未生成，请打开平台查看完整报告。"
@@ -336,8 +336,8 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 	return sanitizeFeishuPlainText(builder.String())
 }
 
-func analyzeScheduledTaskReportWithOpus47(task ScheduledTask, status string, result string, duration string, startedAt time.Time) (string, error) {
-	provider, err := selectOpus47Provider()
+func analyzeScheduledTaskReportWithAI(task ScheduledTask, status string, result string, duration string, startedAt time.Time) (string, error) {
+	provider, err := selectScheduledReportProvider()
 	if err != nil {
 		return "", err
 	}
@@ -397,12 +397,12 @@ func analyzeScheduledTaskReportWithOpus47(task ScheduledTask, status string, res
 		return "", err
 	}
 	if len(resp.Choices) == 0 {
-		return "", fmt.Errorf("Opus4.7 returned no choices")
+		return "", fmt.Errorf("scheduled report provider returned no choices")
 	}
 
 	content := sanitizeFeishuPlainText(resp.Choices[0].Message.Content)
 	if content == "" {
-		return "", fmt.Errorf("Opus4.7 returned empty analysis")
+		return "", fmt.Errorf("scheduled report provider returned empty analysis")
 	}
 	return content, nil
 }
@@ -458,7 +458,7 @@ func isAnthropicProvider(provider feishumodel.AIProviderConfig) bool {
 	return strings.Contains(search, "anthropic") || strings.Contains(search, "claude")
 }
 
-func selectOpus47Provider() (feishumodel.AIProviderConfig, error) {
+func selectScheduledReportProvider() (feishumodel.AIProviderConfig, error) {
 	config := feishumodel.GlobalAIConfig
 	if config == nil {
 		config = feishumodel.LoadAIConfig()
@@ -467,13 +467,21 @@ func selectOpus47Provider() (feishumodel.AIProviderConfig, error) {
 		return feishumodel.AIProviderConfig{}, fmt.Errorf("AI config is empty")
 	}
 
+	if providers := config.EffectiveProvidersByCapability("scheduled_report"); len(providers) > 0 {
+		return providers[0], nil
+	}
+
+	if providers := config.EffectiveProviders(); len(providers) > 0 {
+		return providers[0], nil
+	}
+
 	for _, provider := range config.AllEffectiveProviders() {
 		search := strings.ToLower(strings.Join([]string{provider.Name, provider.Model, provider.Capability}, " "))
 		if strings.Contains(search, "opus") && (strings.Contains(search, "4.7") || strings.Contains(search, "4-7") || strings.Contains(search, "4_7")) {
 			return provider, nil
 		}
 	}
-	return feishumodel.AIProviderConfig{}, fmt.Errorf("Opus4.7 provider is not configured")
+	return feishumodel.AIProviderConfig{}, fmt.Errorf("scheduled_report provider is not configured")
 }
 
 func readScheduledTaskReportText(startedAt time.Time) (string, error) {

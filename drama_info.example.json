@@ -1,0 +1,12 @@
+{
+  "_meta": {
+    "generatedAt": "2026-01-01T00:00:00.000Z",
+    "source": "TestCenter Auto Prepare Script",
+    "email": "replace-with-test-email"
+  },
+  "auth": {
+    "x_token": "replace-with-runtime-token"
+  },
+  "apiBase": "https://example.com",
+  "dramaList": []
+}

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed, nextTick, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
 import { ArrowLeft, Plus, Minus, Monitor, Cellphone } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import MindMapNode from './MindMapNode.vue'
@@ -51,6 +51,20 @@ const progressSummary = computed(() => {
   return { total, completed, inProgress, fixing, pending, percent }
 })
 
+const minimapNodes = computed(() => {
+  const nodes: Array<MindNode & { depth: number }> = []
+  const walk = (node: MindNode, depth = 0) => {
+    nodes.push({ ...node, depth })
+    node.children?.forEach(child => walk(child, depth + 1))
+  }
+  walk(treeData.value)
+  return nodes
+})
+
+const minimapNodeStyle = (depth: number) => ({
+  paddingLeft: `${Math.min(depth, 5) * 10 + 10}px`
+})
+
 // ===== 节点搜索 =====
 const searchKeyword = ref('')
 const activeSearchIndex = ref(0)
@@ -97,6 +111,11 @@ const translateX = ref(0)
 const translateY = ref(0)
 const canvasRef = ref<HTMLElement | null>(null)
 const scrollerRef = ref<HTMLElement | null>(null)
+const miniMapRef = ref<HTMLElement | null>(null)
+const isMinimapCollapsed = ref(true)
+const miniMapPosition = ref<{ x: number; y: number } | null>(null)
+const isDraggingMiniMap = ref(false)
+const miniMapDragStart = ref({ x: 0, y: 0, startX: 0, startY: 0 })
 
 const zoomStyle = computed(() => ({
   transform: `translate(${translateX.value}px, ${translateY.value}px) scale(${zoomLevel.value})`,
@@ -104,7 +123,44 @@ const zoomStyle = computed(() => ({
   transition: isPanning.value ? 'none' : 'transform 0.16s cubic-bezier(0.4, 0, 0.2, 1)'
 }))
 
+const miniMapStyle = computed(() => {
+  if (!miniMapPosition.value) return {}
+
+  return {
+    left: `${miniMapPosition.value.x}px`,
+    top: `${miniMapPosition.value.y}px`,
+    right: 'auto',
+    bottom: 'auto'
+  }
+})
+
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
+
+const clampMiniMapPosition = (x: number, y: number) => {
+  const canvas = canvasRef.value
+  const miniMap = miniMapRef.value
+  if (!canvas || !miniMap) return { x, y }
+
+  const padding = 12
+  const maxX = Math.max(padding, canvas.clientWidth - miniMap.offsetWidth - padding)
+  const maxY = Math.max(padding, canvas.clientHeight - miniMap.offsetHeight - padding)
+
+  return {
+    x: clamp(x, padding, maxX),
+    y: clamp(y, padding, maxY)
+  }
+}
+
+const ensureMiniMapPosition = () => {
+  const canvas = canvasRef.value
+  const miniMap = miniMapRef.value
+  if (!canvas || !miniMap || miniMapPosition.value) return
+
+  miniMapPosition.value = clampMiniMapPosition(
+    canvas.clientWidth - miniMap.offsetWidth - 18,
+    18
+  )
+}
 
 const zoomAtPoint = (nextZoom: number, clientX?: number, clientY?: number) => {
   const canvas = canvasRef.value
@@ -201,7 +257,11 @@ let panFrame = 0
 let pendingPan: PointerEvent | null = null
 
 const isCanvasPanTarget = (target: HTMLElement) => {
-  return !target.closest('.node-card') && !target.closest('.node-menu') && !target.closest('.node-ops') && !target.closest('.floating-status-menu')
+  return !target.closest('.node-card')
+    && !target.closest('.node-menu')
+    && !target.closest('.node-ops')
+    && !target.closest('.floating-status-menu')
+    && !target.closest('.mindmap-mini-map')
 }
 
 const handlePointerDown = (e: PointerEvent) => {
@@ -247,6 +307,43 @@ const handlePointerUp = (e?: PointerEvent) => {
   if (e && canvasRef.value?.hasPointerCapture(e.pointerId)) {
     canvasRef.value.releasePointerCapture(e.pointerId)
   }
+}
+
+const handleMiniMapPointerMove = (event: PointerEvent) => {
+  if (!isDraggingMiniMap.value) return
+
+  const dx = event.clientX - miniMapDragStart.value.x
+  const dy = event.clientY - miniMapDragStart.value.y
+  miniMapPosition.value = clampMiniMapPosition(
+    miniMapDragStart.value.startX + dx,
+    miniMapDragStart.value.startY + dy
+  )
+}
+
+const handleMiniMapPointerUp = () => {
+  if (!isDraggingMiniMap.value) return
+
+  isDraggingMiniMap.value = false
+  window.removeEventListener('pointermove', handleMiniMapPointerMove)
+  window.removeEventListener('pointerup', handleMiniMapPointerUp)
+}
+
+const handleMiniMapDragStart = (event: PointerEvent) => {
+  if (event.button !== 0) return
+  if ((event.target as HTMLElement).closest('button')) return
+
+  event.preventDefault()
+  ensureMiniMapPosition()
+  const currentPosition = miniMapPosition.value || { x: 0, y: 0 }
+  miniMapDragStart.value = {
+    x: event.clientX,
+    y: event.clientY,
+    startX: currentPosition.x,
+    startY: currentPosition.y
+  }
+  isDraggingMiniMap.value = true
+  window.addEventListener('pointermove', handleMiniMapPointerMove)
+  window.addEventListener('pointerup', handleMiniMapPointerUp)
 }
 
 // ===== 拖拽逻辑 =====
@@ -334,12 +431,50 @@ const handleNodeDrop = (targetId: string) => {
 }
 
 // ===== 持久化逻辑 =====
+const isProcessLoaded = ref(false)
+const isAutoSaving = ref(false)
+const lastSavedSignature = ref('')
+const saveState = ref<'saved' | 'dirty' | 'saving' | 'error'>('saved')
+let autoSaveTimer: ReturnType<typeof window.setTimeout> | null = null
+
+const currentProcessSignature = computed(() => JSON.stringify({
+  name: processName.value,
+  data: treeData.value
+}))
+
+const hasUnsavedChanges = computed(() => {
+  return isProcessLoaded.value && currentProcessSignature.value !== lastSavedSignature.value
+})
+
+const saveStateText = computed(() => {
+  if (isAutoSaving.value || saveState.value === 'saving') return '保存中'
+  if (saveState.value === 'error') return '保存失败'
+  if (hasUnsavedChanges.value) return props.id ? '待自动保存' : '未保存'
+  return '已保存'
+})
+
+const rememberSavedSnapshot = () => {
+  lastSavedSignature.value = currentProcessSignature.value
+  saveState.value = 'saved'
+}
+
+const clearAutoSaveTimer = () => {
+  if (!autoSaveTimer) return
+  window.clearTimeout(autoSaveTimer)
+  autoSaveTimer = null
+}
 
 async function loadProcess() {
+  isProcessLoaded.value = false
+  clearAutoSaveTimer()
+
   if (!props.id) {
     if (processName.value === '未命名流程') {
       processName.value = '新业务流程-' + new Date().toLocaleDateString()
     }
+    await nextTick()
+    isProcessLoaded.value = true
+    rememberSavedSnapshot()
     return
   }
 
@@ -349,7 +484,10 @@ async function loadProcess() {
       const item: ProcessItem = await response.json()
       processName.value = item.name
       treeData.value = JSON.parse(JSON.stringify(item.data))
-      nextTick(fitMindMap)
+      await nextTick()
+      fitMindMap()
+      isProcessLoaded.value = true
+      rememberSavedSnapshot()
     } else {
       ElMessage.error('该流程不存在')
       router.push({ name: 'TestProcessList' })
@@ -364,9 +502,13 @@ watch(() => props.id, () => {
   loadProcess()
 }, { immediate: true })
 
-const handleSave = async () => {
+const saveProcess = async (options: { silent?: boolean; redirectNew?: boolean } = {}) => {
   const now = new Date().toLocaleString()
   const dataToSave = JSON.parse(JSON.stringify(treeData.value))
+  const signatureToSave = JSON.stringify({
+    name: processName.value,
+    data: dataToSave
+  })
   
   const idToSave = props.id || 'proc-' + Math.random().toString(36).substring(2, 9)
   
@@ -378,6 +520,8 @@ const handleSave = async () => {
   }
 
   try {
+    saveState.value = 'saving'
+    isAutoSaving.value = Boolean(options.silent)
     const response = await fetch(`${getBackendHost()}/api/processes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -385,17 +529,53 @@ const handleSave = async () => {
     })
     
     if (response.ok) {
-      ElMessage.success('保存成功')
-      if (!props.id) {
+      lastSavedSignature.value = signatureToSave
+      saveState.value = currentProcessSignature.value === signatureToSave ? 'saved' : 'dirty'
+      if (!options.silent) ElMessage.success('保存成功')
+      if (!props.id && options.redirectNew) {
         router.replace({ name: 'TestProcessEditor', params: { id: idToSave } })
       }
+      if (currentProcessSignature.value !== signatureToSave) scheduleAutoSave()
+      return true
     } else {
-      ElMessage.error('保存失败')
+      saveState.value = 'error'
+      if (!options.silent) ElMessage.error('保存失败')
     }
   } catch (e) {
-    ElMessage.error('网络错误，保存失败')
+    saveState.value = 'error'
+    if (!options.silent) ElMessage.error('网络错误，保存失败')
+  } finally {
+    isAutoSaving.value = false
   }
+
+  return false
 }
+
+const handleSave = () => {
+  void saveProcess({ redirectNew: true })
+}
+
+const scheduleAutoSave = () => {
+  clearAutoSaveTimer()
+  if (!props.id) return
+
+  autoSaveTimer = window.setTimeout(() => {
+    void saveProcess({ silent: true })
+  }, 1200)
+}
+
+watch(currentProcessSignature, () => {
+  if (!isProcessLoaded.value) return
+
+  if (!hasUnsavedChanges.value) {
+    saveState.value = 'saved'
+    clearAutoSaveTimer()
+    return
+  }
+
+  saveState.value = 'dirty'
+  scheduleAutoSave()
+})
 
 // ===== 节点操作 =====
 const generateId = () => Math.random().toString(36).substring(2, 9)
@@ -408,6 +588,7 @@ const handleAddNode = (parent: MindNode) => {
     status: 'none',
     children: []
   })
+  syncBranchStatusFrom(parent.id)
   nextTick(fitMindMap)
 }
 
@@ -426,6 +607,19 @@ const handleUpdateStatus = (node: MindNode, status: NodeStatus) => {
   syncAncestorStatuses(node.id)
   activeMenuNodeId.value = null
   menuState.value = null
+}
+
+const updateSubtreeStatus = (node: MindNode, status: NodeStatus) => {
+  node.status = status
+  node.children?.forEach(child => updateSubtreeStatus(child, status))
+}
+
+const handleUpdateSubtreeStatus = (node: MindNode, status: NodeStatus) => {
+  updateSubtreeStatus(node, status)
+  syncAncestorStatuses(node.id)
+  activeMenuNodeId.value = null
+  menuState.value = null
+  ElMessage.success(status === 'completed' ? '当前分支已全部标记完成' : '当前分支已全部重置')
 }
 
 const handleToggleStatus = (node: MindNode) => {
@@ -499,13 +693,46 @@ watch(isVertical, () => {
   nextTick(fitMindMap)
 })
 
+watch(isMinimapCollapsed, () => {
+  nextTick(() => {
+    if (!miniMapPosition.value) return
+    miniMapPosition.value = clampMiniMapPosition(miniMapPosition.value.x, miniMapPosition.value.y)
+  })
+})
+
+const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+  if (!hasUnsavedChanges.value) return
+
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+const handleWindowResize = () => {
+  fitMindMap()
+  if (!miniMapPosition.value) return
+  miniMapPosition.value = clampMiniMapPosition(miniMapPosition.value.x, miniMapPosition.value.y)
+}
+
+onBeforeRouteLeave(() => {
+  if (!hasUnsavedChanges.value) return true
+
+  return window.confirm('当前流程还有未保存的改动，确定要离开吗？')
+})
+
 onMounted(() => {
-  nextTick(fitMindMap)
-  window.addEventListener('resize', fitMindMap)
+  nextTick(() => {
+    fitMindMap()
+    ensureMiniMapPosition()
+  })
+  window.addEventListener('resize', handleWindowResize)
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('resize', fitMindMap)
+  window.removeEventListener('resize', handleWindowResize)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+  handleMiniMapPointerUp()
+  clearAutoSaveTimer()
   if (panFrame) window.cancelAnimationFrame(panFrame)
 })
 </script>
@@ -591,6 +818,7 @@ onUnmounted(() => {
           <span class="status-dot status-dot--pending"></span>待 {{ progressSummary.pending }}
           <span class="status-dot status-dot--progress"></span>进行 {{ progressSummary.inProgress }}
           <span class="status-dot status-dot--fixing"></span>修复 {{ progressSummary.fixing }}
+          <span class="save-state" :class="'save-state--' + saveState">{{ saveStateText }}</span>
         </div>
         <el-button type="primary" size="small" @click="handleSave">
           保存修改
@@ -646,6 +874,41 @@ onUnmounted(() => {
           :highlighted-id="activeSearchNodeId"
         />
       </div>
+
+      <aside
+        ref="miniMapRef"
+        class="mindmap-mini-map"
+        :class="{ 'is-collapsed': isMinimapCollapsed, 'is-dragging': isDraggingMiniMap }"
+        :style="miniMapStyle"
+        @click.stop
+      >
+        <div class="mini-map-header" @pointerdown="handleMiniMapDragStart">
+          <div>
+            <strong>流程小地图</strong>
+            <span>{{ minimapNodes.length }} 个节点</span>
+          </div>
+          <button type="button" class="mini-map-toggle" @click="isMinimapCollapsed = !isMinimapCollapsed">
+            {{ isMinimapCollapsed ? '展开' : '收起' }}
+          </button>
+        </div>
+        <div v-if="!isMinimapCollapsed" class="mini-map-list">
+          <button
+            v-for="node in minimapNodes"
+            :key="node.id"
+            type="button"
+            class="mini-map-node"
+            :class="[
+              'mini-map-node--' + node.status,
+              { 'is-active': activeOpsNodeId === node.id || activeMenuNodeId === node.id || activeSearchNodeId === node.id }
+            ]"
+            :style="minimapNodeStyle(node.depth)"
+            @click="focusNodeById(node.id)"
+          >
+            <span class="mini-map-dot"></span>
+            <span class="mini-map-label">{{ node.label || '未命名节点' }}</span>
+          </button>
+        </div>
+      </aside>
     </div>
 
     <Transition name="fade">
@@ -687,6 +950,23 @@ onUnmounted(() => {
           @click="handleUpdateStatus(menuState.node, 'fixing')"
         >
           修复中
+        </button>
+        <div v-if="menuState.node.children?.length" class="menu-header menu-header--sub">批量标记</div>
+        <button
+          v-if="menuState.node.children?.length"
+          type="button"
+          class="menu-item"
+          @click="handleUpdateSubtreeStatus(menuState.node, 'completed')"
+        >
+          本分支全部完成
+        </button>
+        <button
+          v-if="menuState.node.children?.length"
+          type="button"
+          class="menu-item"
+          @click="handleUpdateSubtreeStatus(menuState.node, 'none')"
+        >
+          本分支全部重置
         </button>
       </div>
     </Transition>
@@ -768,6 +1048,35 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.save-state {
+  margin-left: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #64748b;
+  background: #f1f5f9;
+  font-size: 11px;
+}
+
+.save-state--saved {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.save-state--dirty {
+  color: #b45309;
+  background: #fef3c7;
+}
+
+.save-state--saving {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.save-state--error {
+  color: #b91c1c;
+  background: #fee2e2;
 }
 
 .status-dot {
@@ -852,6 +1161,129 @@ onUnmounted(() => {
   transform-origin: 0 0;
 }
 
+.mindmap-mini-map {
+  position: absolute;
+  right: 18px;
+  top: 18px;
+  z-index: 500;
+  width: 260px;
+  max-height: min(420px, calc(100% - 36px));
+  overflow: hidden;
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 18px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(16px);
+  cursor: default;
+  user-select: none;
+}
+
+.mindmap-mini-map.is-collapsed {
+  width: 178px;
+}
+
+.mindmap-mini-map.is-dragging {
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.24);
+}
+
+.mini-map-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+  cursor: grab;
+}
+
+.mindmap-mini-map.is-dragging .mini-map-header {
+  cursor: grabbing;
+}
+
+.mini-map-header strong,
+.mini-map-header span {
+  display: block;
+}
+
+.mini-map-header strong {
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.mini-map-header span {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mini-map-toggle {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.mini-map-list {
+  max-height: 340px;
+  overflow: auto;
+  padding: 8px;
+}
+
+.mini-map-node {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 28px;
+  color: #334155;
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mini-map-node:hover,
+.mini-map-node.is-active {
+  color: #0f172a;
+  background: #eef6ff;
+}
+
+.mini-map-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #94a3b8;
+}
+
+.mini-map-node--completed .mini-map-dot {
+  background: #10b981;
+}
+
+.mini-map-node--in_progress .mini-map-dot {
+  background: #3b82f6;
+}
+
+.mini-map-node--fixing .mini-map-dot {
+  background: #f59e0b;
+}
+
+.mini-map-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .floating-status-menu {
   position: fixed;
   z-index: 3000;
@@ -870,6 +1302,10 @@ onUnmounted(() => {
   font-weight: 800;
   text-transform: uppercase;
   border-bottom: 1px solid #f1f5f9;
+}
+
+.floating-status-menu .menu-header--sub {
+  margin-top: 4px;
 }
 
 .floating-status-menu .menu-item {

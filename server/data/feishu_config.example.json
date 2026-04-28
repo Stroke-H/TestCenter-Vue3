@@ -1,0 +1,13 @@
+{
+  "app_id": "replace-with-your-feishu-app-id",
+  "app_secret": "replace-with-your-feishu-app-secret",
+  "verification_token": "",
+  "encrypt_key": "",
+  "mode": "long_conn",
+  "group_id": "replace-with-your-feishu-group-id",
+  "mcp": {
+    "enabled": false,
+    "server_url": "https://project.feishu.cn/mcp_server/v1",
+    "token": "replace-with-your-mcp-token"
+  }
+}
