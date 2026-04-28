@@ -113,6 +113,8 @@ func main() {
 			reports.GET("/list", services.GetAcceptanceReportsHandler)
 			reports.POST("/save", services.SaveAcceptanceReportHandler)
 			reports.POST("/send-feishu", services.SendAcceptanceReportToFeishuHandler)
+			reports.POST("/sync-cloud-doc", services.SyncAcceptanceReportToCloudDocHandler)
+			reports.POST("/fetch-project-items", services.FetchAcceptanceReportProjectItemsHandler)
 		}
 
 		// Performance Monitoring Routes

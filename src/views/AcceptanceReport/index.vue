@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch, markRaw } from 'vue'
-import { Plus, Search, Calendar, User, Money } from '@element-plus/icons-vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch, markRaw } from 'vue'
+import { Plus, Search, Calendar, User, Money, Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { retryFetch } from '@/utils/retryFetch'
@@ -16,6 +16,7 @@ interface ProjectOption {
   project_code: string
   project_name: string
   short_code?: string
+  wiki_url?: string
 }
 
 interface DeviceOption {
@@ -41,12 +42,17 @@ const projects = ref<ProjectOption[]>([])
 const devices = ref<DeviceOption[]>([])
 const testTimeRange = ref<string[]>([])
 const selectedTestDevices = ref<string[]>([])
+const autoFetchingProjectItems = ref(false)
+const autoFetchProjectItemsError = ref('')
+let autoFetchProjectItemsTimer: ReturnType<typeof setTimeout> | null = null
+let autoFetchProjectItemsSeq = 0
 
 // --- Preview State ---
 const previewVisible = ref(false)
 const currentPreview = ref<any>(null)
 const previewMode = ref<'view' | 'create'>('view')
 const sendingToFeishu = ref(false)
+const syncingToCloudDoc = ref(false)
 const reportForm = ref<any>({
   project_name: '',
   project_code: '',
@@ -140,6 +146,15 @@ const selectedProject = computed(() => {
   return null
 })
 
+const currentPreviewProject = computed(() => {
+  if (!currentPreview.value?.project_code && !currentPreview.value?.project_name) return null
+
+  return projects.value.find(item =>
+    item.project_code === currentPreview.value?.project_code ||
+    item.project_name === currentPreview.value?.project_name
+  ) || null
+})
+
 const filteredDevices = computed(() => {
   if (!reportForm.value.project_code) return []
   return devices.value.filter((item) => {
@@ -174,6 +189,114 @@ const canSendToFeishu = computed(() => {
     !!authStore.user?.username &&
     authStore.user.username === currentPreview.value?.reporter
 })
+
+const canSyncToCloudDoc = computed(() => {
+  return canSendToFeishu.value && !!currentPreviewProject.value?.wiki_url?.trim()
+})
+
+const filteredReports = computed(() => {
+  const keyword = searchQuery.value.trim().toLowerCase()
+  if (!keyword) return recentReports.value
+
+  return recentReports.value.filter((report) => {
+    const searchableText = [
+      report.reporter,
+      report.project_name,
+      report.project_code,
+      report.reporter_display
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+
+    return searchableText.includes(keyword)
+  })
+})
+
+const showProjectItemsLoading = computed(() => {
+  return previewMode.value === 'create' && autoFetchingProjectItems.value
+})
+
+const formatAutoFetchedLinks = (links: string[]) => {
+  return links.length > 0 ? links.join('\n') : '无'
+}
+
+const clearAutoFetchProjectItemsTimer = () => {
+  if (autoFetchProjectItemsTimer) {
+    clearTimeout(autoFetchProjectItemsTimer)
+    autoFetchProjectItemsTimer = null
+  }
+}
+
+const fetchProjectItemsForReport = async (projectCode: string, version: string, seq: number) => {
+  autoFetchingProjectItems.value = true
+  autoFetchProjectItemsError.value = ''
+
+  try {
+    const res = await fetch(`${API_BASE}/acceptance-reports/fetch-project-items`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authStore.token
+      },
+      body: JSON.stringify({
+        project_code: projectCode,
+        version
+      })
+    })
+
+    const rawText = await res.text()
+    let data: any = null
+    try {
+      data = rawText ? JSON.parse(rawText) : null
+    } catch {
+      data = { error: rawText || 'Unexpected response format' }
+    }
+
+    if (!res.ok) {
+      throw new Error(data?.error || '自动拉取需求和缺陷失败')
+    }
+
+    const stillCurrentRequest = seq === autoFetchProjectItemsSeq &&
+      previewMode.value === 'create' &&
+      reportForm.value.project_code === projectCode &&
+      reportForm.value.version === version
+
+    if (!stillCurrentRequest) return
+
+    reportForm.value.update_requirements = formatAutoFetchedLinks(data?.story_links || [])
+    reportForm.value.bug_submission_status = formatAutoFetchedLinks(data?.bug_links_unfixed || [])
+    reportForm.value.bug_fix_status = formatAutoFetchedLinks(data?.bug_links_fixed || [])
+  } catch (err: any) {
+    if (seq !== autoFetchProjectItemsSeq) return
+    console.error('Failed to fetch acceptance report project items', err)
+    autoFetchProjectItemsError.value = err?.message || '自动拉取需求和缺陷失败'
+    ElMessage.error(autoFetchProjectItemsError.value)
+  } finally {
+    if (seq === autoFetchProjectItemsSeq) {
+      autoFetchingProjectItems.value = false
+    }
+  }
+}
+
+const scheduleAutoFetchProjectItems = () => {
+  clearAutoFetchProjectItemsTimer()
+  autoFetchProjectItemsSeq += 1
+
+  const projectCode = (reportForm.value.project_code || '').trim()
+  const version = (reportForm.value.version || '').trim()
+  if (previewMode.value !== 'create' || !projectCode || !version) {
+    autoFetchingProjectItems.value = false
+    autoFetchProjectItemsError.value = ''
+    return
+  }
+
+  const seq = autoFetchProjectItemsSeq
+  autoFetchProjectItemsTimer = setTimeout(() => {
+    fetchProjectItemsForReport(projectCode, version, seq)
+  }, 2000)
+}
 
 const openCreateReport = () => {
   previewMode.value = 'create'
@@ -275,6 +398,42 @@ const sendReportToFeishu = async () => {
   }
 }
 
+const syncReportToCloudDoc = async () => {
+  if (!currentPreview.value?.id) return
+
+  syncingToCloudDoc.value = true
+  try {
+    const res = await fetch(`${API_BASE}/acceptance-reports/sync-cloud-doc`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authStore.token
+      },
+      body: JSON.stringify({ id: currentPreview.value.id })
+    })
+
+    const rawText = await res.text()
+    let data: any = null
+    try {
+      data = rawText ? JSON.parse(rawText) : null
+    } catch {
+      data = { error: rawText || 'Unexpected response format' }
+    }
+
+    if (!res.ok) {
+      throw new Error(data?.error || 'Sync failed')
+    }
+
+    ElMessage.success('已同步到云文档')
+  } catch (err: any) {
+    console.error('Failed to sync acceptance report to cloud doc', err)
+    ElMessage.error(err?.message || '同步到云文档失败')
+  } finally {
+    syncingToCloudDoc.value = false
+  }
+}
+
 const getPreviewTestEnv = (report: any) => {
   const rawEnv = (report?.test_env || '').trim()
   if (!rawEnv) return 'N/A'
@@ -324,10 +483,19 @@ watch(() => reportForm.value.project_code, () => {
   selectedTestDevices.value = selectedTestDevices.value.filter(name => allowedNames.has(name))
 })
 
+watch(
+  () => [previewMode.value, reportForm.value.project_name, reportForm.value.project_code, reportForm.value.version],
+  scheduleAutoFetchProjectItems
+)
+
 onMounted(() => {
   fetchReports()
   fetchProjects()
   fetchDevices()
+})
+
+onBeforeUnmount(() => {
+  clearAutoFetchProjectItemsTimer()
 })
 </script>
 
@@ -374,7 +542,7 @@ onMounted(() => {
               <div class="header-actions">
                 <el-input
                   v-model="searchQuery"
-                  placeholder="Search by reporter..."
+                  placeholder="Search reporter or project..."
                   :prefix-icon="Search"
                   class="search-input"
                   clearable
@@ -390,7 +558,7 @@ onMounted(() => {
           
           <div class="table-scroll-container">
             <el-table 
-              :data="recentReports" 
+              :data="filteredReports" 
               style="width: 100%" 
               class="custom-table" 
               :row-style="{ height: '60px', cursor: 'pointer' }"
@@ -622,7 +790,13 @@ onMounted(() => {
 
         <div class="preview-grid">
           <div class="preview-detail">
-            <h4 class="detail-title">测试需求点 (Acceptance Requirements)</h4>
+            <h4 class="detail-title detail-title--inline">
+              <span>测试需求点 (Acceptance Requirements)</span>
+              <span v-if="showProjectItemsLoading" class="auto-fetch-status">
+                <el-icon class="auto-fetch-status__icon"><Loading /></el-icon>
+                正在自动拉取对应数据中，请稍等
+              </span>
+            </h4>
             <el-input
               v-model="reportForm.update_requirements"
               type="textarea"
@@ -632,7 +806,13 @@ onMounted(() => {
           </div>
 
           <div class="preview-detail">
-            <h4 class="detail-title">缺陷提交情况 (Bug Submission Status)</h4>
+            <h4 class="detail-title detail-title--inline">
+              <span>缺陷提交情况 (Bug Submission Status)</span>
+              <span v-if="showProjectItemsLoading" class="auto-fetch-status">
+                <el-icon class="auto-fetch-status__icon"><Loading /></el-icon>
+                正在自动拉取对应数据中，请稍等
+              </span>
+            </h4>
             <el-input
               v-model="reportForm.bug_submission_status"
               type="textarea"
@@ -640,7 +820,13 @@ onMounted(() => {
               placeholder="请输入未修复缺陷、提单链接或说明"
             />
 
-            <h4 class="detail-title detail-title--spaced">缺陷修复情况 (Bug Fix Status)</h4>
+            <h4 class="detail-title detail-title--spaced detail-title--inline">
+              <span>缺陷修复情况 (Bug Fix Status)</span>
+              <span v-if="showProjectItemsLoading" class="auto-fetch-status">
+                <el-icon class="auto-fetch-status__icon"><Loading /></el-icon>
+                正在自动拉取对应数据中，请稍等
+              </span>
+            </h4>
             <el-input
               v-model="reportForm.bug_fix_status"
               type="textarea"
@@ -660,6 +846,14 @@ onMounted(() => {
             @click="sendReportToFeishu"
           >
             发送到飞书
+          </el-button>
+          <el-button
+            v-if="canSyncToCloudDoc"
+            type="primary"
+            :loading="syncingToCloudDoc"
+            @click="syncReportToCloudDoc"
+          >
+            同步到云文档
           </el-button>
           <el-button v-if="previewMode === 'create'" type="primary" @click="saveNewReport">保存报告</el-button>
         </span>
@@ -947,8 +1141,38 @@ onMounted(() => {
   margin-bottom: 8px;
 }
 
+.detail-title--inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .detail-title--spaced {
   margin-top: 16px;
+}
+
+.auto-fetch-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+}
+
+.auto-fetch-status__icon {
+  animation: auto-fetch-spin 1s linear infinite;
+}
+
+@keyframes auto-fetch-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .preview-grid {
