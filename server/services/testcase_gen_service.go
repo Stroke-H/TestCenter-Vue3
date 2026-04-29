@@ -22,7 +22,8 @@ import (
 
 // DecomposeReq 接收原始需求文本
 type DecomposeReq struct {
-	Text string `json:"text" binding:"required"`
+	Text    string `json:"text"`
+	WikiURL string `json:"wiki_url"`
 }
 
 // GenerateReq 接收需求点列表
@@ -133,8 +134,30 @@ func finalizeGeneratedCases(cases []models.TestCase) []models.TestCase {
 func DecomposeRequirementHandler(c *gin.Context) {
 	var req DecomposeReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "需要提供需求描述文本"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数格式不正确"})
 		return
+	}
+
+	req.Text = strings.TrimSpace(req.Text)
+	req.WikiURL = strings.TrimSpace(req.WikiURL)
+	if req.Text == "" && req.WikiURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "需要提供需求描述文本或飞书需求链接"})
+		return
+	}
+
+	sourceText := req.Text
+	if req.WikiURL != "" {
+		docContent, err := loadFeishuRequirementContent(req.WikiURL)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("读取飞书需求文档失败: %v", err)})
+			return
+		}
+
+		if req.Text != "" {
+			sourceText = docContent + "\n\n补充说明：\n" + req.Text
+		} else {
+			sourceText = docContent
+		}
 	}
 
 	systemPrompt := `你是一名资深的业务分析师和需求工程师。
@@ -162,7 +185,7 @@ func DecomposeRequirementHandler(c *gin.Context) {
   }
 ]`
 
-	aiResult, err := callDeepSeek(c.Request.Context(), systemPrompt, req.Text)
+	aiResult, err := callDeepSeek(c.Request.Context(), systemPrompt, sourceText)
 	if err != nil {
 		log.Printf("[ERROR] AI 需求拆解失败: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("AI 拆解失败: %v", err)})
@@ -176,7 +199,12 @@ func DecomposeRequirementHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"points": points})
+	c.JSON(http.StatusOK, gin.H{
+		"points":       points,
+		"source_text":  sourceText,
+		"source_link":  req.WikiURL,
+		"used_docx_ai": req.WikiURL != "",
+	})
 }
 
 // SmartDecomposeHandler AI 智能增强拆解：基于原始文本进行第二轮更细粒度的需求拆解
@@ -1389,6 +1417,60 @@ func SmartDecomposeCore(ctx context.Context, text string, existingPoints []model
 // GenerateBatchCore exposes the batch generator
 func GenerateBatchCore(ctx context.Context, points []models.RequirementPoint) ([]models.TestCase, error) {
 	return generateBatch(ctx, points)
+}
+
+func loadFeishuRequirementContent(wikiURL string) (string, error) {
+	if strings.TrimSpace(wikiURL) == "" {
+		return "", fmt.Errorf("empty wiki url")
+	}
+
+	tenantToken, err := getFeishuTenantAccessToken()
+	if err != nil {
+		return "", err
+	}
+
+	docToken, docType, err := resolveFeishuReadableDocTarget(wikiURL, tenantToken)
+	if err != nil {
+		return "", err
+	}
+
+	var apiURL string
+	switch docType {
+	case "docx":
+		apiURL = fmt.Sprintf("https://open.feishu.cn/open-apis/docx/v1/documents/%s/raw_content", docToken)
+	case "doc":
+		apiURL = fmt.Sprintf("https://open.feishu.cn/open-apis/doc/v2/%s/raw_content", docToken)
+	default:
+		return "", fmt.Errorf("暂不支持读取该类型飞书文档: %s", docType)
+	}
+	respBody, err := callFeishuAPI("GET", apiURL, tenantToken, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "status 403") || strings.Contains(err.Error(), "\"forBidden\"") {
+			return "", fmt.Errorf("飞书应用暂无该文档的读取权限，请确认文档已授权给当前飞书应用/机器人，或将链接换成已授权的云文档")
+		}
+		return "", err
+	}
+
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return "", err
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("read docx failed: %s", result.Msg)
+	}
+
+	content := strings.TrimSpace(result.Data.Content)
+	if content == "" {
+		return "", fmt.Errorf("文档正文为空")
+	}
+
+	return content, nil
 }
 
 // SaveGenerationRecordCore persists the generation to history

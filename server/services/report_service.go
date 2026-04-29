@@ -749,28 +749,32 @@ func parseFeishuDocTarget(wikiURL string) (string, string, bool) {
 			return strings.Split(parts[i+1], "?")[0], "wiki", true
 		}
 
-		if part == "docx" || part == "docs" {
+		if part == "docx" {
 			return strings.Split(parts[i+1], "?")[0], "docx", true
+		}
+
+		if part == "docs" {
+			return strings.Split(parts[i+1], "?")[0], "doc", true
 		}
 	}
 
 	return "", "", false
 }
 
-func resolveFeishuDocxToken(wikiURL string, token string) (string, error) {
+func resolveFeishuReadableDocTarget(wikiURL string, token string) (string, string, error) {
 	rawToken, linkType, ok := parseFeishuDocTarget(wikiURL)
 	if !ok || rawToken == "" {
-		return "", fmt.Errorf("unable to parse Feishu wiki/docx URL")
+		return "", "", fmt.Errorf("unable to parse Feishu wiki/docx URL")
 	}
 
-	if linkType == "docx" {
-		return rawToken, nil
+	if linkType == "docx" || linkType == "doc" {
+		return rawToken, linkType, nil
 	}
 
 	apiURL := fmt.Sprintf("https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=%s", url.QueryEscape(rawToken))
 	respBody, err := callFeishuAPI("GET", apiURL, token, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	var result struct {
@@ -784,19 +788,35 @@ func resolveFeishuDocxToken(wikiURL string, token string) (string, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if result.Code != 0 {
-		return "", fmt.Errorf("wiki node mapping failed: %s", result.Msg)
-	}
-	if result.Data.Node.ObjType != "docx" {
-		return "", fmt.Errorf("only docx cloud documents are supported, current type: %s", result.Data.Node.ObjType)
+		return "", "", fmt.Errorf("wiki node mapping failed: %s", result.Msg)
 	}
 	if result.Data.Node.ObjToken == "" {
-		return "", fmt.Errorf("wiki node mapping returned empty doc token")
+		return "", "", fmt.Errorf("wiki node mapping returned empty doc token")
 	}
 
-	return result.Data.Node.ObjToken, nil
+	docType := strings.TrimSpace(strings.ToLower(result.Data.Node.ObjType))
+	switch docType {
+	case "docx":
+		return result.Data.Node.ObjToken, "docx", nil
+	case "doc":
+		return result.Data.Node.ObjToken, "doc", nil
+	default:
+		return "", "", fmt.Errorf("only doc/docx cloud documents are supported, current type: %s", result.Data.Node.ObjType)
+	}
+}
+
+func resolveFeishuDocxToken(wikiURL string, token string) (string, error) {
+	docToken, docType, err := resolveFeishuReadableDocTarget(wikiURL, token)
+	if err != nil {
+		return "", err
+	}
+	if docType != "docx" {
+		return "", fmt.Errorf("only docx cloud documents are supported, current type: %s", docType)
+	}
+	return docToken, nil
 }
 
 func formatAcceptanceReportForCloudDoc(report AcceptanceReport) string {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import { Notebook, Edit, DocumentChecked, Download, ArrowLeft, ArrowRight, MagicStick, Refresh, Collection } from '@element-plus/icons-vue'
+import { Edit, DocumentChecked, Download, ArrowLeft, ArrowRight, MagicStick, Refresh, Collection } from '@element-plus/icons-vue'
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
@@ -27,6 +27,7 @@ const isModified = computed(() => {
 })
 
 const activeStep = ref(0)
+const requirementLink = ref('')
 const requirementDescription = ref('')
 const loading = ref(false)
 
@@ -121,16 +122,24 @@ const API_BASE = '/api/testcase-gen'
 
 // 拆解需求
 const handleDecompose = async () => {
-  if (!requirementDescription.value.trim()) {
-    ElMessage.warning('请输入需求描述')
+  const hasDescription = requirementDescription.value.trim().length > 0
+  const hasRequirementLink = requirementLink.value.trim().length > 0
+  if (!hasDescription && !hasRequirementLink) {
+    ElMessage.warning('请输入需求描述或需求链接')
     return
   }
   loading.value = true
   try {
-    const res = await axios.post(`${API_BASE}/decompose`, { text: requirementDescription.value })
+    const res = await axios.post(`${API_BASE}/decompose`, {
+      text: requirementDescription.value,
+      wiki_url: requirementLink.value
+    })
+    if (res.data?.source_text) {
+      requirementDescription.value = res.data.source_text
+    }
     requirementPoints.value = res.data.points || []
     activeStep.value = 1
-    ElMessage.success('需求拆解完成')
+    ElMessage.success(requirementLink.value ? '已读取飞书需求并完成拆解' : '需求拆解完成')
   } catch (err: any) {
     console.error(err)
     ElMessage.error(err.response?.data?.error || '需求拆解失败')
@@ -253,6 +262,7 @@ const prevStep = () => {
 }
 
 const resetAll = () => {
+  requirementLink.value = ''
   requirementDescription.value = ''
   requirementPoints.value = []
   generatedCases.value = []
@@ -420,21 +430,21 @@ const excelColumns = [
 <template>
   <div class="testcase-gen">
     <div class="header-section">
-      <div class="page-hero">
-        <div class="title-row">
-          <el-button :icon="ArrowLeft" circle @click="goBack" class="back-btn" />
-          <div class="title-copy">
+      <div class="page-header">
+        <div class="page-header__main">
+          <div class="page-header__copy">
             <div class="breadcrumb">测试用例生成 <span class="divider">/</span> {{ isViewMode ? '记录详情' : '智能测试用例生成' }}</div>
-            <div class="title-main">
-              <el-icon :size="20" color="#3b82f6"><Notebook /></el-icon>
+            <div class="page-header__title-row">
               <h2 class="page-title">{{ isViewMode ? recordTitle : '智能测试用例生成' }}</h2>
+              <span class="page-header__tag">{{ isViewMode ? '历史记录' : 'AI 工作台' }}</span>
             </div>
             <p class="page-desc">
-              {{ isViewMode ? '查看并维护已保存的测试用例生成记录。' : '输入需求后逐步拆解、确认并生成更聚焦主流程和高风险场景的测试用例。' }}
+              {{ isViewMode ? '查看并维护已保存的测试用例生成记录。' : '从需求描述到拆解确认，再到用例预览与沉淀，保持一条清晰、连续的生成链路。' }}
             </p>
           </div>
         </div>
-        <div class="hero-actions">
+        <div class="page-header__actions">
+          <el-button text @click="goBack" class="back-text-btn">返回</el-button>
           <el-button v-if="activeStep > 0 && !isViewMode" @click="resetAll" :icon="Refresh">重新开始</el-button>
         </div>
       </div>
@@ -456,16 +466,20 @@ const excelColumns = [
           ]"
         >
           <div class="workflow-step-card__head">
+            <div class="workflow-step-card__title-row">
+              <div class="workflow-step-card__title">{{ step.title }}</div>
+              <span class="workflow-step-card__badge">
+                {{ activeStep > index ? '已完成' : activeStep === index ? '进行中' : '待开始' }}
+              </span>
+            </div>
+          </div>
+          <div class="workflow-step-card__body">
+            <div class="workflow-step-card__desc">{{ step.description }}</div>
             <div class="workflow-step-card__index">
               <el-icon v-if="activeStep > index"><DocumentChecked /></el-icon>
-              <span v-else>{{ index + 1 }}</span>
+              <span v-else>Part {{ index + 1 }}</span>
             </div>
-            <span class="workflow-step-card__badge">
-              {{ activeStep > index ? '已完成' : activeStep === index ? '进行中' : '待开始' }}
-            </span>
           </div>
-          <div class="workflow-step-card__title">{{ step.title }}</div>
-          <div class="workflow-step-card__desc">{{ step.description }}</div>
           <div v-if="index < workflowSteps.length - 1" class="workflow-step-card__connector" />
         </div>
       </div>
@@ -480,20 +494,16 @@ const excelColumns = [
               <div class="card-header">
                 <div>
                   <div class="header-text">1. 原始需求描述</div>
-                  <div class="header-tip">支持 PRD 文本、接口定义、用户故事或非结构化功能说明。</div>
+                  <div class="header-tip">支持 PRD 文本、接口定义、用户故事或非结构化功能说明，也可以补充对应需求链接。</div>
                 </div>
               </div>
             </template>
-            <div class="intro-strip">
-              <div class="intro-item">
-                <span class="intro-item__title">建议内容</span>
-                <span class="intro-item__desc">功能背景、核心流程、规则约束、异常处理、并发要求</span>
-              </div>
-              <div class="intro-item">
-                <span class="intro-item__title">生成方向</span>
-                <span class="intro-item__desc">优先覆盖主路径、高风险边界、异常容错与稳定性场景</span>
-              </div>
-            </div>
+            <el-input
+              v-model="requirementLink"
+              class="requirement-link-input"
+              placeholder="请输入需求链接，例如飞书文档、Jira、项目需求地址；填入飞书链接后可直接读取正文并拆解"
+              clearable
+            />
             <el-input
               v-model="requirementDescription"
               type="textarea"
@@ -600,6 +610,8 @@ const excelColumns = [
               <el-button
                 v-if="!isViewMode"
                 type="default"
+                size="large"
+                class="action-btn"
                 :loading="smartLoading"
                 @click="handleSmartDecompose"
                 :icon="MagicStick"
@@ -609,7 +621,7 @@ const excelColumns = [
               <el-button 
                 type="primary" 
                 size="large"
-                class="primary-btn"
+                class="action-btn primary-btn"
                 :loading="loading" 
                 @click="handleGenerate"
               >
@@ -790,10 +802,10 @@ const excelColumns = [
   margin-bottom: 24px;
 }
 
-.page-hero {
+.page-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 16px;
   padding: 18px 20px;
   background: #fff;
@@ -801,28 +813,34 @@ const excelColumns = [
   border-radius: 16px;
 }
 
-.title-row {
+.page-header__main {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  flex: 1;
 }
 
-.title-copy {
+.page-header__copy {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
 }
 
-.title-main {
+.page-header__title-row {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
-.hero-actions {
+.page-header__actions {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
+  align-self: flex-start;
 }
 
 .breadcrumb {
@@ -840,6 +858,30 @@ const excelColumns = [
   font-weight: 700;
   color: #0f172a;
   margin: 0;
+  line-height: 1.2;
+}
+
+.page-header__tag {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.back-text-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: #f4f7fb;
+  border: 1px solid #e2e8f0;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .page-desc {
@@ -865,11 +907,11 @@ const excelColumns = [
 
 .workflow-step-card {
   position: relative;
-  padding: 16px 18px;
-  border-radius: 14px;
+  padding: 8px 12px;
+  border-radius: 12px;
   border: 1px solid #dbe5f1;
   background: #f8fafc;
-  min-height: 112px;
+  min-height: 0;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
 }
 
@@ -893,41 +935,56 @@ const excelColumns = [
 .workflow-step-card__head {
   display: flex;
   align-items: center;
+  margin-bottom: 4px;
+}
+
+.workflow-step-card__title-row {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 8px;
+  width: 100%;
+}
+
+.workflow-step-card__body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .workflow-step-card__index {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  flex: 0 0 auto;
+  font-size: 11px;
   font-weight: 700;
   color: #475569;
   background: #e2e8f0;
 }
 
 .workflow-step-card.is-active .workflow-step-card__index {
-  background: #3b82f6;
-  color: #fff;
+  color: #1d4ed8;
+  background: #dbeafe;
 }
 
 .workflow-step-card.is-done .workflow-step-card__index {
-  background: #22c55e;
-  color: #fff;
+  color: #15803d;
+  background: #dcfce7;
 }
 
 .workflow-step-card__badge {
   display: inline-flex;
   align-items: center;
-  height: 26px;
-  padding: 0 10px;
+  height: 20px;
+  padding: 0 8px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: #64748b;
   background: #eef2f7;
@@ -944,15 +1001,15 @@ const excelColumns = [
 }
 
 .workflow-step-card__title {
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 700;
   color: #0f172a;
-  margin-bottom: 6px;
+  line-height: 1.2;
 }
 
 .workflow-step-card__desc {
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 11px;
+  line-height: 1.2;
   color: #64748b;
   max-width: 220px;
 }
@@ -993,33 +1050,13 @@ const excelColumns = [
   font-weight: 400;
 }
 
-.intro-strip {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
+.requirement-link-input {
+  margin-bottom: 14px;
 }
 
-.intro-item {
-  padding: 14px 16px;
+.requirement-link-input :deep(.el-input__wrapper) {
   border-radius: 12px;
-  background: #f8fbff;
-  border: 1px solid #dbeafe;
-}
-
-.intro-item__title {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 13px;
-  font-weight: 700;
-  color: #1e40af;
-}
-
-.intro-item__desc {
-  display: block;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #475569;
+  background: #f8fafc;
 }
 
 .requirement-input :deep(.el-textarea__inner) {
@@ -1036,6 +1073,11 @@ const excelColumns = [
 }
 
 .primary-btn {
+  font-weight: 600;
+}
+
+.action-btn {
+  min-height: 40px;
   font-weight: 600;
 }
 
@@ -1320,7 +1362,7 @@ const excelColumns = [
 }
 
 @media (max-width: 960px) {
-  .page-hero,
+  .page-header,
   .result-summary-card,
   .result-config-card,
   .card-header {
@@ -1328,8 +1370,12 @@ const excelColumns = [
     align-items: stretch;
   }
 
-  .intro-strip {
-    grid-template-columns: 1fr;
+  .page-header__main {
+    align-items: flex-start;
+  }
+
+  .page-header__title-row {
+    flex-wrap: wrap;
   }
 
   .workflow-steps {
