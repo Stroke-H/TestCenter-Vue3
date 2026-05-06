@@ -1,5 +1,16 @@
 # ChangeLog - CoreFramework
 
+## 2026-04-30
+
+### Added
+- **MiMo Casual Providers**: 智能助手新增小米 MiMo 轻聊模型配置入口，接入 OpenAI 兼容接口，并预留 Anthropic 兼容接口与 Omni/TTS 能力位。
+
+### Changed
+- **Explicit Assistant Mode Routing**: Web 智能助手请求新增显式 `mode` 字段，轻聊模式不再依赖特殊前缀触发，而是由前后端统一按模式路由。
+- **Casual Model Selection**: 轻聊模式新增按提示词进行的模型路由层，当前默认优先使用 `MiMo-V2.5`，在长文本、复杂推理、代码与深度分析场景自动提升到 `MiMo-V2.5-Pro`。
+- **Casual Capability Guardrail**: 针对 Omni 与 TTS 相关请求，当前文本聊天窗口先做能力识别与文本回退，避免在未接入音频/多模态输入输出前误调用不匹配的模型链路。
+- **Startup Readiness Check**: `start.sh` 不再固定等待 1 秒后直接启动前端，而是轮询后端就绪状态后再启动 Vite，减少开发环境启动瞬间的 `/api` 代理拒绝连接噪音。
+
 ## 2026-04-28
 
 ### Changed

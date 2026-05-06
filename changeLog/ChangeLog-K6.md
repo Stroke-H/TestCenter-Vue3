@@ -1,5 +1,11 @@
 # ChangeLog - K6 Integration
 
+## 2026-04-30
+
+### Updated
+- **Unique Drama Report Snapshot**: 修复剧集播放接口测试历史报告互相覆盖的问题。现在每次剧集播放测试完成后，都会基于当次运行生成一份独立的 HTML 报告快照，并将执行记录中的 `reportUrl` 指向这份唯一文件，不再所有历史记录共用同一个 `drama_check_report.html`。
+- **Single-Issue Summary Promotion**: 优化剧集播放接口测试报告的异常摘要文案。对于仅命中 1 条异常的剧集，报告摘要现在会直接显示具体异常内容，例如缺失章节或单一计数异常，而不再统一只显示“发现 1 项异常”。
+
 ## 2026-03-16
 
 ### Updated

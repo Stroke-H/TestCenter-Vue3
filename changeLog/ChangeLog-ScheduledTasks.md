@@ -1,5 +1,15 @@
 # ChangeLog - Scheduled Tasks
 
+## 2026-04-30
+
+### Changed
+- **Scheduled Drama Report Snapshot**: 定时任务触发的剧集播放接口测试也改为在执行完成后生成独立报告快照，并把执行记录保存到该快照地址，避免历史定时任务报告继续被后续运行覆盖。
+
+## 2026-05-06
+
+### Changed
+- **Scheduled Task Audit Logging**: 定时任务执行完成后，现在会按 `ai_operation_logs` 的统一结构补写一条 AI 操作审计日志，包含任务名、项目、环境、执行人、执行结果、耗时与报告地址，便于在飞书助手的“AI 操作审计日志”区间内回看定时任务执行轨迹。
+
 ## 2026-04-24
 
 ### Added

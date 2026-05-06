@@ -214,7 +214,7 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 					}
 				}
 
-				aiResponse := ProcessChat(ctx, stdMsg.ChatID, stdMsg.SenderID, cleanContent)
+				aiResponse := ProcessChat(ctx, stdMsg.ChatID, stdMsg.SenderID, cleanContent, "work")
 
 				if cli != nil && reactionId != nil {
 					cli.Im.MessageReaction.Delete(context.Background(), larkim.NewDeleteMessageReactionReqBuilder().

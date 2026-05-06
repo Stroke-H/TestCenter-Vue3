@@ -85,7 +85,6 @@ const sendAssistantMessage = async () => {
   if (!assistantInput.value || assistantLoading.value) return
 
   const userText = assistantInput.value
-  const requestText = assistantMode.value === 'casual' ? `<解限模式>${userText}` : userText
   assistantMessages.value.push({ role: 'user', text: userText })
   assistantInput.value = ''
   assistantLoading.value = true
@@ -101,9 +100,10 @@ const sendAssistantMessage = async () => {
         'Authorization': authStore.token
       },
       body: JSON.stringify({
-        message: requestText,
+        message: userText,
         session_id: assistantSessionId.value,
-        user_id: authStore.user?.id || 'WEB_DASHBOARD_USER'
+        user_id: authStore.user?.id || 'WEB_DASHBOARD_USER',
+        mode: assistantMode.value
       })
     })
     const data = await res.json()

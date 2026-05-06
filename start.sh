@@ -60,6 +60,35 @@ check_and_resolve_port() {
     fi
 }
 
+wait_for_backend_ready() {
+    local URL="http://127.0.0.1:8080/api/auth/me"
+    local MAX_ATTEMPTS=30
+    local ATTEMPT=1
+
+    echo -e "${YELLOW}⏳ Waiting for Go backend to become ready...${NC}"
+    while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+        local STATUS
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || true)
+
+        if [ "$STATUS" = "200" ] || [ "$STATUS" = "401" ]; then
+            echo -e "${GREEN}✓ Go backend is ready (HTTP $STATUS).${NC}"
+            return 0
+        fi
+
+        if ! kill -0 $GO_PID 2>/dev/null; then
+            echo -e "${RED}✗ Go backend exited before becoming ready.${NC}"
+            wait $GO_PID
+            exit 1
+        fi
+
+        sleep 1
+        ATTEMPT=$((ATTEMPT + 1))
+    done
+
+    echo -e "${RED}✗ Go backend did not become ready within ${MAX_ATTEMPTS}s.${NC}"
+    exit 1
+}
+
 echo -e "\n${GREEN}Checking port availability...${NC}"
 check_and_resolve_port 8080 "main|testcenter" "Go Backend"
 check_and_resolve_port 5173 "node|vite|esbuild" "Vue Frontend"
@@ -73,8 +102,8 @@ go run main.go &
 GO_PID=$!
 cd ..
 
-# Give the backend a second to initialize
-sleep 1
+# Wait for backend readiness before starting the frontend proxy.
+wait_for_backend_ready
 
 # 5. Start Vue Frontend in background
 echo -e "${GREEN}► Starting Vue 3 Frontend Server...${NC}"

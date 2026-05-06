@@ -1,5 +1,88 @@
 {
-  "deepseek_api_key": "replace-with-your-deepseek-api-key",
-  "base_url": "https://api.deepseek.com/v1",
-  "model": "deepseek-v4-flash"
+  "providers": [
+    {
+      "name": "deepseek-work-chat",
+      "api_key": "replace-with-your-deepseek-api-key",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4-flash",
+      "capability": "chat"
+    },
+    {
+      "name": "xiaomi-mimo-casual-default",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-pro",
+      "capability": "casual_chat"
+    },
+    {
+      "name": "xiaomi-mimo-casual-pro",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-pro",
+      "capability": "casual_chat_pro"
+    },
+    {
+      "name": "xiaomi-mimo-casual-fallback",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-pro",
+      "capability": "casual_chat_fallback"
+    },
+    {
+      "name": "xiaomi-testcase-decompose",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-pro",
+      "capability": "testcase_decompose"
+    },
+    {
+      "name": "xiaomi-testcase-smart-decompose",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-pro",
+      "capability": "testcase_smart_decompose"
+    },
+    {
+      "name": "xiaomi-testcase-generate",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-pro",
+      "capability": "testcase_generate"
+    },
+    {
+      "name": "xiaomi-mimo-omni-reserved",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-omni",
+      "capability": "casual_omni"
+    },
+    {
+      "name": "xiaomi-mimo-tts-reserved",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-tts",
+      "capability": "casual_tts"
+    },
+    {
+      "name": "xiaomi-mimo-tts-voice-clone-reserved",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-tts",
+      "capability": "casual_tts_voice_clone"
+    },
+    {
+      "name": "xiaomi-mimo-tts-voice-design-reserved",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/v1",
+      "model": "mimo-v2-tts",
+      "capability": "casual_tts_voice_design"
+    },
+    {
+      "name": "xiaomi-anthropic-compatible-reserved",
+      "api_key": "replace-with-your-xiaomi-api-key",
+      "base_url": "https://token-plan-sgp.xiaomimimo.com/anthropic/v1",
+      "model": "mimo-v2-pro",
+      "capability": "casual_chat_anthropic_reserved"
+    }
+  ]
 }

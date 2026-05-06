@@ -76,6 +76,8 @@ type dramaRunJob struct {
 	subscribers map[chan string]struct{}
 }
 
+const dramaReportBaseFile = "drama_check_report.html"
+
 var dramaRuns = struct {
 	mu      sync.Mutex
 	current *dramaRunJob
@@ -230,7 +232,16 @@ func (job *dramaRunJob) execute(ctx context.Context, rootDir string, env []strin
 		return
 	}
 
-	job.complete()
+	reportFile, reportURL, err := snapshotDramaReport(rootDir, job.id)
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		job.fail(fmt.Sprintf("snapshot drama report failed: %v", err))
+		return
+	}
+
+	job.complete(reportFile, reportURL)
 }
 
 func (job *dramaRunJob) runCommandStream(ctx context.Context, dir string, env []string, name string, args ...string) error {
@@ -373,8 +384,7 @@ func (job *dramaRunJob) handleControlMessage(message string) {
 	job.publishLog(message)
 }
 
-func (job *dramaRunJob) complete() {
-	reportURL := "http://localhost:8080/reports/drama_check_report.html"
+func (job *dramaRunJob) complete(reportFile string, reportURL string) {
 	job.mu.Lock()
 	job.status = "done"
 	job.progress = 100
@@ -383,7 +393,7 @@ func (job *dramaRunJob) complete() {
 	job.mu.Unlock()
 	job.publishLog("\nExecution completed successfully.")
 	job.publish("DRAMA_PROGRESS:100")
-	job.publish("REPORT_READY:drama_check_report.html")
+	job.publish("REPORT_READY:" + reportFile)
 	job.publish("EXECUTION_STATUS:success")
 	if _, err := AddExecutionReport(ExecutionReport{
 		Name:      job.toolName,
@@ -657,7 +667,12 @@ func RunK6TestHandler(c *gin.Context) {
 		}
 		reportFile := "summary.html"
 		if scriptName == "drama_check_flow.js" {
-			reportFile = "drama_check_report.html"
+			reportFile, _, err = snapshotDramaReport(rootDir, fmt.Sprintf("ws-%d", time.Now().UnixMilli()))
+			if err != nil {
+				ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\n[❌] 生成剧集播放报告快照失败: %v", err)))
+				ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:report snapshot failed"))
+				return
+			}
 		}
 		ws.WriteMessage(websocket.TextMessage, []byte("REPORT_READY:"+reportFile))
 		ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:success"))
@@ -786,7 +801,7 @@ func readDramaRetryResult(rootDir string) (dramaRetryResultFile, error) {
 }
 
 func appendDramaRetrySection(rootDir string, failures []dramaRetryFailure, note string) error {
-	reportPath := filepath.Join(rootDir, "k6-scripts", "reports", "drama_check_report.html")
+	reportPath := filepath.Join(rootDir, "k6-scripts", "reports", dramaReportBaseFile)
 	content, err := os.ReadFile(reportPath)
 	if err != nil {
 		return err
@@ -800,6 +815,39 @@ func appendDramaRetrySection(rootDir string, failures []dramaRetryFailure, note 
 		htmlContent += section
 	}
 	return os.WriteFile(reportPath, []byte(htmlContent), 0644)
+}
+
+func snapshotDramaReport(rootDir string, suffix string) (string, string, error) {
+	safeSuffix := sanitizeReportSuffix(suffix)
+	if safeSuffix == "" {
+		safeSuffix = fmt.Sprintf("%d", time.Now().UnixMilli())
+	}
+
+	reportsDir := filepath.Join(rootDir, "k6-scripts", "reports")
+	sourcePath := filepath.Join(reportsDir, dramaReportBaseFile)
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return "", "", err
+	}
+
+	fileName := fmt.Sprintf("drama_check_report_%s.html", safeSuffix)
+	targetPath := filepath.Join(reportsDir, fileName)
+	if err := os.WriteFile(targetPath, content, 0644); err != nil {
+		return "", "", err
+	}
+
+	reportURL := "http://localhost:8080/reports/" + fileName
+	return fileName, reportURL, nil
+}
+
+func sanitizeReportSuffix(value string) string {
+	replacer := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		" ", "_",
+	)
+	return replacer.Replace(strings.TrimSpace(value))
 }
 
 func buildDramaRetrySection(failures []dramaRetryFailure, note string) string {

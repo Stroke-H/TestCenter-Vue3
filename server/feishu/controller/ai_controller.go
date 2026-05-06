@@ -26,6 +26,7 @@ func WebChatHandler(c *gin.Context) {
 		Message   string `json:"message"`
 		SessionID string `json:"session_id"`
 		UserID    string `json:"user_id"`
+		Mode      string `json:"mode"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -40,7 +41,7 @@ func WebChatHandler(c *gin.Context) {
 	// Process chat using the existing AI brain
 	// We prefix session ID to distinguish from Feishu bot sessions
 	fullSessionID := "WEB_" + req.SessionID
-	response := service.ProcessChat(context.Background(), fullSessionID, req.UserID, req.Message)
+	response := service.ProcessChat(context.Background(), fullSessionID, req.UserID, req.Message, req.Mode)
 
 	// Check if any tool result (like the acceptance report JSON) was generated in this turn
 	var toolResult string

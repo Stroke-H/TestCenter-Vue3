@@ -255,7 +255,15 @@ func executeScheduledTask(task ScheduledTask) {
 		log.Printf("[ScheduledTask] execute failed: %v", err)
 	}
 
-	reportURL := "http://localhost:8080/reports/drama_check_report.html"
+	reportURL := ""
+	if status == "Passed" {
+		rootDir, _ := filepath.Abs("..")
+		if _, snapshotURL, snapshotErr := snapshotDramaReport(rootDir, task.ID); snapshotErr != nil {
+			log.Printf("[ScheduledTask] snapshot report failed: %v", snapshotErr)
+		} else {
+			reportURL = snapshotURL
+		}
+	}
 	if _, addErr := AddExecutionReport(ExecutionReport{
 		Name:      task.Name,
 		Type:      "业务自动化",
@@ -271,6 +279,8 @@ func executeScheduledTask(task ScheduledTask) {
 	if notifyErr := notifyScheduledTaskCreator(task.Creator, notice); notifyErr != nil {
 		log.Printf("[ScheduledTask] notify failed: %v", notifyErr)
 	}
+
+	appendScheduledTaskAuditLog(task, status, result, formatDuration(duration), reportURL, start)
 
 	updateScheduledTaskAfterRun(task, start, result)
 }
@@ -334,6 +344,54 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 	builder.WriteString(sanitizeFeishuPlainText(analysis) + "\n\n")
 	builder.WriteString("报告地址：" + reportURL)
 	return sanitizeFeishuPlainText(builder.String())
+}
+
+func appendScheduledTaskAuditLog(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time) {
+	projectName := valueOrFallback(task.TestProject, task.TestProjectCode)
+	detail := fmt.Sprintf(
+		"Scheduled task executed: %s | duration=%s | result=%s | next=%s",
+		task.Name,
+		duration,
+		valueOrFallback(strings.TrimSpace(result), status),
+		task.NextRun,
+	)
+	if strings.TrimSpace(reportURL) != "" {
+		detail += " | report=" + reportURL
+	}
+
+	op := feishumodel.AIOperationLog{
+		ID:        fmt.Sprintf("OP_%d", time.Now().UnixNano()),
+		ToolName:  "scheduled_episode_playback_test",
+		Project:   projectName,
+		Env:       normalizeScheduledTaskAuditEnv(task.TestEnv),
+		UserID:    task.Creator,
+		UserName:  task.Creator,
+		Status:    strings.ToLower(strings.TrimSpace(statusToAuditStatus(status))),
+		Detail:    detail,
+		Timestamp: time.Now(),
+	}
+
+	if err := SQLUpsertJSONForFeishu("ai_operation_logs", op); err != nil {
+		log.Printf("[ScheduledTask] append audit log failed: %v", err)
+	}
+}
+
+func normalizeScheduledTaskAuditEnv(testEnv string) string {
+	switch strings.TrimSpace(testEnv) {
+	case "正式服务器":
+		return "prod"
+	case "测试服务器":
+		return "test"
+	default:
+		return strings.TrimSpace(testEnv)
+	}
+}
+
+func statusToAuditStatus(status string) string {
+	if strings.EqualFold(strings.TrimSpace(status), "Passed") {
+		return "success"
+	}
+	return "failed"
 }
 
 func analyzeScheduledTaskReportWithAI(task ScheduledTask, status string, result string, duration string, startedAt time.Time) (string, error) {

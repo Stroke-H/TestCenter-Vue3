@@ -150,6 +150,16 @@ function analyzeHealth(items) {
     return { healthy: errors.length === 0, errors: errors };
 }
 
+function buildDramaSummaryLabel(dramaId, errors, fallback = false) {
+    if (errors.length === 1) {
+        const suffix = fallback ? ' (Fallback)' : '';
+        return `剧集 ID: ${dramaId} - ${errors[0].msg}${suffix}`;
+    }
+
+    const fallbackSuffix = fallback ? ' - Fallback' : '';
+    return `剧集 ID: ${dramaId} (发现 ${errors.length} 项异常${fallbackSuffix})`;
+}
+
 // ---------- 6. 主执行逻辑 ----------
 export default function () {
     const index = (__VU - 1) * itersPerVu + __ITER;
@@ -240,7 +250,7 @@ export default function () {
             if (err.type === 'mismatch') totalMismatchErrors.add(1);
         });
 
-        const summaryLabel = `剧集 ID: ${dramaId} (发现 ${unionErrors.length} 项异常)`;
+        const summaryLabel = buildDramaSummaryLabel(dramaId, unionErrors);
         const detailLines = errorDetails.join('<br>');
         const expandableMsg = `<details style="cursor: pointer; color: #e74c3c;"><summary><b>${summaryLabel}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">${detailLines}</div></details>`;
         console.warn(`[❌ 实锤故障] ${summaryLabel}\n  ${errorDetails.join('\n  ')}`);
@@ -262,7 +272,7 @@ function reportFaults(dramaId, errors, total, actualLen) {
         if (err.type === 'conversion') updateStatusErrors.add(err.count);
         if (err.type === 'mismatch') totalMismatchErrors.add(1);
     });
-    const summaryLabel = `剧集 ID: ${dramaId} (发现 ${errors.length} 项异常 - Fallback)`;
+    const summaryLabel = buildDramaSummaryLabel(dramaId, errors, true);
     const detailLines = errorDetails.join('<br>');
     const expandableMsg = `<details style="cursor: pointer; color: #e74c3c;"><summary><b>${summaryLabel}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">${detailLines}</div></details>`;
     console.warn(`[❌ 实锤故障] ${summaryLabel}\n  ${errorDetails.join('\n  ')}`);

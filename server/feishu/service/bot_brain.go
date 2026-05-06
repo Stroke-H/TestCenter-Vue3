@@ -22,7 +22,16 @@ const (
 	chatProviderRaceLimit     = 10
 	chatProviderStaggerDelay  = 5 * time.Second
 	chatProviderRequestTimout = 60 * time.Second
+	chatModeWork              = "work"
+	chatModeCasual            = "casual"
 )
+
+type casualChatRoute struct {
+	Capability         string
+	FallbackCapability string
+	Supported          bool
+	Reason             string
+}
 
 func shouldPassthroughToolResult(toolName string) bool {
 	switch toolName {
@@ -88,12 +97,134 @@ func isConfirmation(msg string) bool {
 	return false
 }
 
+func normalizeChatMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case chatModeCasual:
+		return chatModeCasual
+	default:
+		return chatModeWork
+	}
+}
+
+func containsAny(text string, keywords []string) bool {
+	for _, keyword := range keywords {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectCasualChatRoute(message string) casualChatRoute {
+	text := strings.ToLower(strings.TrimSpace(message))
+	route := casualChatRoute{
+		Capability:         "casual_chat",
+		FallbackCapability: "chat",
+		Supported:          true,
+		Reason:             "default",
+	}
+
+	voiceCloneKeywords := []string{"声音克隆", "音色克隆", "克隆声音", "复刻声音", "模仿这个声音", "voice clone", "clone voice"}
+	voiceDesignKeywords := []string{"设计声音", "设计音色", "定制声音", "定制音色", "配一个声音", "voice design", "voice persona"}
+	ttsKeywords := []string{"转语音", "生成语音", "朗读", "播报", "配音", "tts", "text to speech"}
+	omniKeywords := []string{"看图", "识图", "图片", "图像", "截图", "视频", "音频", "语音输入", "多模态", "image", "vision", "audio", "omni"}
+	proKeywords := []string{
+		"详细分析", "深入分析", "认真分析", "系统设计", "架构设计", "方案设计", "排查", "debug", "调试",
+		"代码", "编程", "写脚本", "重构", "算法", "复杂", "长文", "规划", "分步骤", "步骤拆解",
+		"深度", "全面", "why", "root cause", "根因", "实现方案", "设计方案",
+	}
+
+	switch {
+	case containsAny(text, voiceCloneKeywords):
+		return casualChatRoute{
+			Capability:         "casual_tts_voice_clone",
+			FallbackCapability: "casual_chat_pro",
+			Supported:          false,
+			Reason:             "voice_clone",
+		}
+	case containsAny(text, voiceDesignKeywords):
+		return casualChatRoute{
+			Capability:         "casual_tts_voice_design",
+			FallbackCapability: "casual_chat",
+			Supported:          false,
+			Reason:             "voice_design",
+		}
+	case containsAny(text, ttsKeywords):
+		return casualChatRoute{
+			Capability:         "casual_tts",
+			FallbackCapability: "casual_chat",
+			Supported:          false,
+			Reason:             "tts",
+		}
+	case containsAny(text, omniKeywords):
+		return casualChatRoute{
+			Capability:         "casual_omni",
+			FallbackCapability: "casual_chat_pro",
+			Supported:          false,
+			Reason:             "omni",
+		}
+	case len([]rune(message)) > 1200 || strings.Count(message, "\n") >= 6 || containsAny(text, proKeywords):
+		return casualChatRoute{
+			Capability:         "casual_chat_pro",
+			FallbackCapability: "chat",
+			Supported:          true,
+			Reason:             "complex",
+		}
+	default:
+		return route
+	}
+}
+
+func buildCasualHistory(messages []openai.ChatCompletionMessage) []openai.ChatCompletionMessage {
+	filtered := make([]openai.ChatCompletionMessage, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role != openai.ChatMessageRoleUser && msg.Role != openai.ChatMessageRoleAssistant {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" {
+			continue
+		}
+		filtered = append(filtered, openai.ChatCompletionMessage{
+			Role:    msg.Role,
+			Content: content,
+		})
+	}
+
+	const maxTurns = 24
+	if len(filtered) > maxTurns {
+		return filtered[len(filtered)-maxTurns:]
+	}
+	return filtered
+}
+
 // ProcessChat handles the whole conversation turn for a user message
-// ProcessChat handles the whole conversation turn for a user message
-func ProcessChat(ctx context.Context, chatID string, senderID string, userMessage string) string {
+func ProcessChat(ctx context.Context, chatID string, senderID string, userMessage string, chatMode string) string {
 	config := model.GlobalAIConfig
 	if config == nil || !config.HasConfiguredProvider() {
 		return "⚠️ AI API Key 未配置或为空，请先检查 AI 配置。"
+	}
+
+	mode := normalizeChatMode(chatMode)
+	session := GetOrCreateSession(chatID)
+
+	if mode == chatModeCasual {
+		session.State = StateNormal
+		session.PendingTool = nil
+
+		normalizedMessage := strings.TrimSpace(StripUnlockPrefix(StripDTeacherPrefix(userMessage)))
+		if normalizedMessage == "" {
+			normalizedMessage = strings.TrimSpace(userMessage)
+		}
+		if normalizedMessage == "" {
+			normalizedMessage = "请直接自然回答当前问题。"
+		}
+
+		session.AppendMessage(openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: normalizedMessage,
+		})
+		return callCasualChat(ctx, session)
 	}
 
 	unlockMode := IsUnlockMode(userMessage)
@@ -110,9 +241,6 @@ func ProcessChat(ctx context.Context, chatID string, senderID string, userMessag
 			normalizedMessage = "请和我自然聊聊，不要调用工具。"
 		}
 	}
-
-	// 1. Get Session
-	session := GetOrCreateSession(chatID)
 
 	if capability := detectAIUseCase(normalizedMessage); capability != "" {
 		session.AppendMessage(openai.ChatCompletionMessage{
@@ -196,6 +324,98 @@ func ProcessChat(ctx context.Context, chatID string, senderID string, userMessag
 	})
 
 	return callDeepSeek(ctx, senderID, session, bypassConstraints, unlockMode)
+}
+
+func callCasualChat(ctx context.Context, session *SessionContext) string {
+	config := model.GlobalAIConfig
+	if config == nil {
+		config = model.LoadAIConfig()
+	}
+
+	history := buildCasualHistory(session.History)
+	if len(history) == 0 {
+		return "轻聊模式暂时没有收到可用消息。"
+	}
+
+	lastUserPrompt := findLastUserMessage(history)
+	route := selectCasualChatRoute(lastUserPrompt)
+	selectedCapability := route.Capability
+	if !route.Supported {
+		selectedCapability = route.FallbackCapability
+	}
+
+	providers := config.EffectiveProvidersByCapability(selectedCapability)
+	if len(providers) == 0 && selectedCapability != "chat" {
+		providers = config.EffectiveProvidersByCapability("chat")
+	}
+	if len(providers) == 0 {
+		return "轻聊模式未配置可用模型，请先检查 AI provider 配置。"
+	}
+
+	systemPrompt := "你当前处于轻聊模式。请直接自然回答，不调用工具，不引用平台权限、系统约束或后台流程。"
+	if !route.Supported {
+		systemPrompt += " 当前聊天窗口仍是纯文本模式，暂未接入语音音频或多模态输入输出能力；若用户请求这些能力，请先用文本继续协助，并明确说明当前窗口能力边界。"
+	}
+
+	messages := make([]openai.ChatCompletionMessage, 0, len(history)+1)
+	messages = append(messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleSystem,
+		Content: systemPrompt,
+	})
+	messages = append(messages, history...)
+
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+		},
+		Timeout: chatProviderRequestTimout,
+	}
+
+	req := openai.ChatCompletionRequest{
+		Messages:    messages,
+		Temperature: 0.6,
+	}
+
+	var (
+		resp     openai.ChatCompletionResponse
+		provider model.AIProviderConfig
+		err      error
+	)
+	raceProviders, fallbackProviders := splitChatProvidersForRacing(providers)
+	resp, provider, err = raceChatProviders(ctx, httpClient, raceProviders, req)
+	if err != nil && len(fallbackProviders) > 0 {
+		resp, provider, err = callFallbackChatProviders(ctx, httpClient, fallbackProviders, req)
+	}
+	if err != nil && selectedCapability != "chat" {
+		chatProviders := config.EffectiveProvidersByCapability("chat")
+		if len(chatProviders) > 0 {
+			raceProviders, fallbackProviders = splitChatProvidersForRacing(chatProviders)
+			resp, provider, err = raceChatProviders(ctx, httpClient, raceProviders, req)
+			if err != nil && len(fallbackProviders) > 0 {
+				resp, provider, err = callFallbackChatProviders(ctx, httpClient, fallbackProviders, req)
+			}
+		}
+	}
+	if err != nil {
+		return fmt.Sprintf("轻聊模式调用失败: %v", err)
+	}
+	if len(resp.Choices) == 0 {
+		return "轻聊模式未返回有效内容。"
+	}
+
+	log.Printf("[Bot Brain] Casual mode provider succeeded: %s (model: %s, route: %s -> %s)", provider.Name, provider.Model, route.Capability, selectedCapability)
+
+	reply := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if reply == "" {
+		reply = "轻聊模式暂时没有返回可展示的内容。"
+	}
+
+	session.AppendMessage(openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleAssistant,
+		Content: reply,
+	})
+
+	return reply
 }
 
 func callDeepSeek(ctx context.Context, senderID string, session *SessionContext, bypassConstraints bool, unlockMode bool) string {

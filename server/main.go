@@ -173,9 +173,13 @@ func main() {
 		// Test Case Generation
 		testcaseGen := api.Group("/testcase-gen")
 		{
+			testcaseGen.GET("/models", services.GetTestcaseAIModelsHandler)
+			testcaseGen.GET("/review/roles", services.GetTestcaseReviewRolesHandler)
 			testcaseGen.POST("/decompose", services.DecomposeRequirementHandler)
 			testcaseGen.POST("/smart-decompose", services.SmartDecomposeHandler)
 			testcaseGen.POST("/generate", services.GenerateTestCasesHandler)
+			testcaseGen.POST("/review", services.ReviewTestCasesHandler)
+			testcaseGen.POST("/review/optimize", services.OptimizeReviewedCasesHandler)
 			testcaseGen.POST("/export", services.ExportTestCasesExcelHandler)
 
 			// History Management
