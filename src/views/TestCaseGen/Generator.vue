@@ -5,12 +5,14 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import request from '@/api/request'
+import { useTestcaseGenerationRunStore } from '@/stores'
 
 const props = defineProps<{
   id?: string
 }>()
 
 const router = useRouter()
+const testcaseGenerationRunStore = useTestcaseGenerationRunStore()
 const isViewMode = ref(false)
 const projects = ref<any[]>([])
 const selectedProjectCode = ref('')
@@ -323,7 +325,17 @@ interface RequirementPoint {
   is_new?: boolean // 用于标注融合后的新增项
 }
 const requirementPoints = ref<RequirementPoint[]>([])
-const generatedRequirementPoints = ref<RequirementPoint[]>([])
+const localGeneratedRequirementPoints = ref<RequirementPoint[]>([])
+const generatedRequirementPoints = computed<RequirementPoint[]>({
+  get: () => (isViewMode.value ? localGeneratedRequirementPoints.value : testcaseGenerationRunStore.generatedRequirementPoints as RequirementPoint[]),
+  set: (value) => {
+    if (isViewMode.value) {
+      localGeneratedRequirementPoints.value = value
+      return
+    }
+    testcaseGenerationRunStore.generatedRequirementPoints = value
+  }
+})
 
 // Step 2: 测试用例数据
 interface TestCase {
@@ -342,17 +354,52 @@ interface TestCase {
   comparison_status?: 'initial_kept' | 'optimized_new' | 'optimized_adjusted'
   comparison_note?: string
 }
-const generatedCases = ref<TestCase[]>([])
+const generatedCases = computed<TestCase[]>({
+  get: () => (isViewMode.value ? localGeneratedCases.value : testcaseGenerationRunStore.generatedCases as TestCase[]),
+  set: (value) => {
+    if (isViewMode.value) {
+      localGeneratedCases.value = value
+      return
+    }
+    testcaseGenerationRunStore.generatedCases = value
+  }
+})
+const localGeneratedCases = ref<TestCase[]>([])
 const baselineCases = ref<TestCase[]>([])
 const optimizedRemovedCases = ref<TestCase[]>([])
 const optimizedPreviewActive = ref(false)
 const rawAIResponse = ref('')
 const showRawDialog = ref(false)
-const currentBatch = ref(0)
-const totalBatches = ref(0)
-const generationInProgress = ref(false)
-const generationError = ref('')
-const currentGeneratingPointTitle = ref('')
+const currentBatch = computed<number>({
+  get: () => testcaseGenerationRunStore.currentBatch,
+  set: (value) => {
+    testcaseGenerationRunStore.currentBatch = value
+  }
+})
+const totalBatches = computed<number>({
+  get: () => testcaseGenerationRunStore.totalBatches,
+  set: (value) => {
+    testcaseGenerationRunStore.totalBatches = value
+  }
+})
+const generationInProgress = computed<boolean>({
+  get: () => testcaseGenerationRunStore.generationInProgress,
+  set: (value) => {
+    testcaseGenerationRunStore.generationInProgress = value
+  }
+})
+const generationError = computed<string>({
+  get: () => testcaseGenerationRunStore.generationError,
+  set: (value) => {
+    testcaseGenerationRunStore.generationError = value
+  }
+})
+const currentGeneratingPointTitle = computed<string>({
+  get: () => testcaseGenerationRunStore.currentGeneratingPointTitle,
+  set: (value) => {
+    testcaseGenerationRunStore.currentGeneratingPointTitle = value
+  }
+})
 
 interface GenerationPointStatus {
   key: string
@@ -363,7 +410,12 @@ interface GenerationPointStatus {
   error?: string
 }
 
-const generationStatuses = ref<GenerationPointStatus[]>([])
+const generationStatuses = computed<GenerationPointStatus[]>({
+  get: () => testcaseGenerationRunStore.generationStatuses as GenerationPointStatus[],
+  set: (value) => {
+    testcaseGenerationRunStore.generationStatuses = value
+  }
+})
 const categoryOrder = ['常规功能测试', '边界极限测试', '异常容错测试', '稳定性并发测试']
 const workflowSteps = [
   {
@@ -513,7 +565,6 @@ const handleGenerate = async () => {
   if (pointsToGenerate.length === 0) return
 
   rawAIResponse.value = ''
-  generatedCases.value = []
   generatedRequirementPoints.value = [...pointsToGenerate]
   baselineCases.value = []
   optimizedRemovedCases.value = []
@@ -521,93 +572,19 @@ const handleGenerate = async () => {
   reviewResults.value = {}
   currentReviewModel.value = ''
   currentReviewProvider.value = ''
-  generationError.value = ''
-  generationInProgress.value = true
-  generationStatuses.value = pointsToGenerate.map((point, index) => ({
-    key: `${point.module}-${point.feature}-${index}`,
-    module: point.module,
-    feature: point.feature,
-    status: 'pending',
-    caseCount: 0
-  }))
   activeStep.value = 2
-  
-  const points = pointsToGenerate
-  const batchSize = 1 // 与后端保持一致，每批 1 个需求点
-  totalBatches.value = Math.ceil(points.length / batchSize)
-  currentBatch.value = 0
-  
-  try {
-    for (let i = 0; i < points.length; i += batchSize) {
-      currentBatch.value++
-      const batchIndex = Math.floor(i / batchSize)
-      const batch = points.slice(i, i + batchSize)
-      const point = batch[0]
-      const currentStatus = generationStatuses.value[batchIndex]
-      if (!point || !currentStatus) continue
-
-      currentGeneratingPointTitle.value = `${point.module} / ${point.feature}`
-      currentStatus.status = 'running'
-
-      try {
-        const res = await axios.post(`${API_BASE}/generate`, {
-          points: batch,
-          text: requirementDescription.value,
-          analyzer_used: analyzerUsed.value
-        })
-
-        const incomingCases = Array.isArray(res.data?.cases) ? res.data.cases : []
-        const mappedCases = incomingCases.map((item: TestCase) => ({
-          ...item,
-          source_module: point.module,
-          source_feature: point.feature
-        }))
-
-        if (mappedCases.length > 0) {
-          generatedCases.value = reindexCases([...generatedCases.value, ...mappedCases])
-        }
-
-        if (res.data?.analyzer_used) {
-          analyzerUsed.value = true
-        }
-
-        currentStatus.status = 'done'
-        currentStatus.caseCount = mappedCases.length
-
-        if (res.data.partial && res.data.error) {
-          currentStatus.status = 'error'
-          currentStatus.error = res.data.error
-          generationError.value = res.data.error
-          ElMessage.warning(`第 ${currentBatch.value} 批次生成不完整: ${res.data.error}`)
-        }
-      } catch (err: any) {
-        console.error(err)
-        const errorMsg = err.response?.data?.error || '用例生成失败'
-        const rawData = err.response?.data?.raw
-        currentStatus.status = 'error'
-        currentStatus.error = errorMsg
-        generationError.value = errorMsg
-
-        if (rawData) {
-          rawAIResponse.value = rawData
-          ElMessage.error({
-            message: `第 ${currentBatch.value} 批次解析失败，已保留已生成结果，你可以查看原始数据。`,
-            duration: 5000
-          })
-        } else {
-          ElMessage.error(`第 ${currentBatch.value} 个需求点生成失败：${errorMsg}`)
-        }
-      }
-    }
-  } finally {
-    generationInProgress.value = false
-    currentGeneratingPointTitle.value = ''
-    currentBatch.value = 0
-    totalBatches.value = 0
-  }
+  await testcaseGenerationRunStore.startGeneration({
+    points: pointsToGenerate,
+    text: requirementDescription.value,
+    analyzerUsed: analyzerUsed.value
+  })
 
   if (generatedCases.value.length > 0) {
+    analyzerUsed.value = testcaseGenerationRunStore.analyzerUsed
+    requirementDescription.value = testcaseGenerationRunStore.requirementText || requirementDescription.value
     ElMessage.success('用例生成完成')
+  } else if (generationError.value) {
+    ElMessage.error(generationError.value)
   }
 }
 
@@ -642,6 +619,7 @@ const handleReview = async () => {
   }
 
   reviewLoading.value = true
+  testcaseGenerationRunStore.startReviewSession(selectedReviewRoles.value.length)
   try {
     const reviewRequests = selectedReviewRoles.value.map(role => axios.post(`${API_BASE}/review`, {
       role_key: role.key,
@@ -666,6 +644,7 @@ const handleReview = async () => {
           analyzerUsed.value = true
         }
         successRoles.push(role.name)
+        testcaseGenerationRunStore.markReviewProgress(successRoles.length)
       } else {
         failedRoles.push(role.name)
       }
@@ -685,6 +664,7 @@ const handleReview = async () => {
     ElMessage.error(err.response?.data?.error || '用例评审失败')
   } finally {
     reviewLoading.value = false
+    testcaseGenerationRunStore.finishReviewSession()
   }
 }
 
@@ -703,6 +683,7 @@ const handleOptimizeCases = async () => {
   }
 
   optimizeLoading.value = true
+  testcaseGenerationRunStore.startOptimizeSession()
   try {
     const previousCases = generatedCases.value.map(item => ({ ...item }))
     const res = await axios.post(`${API_BASE}/review/optimize`, {
@@ -729,6 +710,7 @@ const handleOptimizeCases = async () => {
     ElMessage.error(err.response?.data?.error || '智能优化用例失败')
   } finally {
     optimizeLoading.value = false
+    testcaseGenerationRunStore.finishOptimizeSession()
   }
 }
 
@@ -759,21 +741,20 @@ const prevStep = () => {
 }
 
 const resetAll = () => {
+  testcaseGenerationRunStore.reset()
   requirementLink.value = ''
   requirementDescription.value = ''
   requirementPoints.value = []
+  localGeneratedRequirementPoints.value = []
   generatedRequirementPoints.value = []
   currentDecomposeModel.value = ''
   currentDecomposeProvider.value = ''
   analyzerUsed.value = false
+  localGeneratedCases.value = []
   generatedCases.value = []
   baselineCases.value = []
   optimizedRemovedCases.value = []
   optimizedPreviewActive.value = false
-  generationStatuses.value = []
-  generationInProgress.value = false
-  generationError.value = ''
-  currentGeneratingPointTitle.value = ''
   reviewResults.value = {}
   reviewLoading.value = false
   optimizeLoading.value = false
@@ -851,6 +832,12 @@ onMounted(async () => {
   fetchModules()
   fetchTestcaseAIModels()
   fetchReviewRoles()
+  if (!props.id && testcaseGenerationRunStore.hasRecoverableRun) {
+    requirementDescription.value = testcaseGenerationRunStore.requirementText
+    analyzerUsed.value = testcaseGenerationRunStore.analyzerUsed
+    generatedRequirementPoints.value = [...(testcaseGenerationRunStore.generatedRequirementPoints as RequirementPoint[])]
+    activeStep.value = 2
+  }
   if (props.id) {
     loading.value = true
     isViewMode.value = true

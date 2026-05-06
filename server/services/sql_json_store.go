@@ -67,6 +67,7 @@ var sqlJSONTables = map[string]sqlJSONTable{
 			{Column: "username", Field: "username"},
 			{Column: "nickname", Field: "nickname"},
 			{Column: "email", Field: "email"},
+			{Column: "avatar", Field: "avatar"},
 			{Column: "password_hash", Field: "password_hash"},
 			{Column: "created_at", Field: "created_at"},
 			{Column: "feishu_open_id", Field: "feishu_open_id"},

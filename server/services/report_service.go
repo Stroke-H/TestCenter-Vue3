@@ -913,15 +913,47 @@ func syncAcceptanceReportToCloudDoc(report AcceptanceReport, wikiURL string) err
 // --- Handlers ---
 
 func SaveAcceptanceReportHandler(c *gin.Context) {
+	currentUser, err := currentUserFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid token"})
+		return
+	}
+
 	var req AcceptanceReport
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
 
+	req.ID = strings.TrimSpace(req.ID)
+	req.Reporter = strings.TrimSpace(req.Reporter)
+	req.TestOwner = strings.TrimSpace(req.TestOwner)
+
+	if req.ID != "" {
+		existing, existingErr := GetAcceptanceReportByID(req.ID)
+		if existingErr == nil && existing != nil {
+			if !strings.EqualFold(strings.TrimSpace(existing.Reporter), strings.TrimSpace(currentUser.Username)) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "仅报告创建者可修改该验收报告"})
+				return
+			}
+			if req.CreatedAt == "" {
+				req.CreatedAt = existing.CreatedAt
+			}
+			// Preserve original creator to avoid ownership drift during edit.
+			req.Reporter = existing.Reporter
+		}
+	}
+
+	if req.Reporter == "" {
+		req.Reporter = currentUser.Username
+	}
+	if req.TestOwner == "" {
+		req.TestOwner = req.Reporter
+	}
 	if req.CreatedAt == "" {
 		req.CreatedAt = time.Now().Format(time.RFC3339)
 	}
+	req.UpdatedAt = time.Now().Format(time.RFC3339)
 	if req.Status == "" {
 		req.Status = "Completed"
 	}

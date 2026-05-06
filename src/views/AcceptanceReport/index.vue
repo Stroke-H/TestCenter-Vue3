@@ -38,6 +38,7 @@ const recentReports = ref<any[]>([])
 const historyProjects = ref<any[]>([])
 const searchQuery = ref('')
 const categoryFilter = ref('')
+const selectedProjectCodeFilter = ref('')
 const projects = ref<ProjectOption[]>([])
 const devices = ref<DeviceOption[]>([])
 const testTimeRange = ref<string[]>([])
@@ -50,7 +51,7 @@ let autoFetchProjectItemsSeq = 0
 // --- Preview State ---
 const previewVisible = ref(false)
 const currentPreview = ref<any>(null)
-const previewMode = ref<'view' | 'create'>('view')
+const previewMode = ref<'view' | 'create' | 'edit'>('view')
 const sendingToFeishu = ref(false)
 const syncingToCloudDoc = ref(false)
 const reportForm = ref<any>({
@@ -201,11 +202,23 @@ const canSyncToCloudDoc = computed(() => {
   return canSendToFeishu.value && !!currentPreviewProject.value?.wiki_url?.trim()
 })
 
+const canEditReport = computed(() => {
+  return previewMode.value === 'view' &&
+    !!currentPreview.value?.id &&
+    !!authStore.user?.username &&
+    authStore.user.username === currentPreview.value?.reporter
+})
+
 const filteredReports = computed(() => {
   const keyword = searchQuery.value.trim().toLowerCase()
-  if (!keyword) return recentReports.value
 
   return recentReports.value.filter((report) => {
+    if (selectedProjectCodeFilter.value && report.project_code !== selectedProjectCodeFilter.value) {
+      return false
+    }
+
+    if (!keyword) return true
+
     const searchableText = [
       report.reporter,
       report.project_name,
@@ -219,6 +232,10 @@ const filteredReports = computed(() => {
     return searchableText.includes(keyword)
   })
 })
+
+const toggleProjectCodeFilter = (projectCode: string) => {
+  selectedProjectCodeFilter.value = selectedProjectCodeFilter.value === projectCode ? '' : projectCode
+}
 
 const showProjectItemsLoading = computed(() => {
   return previewMode.value === 'create' && autoFetchingProjectItems.value
@@ -328,20 +345,53 @@ const openCreateReport = () => {
   previewVisible.value = true
 }
 
-const saveNewReport = async () => {
+const openEditReport = () => {
+  if (!currentPreview.value) return
+
+  previewMode.value = 'edit'
+  reportForm.value = {
+    id: currentPreview.value.id,
+    project_name: currentPreview.value.project_name || '',
+    project_code: currentPreview.value.project_code || '',
+    version: currentPreview.value.version || '',
+    reporter: currentPreview.value.reporter || authStore.user?.username || '',
+    test_owner: currentPreview.value.test_owner || currentPreview.value.reporter || authStore.user?.username || '',
+    test_time: currentPreview.value.test_time || '',
+    test_env: getPreviewTestEnv(currentPreview.value) === 'N/A' ? '' : getPreviewTestEnv(currentPreview.value),
+    test_devices: getPreviewTestDevices(currentPreview.value) === 'N/A' ? '' : getPreviewTestDevices(currentPreview.value),
+    test_conclusion: currentPreview.value.test_conclusion || 'Pass',
+    update_requirements: currentPreview.value.update_requirements || '',
+    bug_submission_status: currentPreview.value.bug_submission_status || '',
+    bug_fix_status: currentPreview.value.bug_fix_status || '',
+    status: currentPreview.value.status || 'Completed',
+    created_at: currentPreview.value.created_at || '',
+    updated_at: currentPreview.value.updated_at || ''
+  }
+
+  const testTime = String(currentPreview.value.test_time || '')
+  testTimeRange.value = testTime.includes('～') ? testTime.split('～').map((item: string) => item.trim()) : []
+
+  const testDevices = String(currentPreview.value.test_devices || '')
+  selectedTestDevices.value = testDevices
+    ? testDevices.split('、').map((item: string) => item.trim()).filter(Boolean)
+    : []
+}
+
+const saveReport = async () => {
   if (!reportForm.value.project_name || !reportForm.value.project_code || !reportForm.value.version) {
     ElMessage.warning('请至少填写项目名称、项目代码和版本号')
     return
   }
 
   try {
+    const isEditMode = previewMode.value === 'edit'
     const payload = {
       ...reportForm.value,
-      id: `AR_${Date.now()}`,
+      id: reportForm.value.id || `AR_${Date.now()}`,
       reporter: reportForm.value.reporter || authStore.user?.username || 'Manual Report',
       test_owner: reportForm.value.test_owner || reportForm.value.reporter || authStore.user?.username || 'Manual Report',
       test_devices: selectedTestDevices.value.join('、'),
-      created_at: new Date().toISOString(),
+      created_at: reportForm.value.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
       status: reportForm.value.status || 'Completed'
     }
@@ -357,15 +407,17 @@ const saveNewReport = async () => {
     })
 
     if (!res.ok) {
-      throw new Error('Save failed')
+      const data = await res.json().catch(() => null)
+      throw new Error(data?.error || 'Save failed')
     }
 
-    ElMessage.success('验收报告创建成功')
+    ElMessage.success(isEditMode ? '验收报告修改成功' : '验收报告创建成功')
     previewVisible.value = false
+    previewMode.value = 'view'
     fetchReports()
-  } catch (err) {
+  } catch (err: any) {
     console.error('Failed to save acceptance report', err)
-    ElMessage.error('保存验收报告失败')
+    ElMessage.error(err?.message || '保存验收报告失败')
   }
 }
 
@@ -608,7 +660,13 @@ onBeforeUnmount(() => {
           </template>
           
             <div class="history-list scroll-container">
-              <div v-for="item in historyProjects" :key="item.id" class="history-item">
+              <div
+                v-for="item in historyProjects"
+                :key="item.id"
+                class="history-item"
+                :class="{ 'history-item--active': selectedProjectCodeFilter === item.id }"
+                @click="toggleProjectCodeFilter(item.id)"
+              >
                 <div class="project-id">
                   <span class="id-dot"></span>
                   {{ item.id }}
@@ -623,7 +681,11 @@ onBeforeUnmount(() => {
     <!-- Preview Dialog -->
     <el-dialog
       v-model="previewVisible"
-      :title="previewMode === 'create' ? '新建验收报告' : `报告预览 - ${currentPreview?.project_name || '详情'}`"
+      :title="previewMode === 'create'
+        ? '新建验收报告'
+        : previewMode === 'edit'
+          ? `编辑验收报告 - ${currentPreview?.project_name || reportForm.project_name || '详情'}`
+          : `报告预览 - ${currentPreview?.project_name || '详情'}`"
       width="600px"
       destroy-on-close
       class="preview-dialog"
@@ -866,7 +928,10 @@ onBeforeUnmount(() => {
           >
             同步到云文档
           </el-button>
-          <el-button v-if="previewMode === 'create'" type="primary" @click="saveNewReport">保存报告</el-button>
+          <el-button v-if="canEditReport" type="primary" plain @click="openEditReport">编辑报告</el-button>
+          <el-button v-if="previewMode === 'create' || previewMode === 'edit'" type="primary" @click="saveReport">
+            {{ previewMode === 'edit' ? '保存修改' : '保存报告' }}
+          </el-button>
         </span>
       </template>
     </el-dialog>
@@ -1083,10 +1148,25 @@ onBeforeUnmount(() => {
   background: #f8fafc;
   border-radius: 12px;
   transition: background 0.2s;
+  cursor: pointer;
 }
 
 .history-item:hover {
   background: #f1f5f9;
+}
+
+.history-item--active {
+  background: #dbeafe;
+  box-shadow: inset 0 0 0 1px #60a5fa;
+}
+
+.history-item--active .project-id {
+  color: #1d4ed8;
+}
+
+.history-item--active .count-bubble {
+  background: #3b82f6;
+  color: #ffffff;
 }
 
 .project-id {

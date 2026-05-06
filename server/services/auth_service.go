@@ -1,7 +1,9 @@
 package services
 
 import (
+	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,6 +26,7 @@ type User struct {
 	Username     string `json:"username"`
 	Nickname     string `json:"nickname"`
 	Email        string `json:"email"`
+	Avatar       string `json:"avatar,omitempty"`
 	PasswordHash string `json:"password_hash"`
 	CreatedAt    string `json:"created_at"`
 	FeishuOpenID string `json:"feishu_open_id,omitempty"`
@@ -45,6 +48,7 @@ type AccountProfile struct {
 	Username     string `json:"username"`
 	Nickname     string `json:"nickname"`
 	Email        string `json:"email"`
+	Avatar       string `json:"avatar,omitempty"`
 	CreatedAt    string `json:"created_at"`
 	FeishuOpenID string `json:"feishu_open_id,omitempty"`
 }
@@ -53,6 +57,13 @@ type AccountUpdateRequest struct {
 	ID       string `json:"id" binding:"required"`
 	Nickname string `json:"nickname"`
 	Email    string `json:"email"`
+	Avatar   string `json:"avatar"`
+}
+
+type CurrentProfileUpdateRequest struct {
+	Nickname string `json:"nickname"`
+	Email    string `json:"email"`
+	Avatar   string `json:"avatar"`
 }
 
 // --- Service Logic ---
@@ -100,6 +111,10 @@ func AuthenticateUser(identifier, password string) (*User, error) {
 func RegisterUser(username, nickname, password string) (*User, error) {
 	userLock.Lock()
 	defer userLock.Unlock()
+
+	if err := ensureTestersAvatarColumn(); err != nil {
+		return nil, err
+	}
 
 	// Check if user exists
 	existing, _ := findUserByIdentifier(username)
@@ -249,6 +264,7 @@ func ListAccountProfiles() ([]AccountProfile, error) {
 			Username:     user.Username,
 			Nickname:     user.Nickname,
 			Email:        user.Email,
+			Avatar:       user.Avatar,
 			CreatedAt:    user.CreatedAt,
 			FeishuOpenID: user.FeishuOpenID,
 		})
@@ -258,8 +274,16 @@ func ListAccountProfiles() ([]AccountProfile, error) {
 
 // UpdateAccountProfile updates editable account fields while preserving login credentials.
 func UpdateAccountProfile(req AccountUpdateRequest) (*AccountProfile, error) {
+	return updateAccountProfileByID(req.ID, req.Nickname, req.Email, req.Avatar)
+}
+
+func updateAccountProfileByID(userID, nickname, email, avatar string) (*AccountProfile, error) {
 	userLock.Lock()
 	defer userLock.Unlock()
+
+	if err := ensureTestersAvatarColumn(); err != nil {
+		return nil, err
+	}
 
 	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
@@ -267,9 +291,10 @@ func UpdateAccountProfile(req AccountUpdateRequest) (*AccountProfile, error) {
 	}
 	updatedIndex := -1
 	for i := range users {
-		if users[i].ID == req.ID {
-			users[i].Nickname = req.Nickname
-			users[i].Email = req.Email
+		if users[i].ID == userID {
+			users[i].Nickname = nickname
+			users[i].Email = email
+			users[i].Avatar = avatar
 			updatedIndex = i
 			break
 		}
@@ -287,6 +312,7 @@ func UpdateAccountProfile(req AccountUpdateRequest) (*AccountProfile, error) {
 		Username:     updatedUser.Username,
 		Nickname:     updatedUser.Nickname,
 		Email:        updatedUser.Email,
+		Avatar:       updatedUser.Avatar,
 		CreatedAt:    updatedUser.CreatedAt,
 		FeishuOpenID: updatedUser.FeishuOpenID,
 	}, nil
@@ -344,6 +370,10 @@ func UpdateUserFeishuOpenID(userID, openID string) error {
 	userLock.Lock()
 	defer userLock.Unlock()
 
+	if err := ensureTestersAvatarColumn(); err != nil {
+		return err
+	}
+
 	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
 		return err
@@ -368,6 +398,10 @@ func UpdateUserFeishuOpenID(userID, openID string) error {
 func UnbindFeishuOpenID(openID string) error {
 	userLock.Lock()
 	defer userLock.Unlock()
+
+	if err := ensureTestersAvatarColumn(); err != nil {
+		return err
+	}
 
 	users, err := sqlListJSON[User]("testers", "`migrated_at` ASC")
 	if err != nil {
@@ -436,6 +470,8 @@ func LoginHandler(c *gin.Context) {
 			"id":       user.ID,
 			"username": user.Username,
 			"nickname": user.Nickname,
+			"email":    user.Email,
+			"avatar":   user.Avatar,
 		},
 	})
 }
@@ -451,10 +487,81 @@ func GetUserMeHandler(c *gin.Context) {
 		"id":       user.ID,
 		"username": user.Username,
 		"nickname": user.Nickname,
+		"email":    user.Email,
+		"avatar":   user.Avatar,
+	})
+}
+
+func UpdateCurrentUserProfileHandler(c *gin.Context) {
+	currentUser, err := currentUserFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+		return
+	}
+
+	var req CurrentProfileUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	req.Nickname = strings.TrimSpace(req.Nickname)
+	req.Email = strings.TrimSpace(req.Email)
+	req.Avatar = strings.TrimSpace(req.Avatar)
+
+	if req.Nickname == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "昵称不能为空"})
+		return
+	}
+
+	profile, err := updateAccountProfileByID(currentUser.ID, req.Nickname, req.Email, req.Avatar)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "个人设置已更新",
+		"user": gin.H{
+			"id":       profile.ID,
+			"username": profile.Username,
+			"nickname": profile.Nickname,
+			"email":    profile.Email,
+			"avatar":   profile.Avatar,
+		},
 	})
 }
 
 func LogoutHandler(c *gin.Context) {
 	revokeCurrentSession(c)
 	c.JSON(http.StatusOK, gin.H{"message": "退出成功"})
+}
+
+func ensureTestersAvatarColumn() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	db, _, err := DatabaseManager.DB(ctx)
+	if err != nil {
+		return err
+	}
+
+	var columnName string
+	err = db.QueryRowContext(ctx, `
+		SELECT COLUMN_NAME
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+			AND TABLE_NAME = 'testers'
+			AND COLUMN_NAME = 'avatar'
+		LIMIT 1
+	`).Scan(&columnName)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	_, err = db.ExecContext(ctx, "ALTER TABLE testers ADD COLUMN avatar LONGTEXT NULL AFTER email")
+	return err
 }

@@ -3,7 +3,8 @@ import { computed, ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
-import { useDramaRunStore } from '@/stores'
+import { useDramaRunStore, useTestcaseGenerationRunStore } from '@/stores'
+import { useRouter } from 'vue-router'
 
 // --- Types ---
 interface Message {
@@ -27,6 +28,8 @@ interface ReportData {
 const API_BASE = '/api'
 const authStore = useAuthStore()
 const dramaRunStore = useDramaRunStore()
+const testcaseGenerationRunStore = useTestcaseGenerationRunStore()
+const router = useRouter()
 
 // --- State ---
 const assistantVisible = ref(false)
@@ -41,13 +44,91 @@ const assistantMessages = ref<Message[]>([
 const messageContainer = ref<HTMLElement | null>(null)
 const fabPosition = ref({ top: 0, left: 0 })
 const isDraggingFab = ref(false)
-const assistantButtonLabel = computed(() => dramaRunStore.assistantLabel)
-const assistantButtonActive = computed(() => dramaRunStore.isAssistantActive)
+const primaryRunningTask = computed<'testcase' | 'drama' | null>(() => {
+  if (testcaseGenerationRunStore.hasRecoverableRun) return 'testcase'
+  if (dramaRunStore.status === 'running') return 'drama'
+  return null
+})
+const assistantButtonLabel = computed(() => {
+  if (primaryRunningTask.value === 'testcase') return testcaseGenerationRunStore.assistantLabel
+  if (primaryRunningTask.value === 'drama') return dramaRunStore.assistantLabel
+  return '智能助手'
+})
+const assistantButtonActive = computed(() => primaryRunningTask.value !== null || dramaRunStore.isAssistantActive)
+const assistantButtonIcon = computed(() => {
+  if (primaryRunningTask.value === 'testcase') return Icons.Notebook
+  if (assistantButtonActive.value) return Icons.VideoPlay
+  return Icons.ChatLineRound
+})
 const assistantModeLabel = computed(() => assistantMode.value === 'work' ? '工作' : '轻聊')
 const assistantModeTip = computed(() => assistantMode.value === 'work'
   ? '当前使用平台工具、权限和安全约束'
   : '当前绕过工具和系统约束，仅使用纯模型回复'
 )
+const hasRunningTaskShortcut = computed(() => primaryRunningTask.value !== null)
+const testcaseTaskPhaseLabel = computed(() => {
+  switch (testcaseGenerationRunStore.taskPhase) {
+    case 'generating':
+      return '用例生成'
+    case 'reviewing':
+      return '用例评审'
+    case 'optimizing':
+      return '用例优化'
+    case 'result':
+      return '用例结果'
+    default:
+      return '当前任务'
+  }
+})
+const runningTaskButtonLabel = computed(() => {
+  if (primaryRunningTask.value === 'testcase') {
+    switch (testcaseGenerationRunStore.taskPhase) {
+      case 'generating':
+        return '返回用例生成'
+      case 'reviewing':
+        return '返回用例评审'
+      case 'optimizing':
+        return '返回用例优化'
+      case 'result':
+        return '查看用例结果'
+      default:
+        return '返回用例任务'
+    }
+  }
+  if (primaryRunningTask.value === 'drama') return '返回接口测试'
+  return '返回当前任务'
+})
+const runningTaskButtonIcon = computed(() => {
+  if (primaryRunningTask.value === 'testcase') {
+    switch (testcaseGenerationRunStore.taskPhase) {
+      case 'reviewing':
+        return Icons.DocumentChecked
+      case 'optimizing':
+        return Icons.MagicStick
+      case 'result':
+        return Icons.View
+      default:
+        return Icons.Notebook
+    }
+  }
+  if (primaryRunningTask.value === 'drama') return Icons.VideoPlay
+  return Icons.ChatLineRound
+})
+const testcaseStatusBubbleText = computed(() => {
+  if (testcaseGenerationRunStore.taskPhase === 'reviewing') {
+    return `当前用例评审正在后台执行（${testcaseGenerationRunStore.reviewedRoleDoneCount}/${testcaseGenerationRunStore.reviewingRoleCount}）`
+  }
+  if (testcaseGenerationRunStore.taskPhase === 'optimizing') {
+    return '当前正在根据评审意见优化用例'
+  }
+  if (testcaseGenerationRunStore.generationInProgress) {
+    return `当前用例生成正在后台执行（${testcaseGenerationRunStore.progressPercent}%）`
+  }
+  if (testcaseGenerationRunStore.hasRecoverableRun) {
+    return '当前有可恢复的用例生成结果'
+  }
+  return ''
+})
 let dragOffsetX = 0
 let dragOffsetY = 0
 let dragMoved = false
@@ -219,6 +300,16 @@ const handleEnter = (e: KeyboardEvent) => {
   sendAssistantMessage()
 }
 
+const openCurrentRunningTask = () => {
+  if (primaryRunningTask.value === 'testcase') {
+    router.push('/testcase_gen/new')
+    return
+  }
+  if (primaryRunningTask.value === 'drama') {
+    router.push('/com_api_commit')
+  }
+}
+
 const syncFabPositionWithinViewport = () => {
   const buttonWidth = 140
   const buttonHeight = 52
@@ -311,7 +402,7 @@ onBeforeUnmount(() => {
     >
       <transition name="assistant-bubble">
         <div v-if="dramaRunStore.bubbleVisible" class="fab-status-bubble">
-          {{ dramaRunStore.bubbleText }}
+          {{ primaryRunningTask === 'testcase' ? testcaseStatusBubbleText : dramaRunStore.bubbleText }}
         </div>
       </transition>
       <el-button
@@ -320,16 +411,34 @@ onBeforeUnmount(() => {
         class="fab-btn"
         :class="{ 'fab-btn--test-active': assistantButtonActive }"
       >
-        <el-icon class="mr-2"><component :is="assistantButtonActive ? Icons.VideoPlay : Icons.ChatLineRound" /></el-icon>
+        <el-icon class="mr-2"><component :is="assistantButtonIcon" /></el-icon>
         {{ assistantButtonLabel }}
       </el-button>
     </div>
 
     <!-- Assistant Chat Window -->
-    <div 
-      v-if="assistantVisible" 
-      :class="['assistant-window-fixed', 'scale-up', { 'is-minimized': showReportDialog }]"
+    <div
+      v-if="assistantVisible"
+      class="assistant-shell-fixed"
+      :class="{ 'is-minimized': showReportDialog }"
     >
+      <button
+        v-if="hasRunningTaskShortcut"
+        type="button"
+        class="running-task-float-btn"
+        @click="openCurrentRunningTask"
+      >
+        <span class="running-task-float-btn__icon">
+          <el-icon><component :is="runningTaskButtonIcon" /></el-icon>
+        </span>
+        <span class="running-task-float-btn__copy">
+          <span class="running-task-float-btn__eyebrow">{{ primaryRunningTask === 'testcase' ? testcaseTaskPhaseLabel : '接口测试' }}</span>
+          <span class="running-task-float-btn__label">{{ runningTaskButtonLabel }}</span>
+        </span>
+      </button>
+      <div
+        :class="['assistant-window-fixed', 'scale-up', { 'is-minimized': showReportDialog }]"
+      >
       <div class="assistant-header">
         <div class="header-left">
           <el-avatar :size="28" style="background:#fff; color:#6366f1">🤖</el-avatar>
@@ -382,6 +491,7 @@ onBeforeUnmount(() => {
             <el-icon :size="20"><component :is="Icons.Promotion" /></el-icon>
           </el-button>
         </div>
+      </div>
       </div>
     </div>
 
@@ -550,13 +660,26 @@ onBeforeUnmount(() => {
 .mr-2 { margin-right: 8px; }
 .mr-1 { margin-right: 4px; }
 
-.assistant-window-fixed {
+.assistant-shell-fixed {
   position: fixed;
   bottom: 100px;
   right: 40px;
   width: 480px;
-  height: 650px;
   max-width: 90vw;
+  max-height: 85vh;
+  z-index: 3001;
+  overflow: visible;
+}
+
+.assistant-shell-fixed.is-minimized {
+  pointer-events: none;
+}
+
+.assistant-window-fixed {
+  position: relative;
+  width: 480px;
+  max-width: 90vw;
+  height: 650px;
   max-height: 85vh;
   background: #fff;
   border-radius: 20px;
@@ -565,7 +688,6 @@ onBeforeUnmount(() => {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid rgba(226, 232, 240, 0.8);
-  z-index: 3001;
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -662,6 +784,71 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: flex-end;
   gap: 12px;
+}
+
+.running-task-float-btn {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 10px);
+  z-index: 2;
+  min-width: 128px;
+  min-height: 52px;
+  padding: 8px 12px;
+  color: #1e293b;
+  background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, #eef6ff 100%);
+  border: 1px solid #d6e4f5;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.10);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.running-task-float-btn:hover {
+  color: #1d4ed8;
+  border-color: #93c5fd;
+  background: linear-gradient(180deg, #ffffff 0%, #e0f2fe 100%);
+  box-shadow: 0 16px 32px rgba(59, 130, 246, 0.16);
+  transform: translateY(-1px);
+}
+
+.running-task-float-btn__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
+  color: #2563eb;
+  font-size: 15px;
+}
+
+.running-task-float-btn__copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.running-task-float-btn__eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+.running-task-float-btn__label {
+  font-size: 13px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: #0f172a;
 }
 
 .mode-toggle-btn {

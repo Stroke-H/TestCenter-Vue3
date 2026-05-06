@@ -79,6 +79,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '验收报告', icon: 'Monitor', permissionKey: 'reports.acceptance_reports.visible' }
       },
       {
+        path: 'profile',
+        name: 'ProfileSettings',
+        component: () => import('@/views/ProfileSettings/index.vue'),
+        meta: { title: '个人设置', hidden: true }
+      },
+      {
         path: 'ui_auto_jungle',
         name: 'JungleChess',
         component: () => import('@/views/JungleChess/index.vue'),

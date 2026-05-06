@@ -1,5 +1,12 @@
 # ChangeLog - Acceptance Report
 
+## 2026-05-06
+
+### Changed
+- **Creator-only Edit**: 验收报告详情新增“编辑报告”入口，只有报告创建者本人可见，并复用现有报告表单完成修改。
+- **Ownership Enforcement**: 验收报告保存接口在更新已有报告时新增创建者校验，防止非创建者绕过前端直接修改报告内容。
+- **Project Distribution Filter**: 项目报告分布卡片支持点击筛选，点击项目编号可快速过滤最近报告列表中的对应项目验收报告，再次点击可取消筛选。
+
 ## 2026-04-28
 
 ### Added

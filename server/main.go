@@ -96,6 +96,7 @@ func main() {
 			auth.POST("/login", services.LoginHandler)
 			auth.POST("/logout", services.LogoutHandler)
 			auth.GET("/me", services.GetUserMeHandler)
+			auth.PUT("/profile", services.UpdateCurrentUserProfileHandler)
 		}
 
 		// Acceptance Reports (Protected)

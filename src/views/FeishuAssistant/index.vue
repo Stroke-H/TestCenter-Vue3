@@ -150,7 +150,7 @@ const scheduleTypeOptions: ScheduleType[] = ['Once', 'Daily', 'weekly']
 const testEnvOptions = ['测试服务器', '正式服务器']
 
 const currentOperator = computed(() => {
-  return authStore.user?.username || authStore.user?.user_name || authStore.user?.name || 'TesterByClaw'
+  return authStore.user?.username || authStore.user?.nickname || 'TesterByClaw'
 })
 
 const nextRunPreview = computed(() => {

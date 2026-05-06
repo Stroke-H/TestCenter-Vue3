@@ -109,10 +109,16 @@ const handleMenuSelect = (path: string) => {
   router.push(path)
 }
 
-// 退出登录
-const handleLogout = async () => {
-  await authStore.logout()
-  router.push('/login')
+const handleUserCommand = async (command: string) => {
+  if (command === 'profile') {
+    router.push('/profile')
+    return
+  }
+
+  if (command === 'logout') {
+    await authStore.logout()
+    router.push('/login')
+  }
 }
 </script>
 
@@ -194,14 +200,14 @@ const handleLogout = async () => {
             在线
           </el-tag>
           
-          <el-dropdown trigger="click" @command="handleLogout">
+          <el-dropdown trigger="click" @command="handleUserCommand">
             <div class="user-profile">
-              <el-avatar :size="32" :icon="UserFilled" class="user-avatar" />
-              <span class="username">{{ authStore.user?.username || '用户' }}</span>
+              <el-avatar :size="32" :src="authStore.user?.avatar || undefined" :icon="UserFilled" class="user-avatar" />
+              <span class="username">{{ authStore.user?.nickname || authStore.user?.username || '用户' }}</span>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item :icon="Setting">个人设置</el-dropdown-item>
+                <el-dropdown-item command="profile" :icon="Setting">个人设置</el-dropdown-item>
                 <el-dropdown-item divided command="logout" :icon="SwitchButton">
                   退出登录
                 </el-dropdown-item>
