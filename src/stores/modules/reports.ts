@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { retryFetch } from '@/utils/retryFetch'
+import { buildBackendUrl } from '@/utils/runtimeUrl'
 
 export interface ReportItem {
   id: string
@@ -18,15 +19,10 @@ export const useReportStore = defineStore('reports', () => {
   // reports 现在主要保存从后端拉取的记录
   const reports = ref<ReportItem[]>([])
 
-  // 辅助函数：获取后端基础地址
-  const getBackendHost = () => {
-    return `${window.location.protocol}//${window.location.hostname}:8080`
-  }
-
   // 1. 从后端加载执行记录 (不再使用 LocalStorage)
   const fetchReports = async () => {
     try {
-      const response = await retryFetch(`${getBackendHost()}/api/execution-reports`)
+      const response = await retryFetch(buildBackendUrl('/api/execution-reports'))
       if (!response.ok) throw new Error('Fetch reports failed')
       const data = await response.json()
       reports.value = data
@@ -38,7 +34,7 @@ export const useReportStore = defineStore('reports', () => {
   // 2. 向后端添加记录
   const addReport = async (reportData: Omit<ReportItem, 'id' | 'createdAt'>) => {
     try {
-      const response = await fetch(`${getBackendHost()}/api/execution-reports`, {
+      const response = await fetch(buildBackendUrl('/api/execution-reports'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -62,7 +58,7 @@ export const useReportStore = defineStore('reports', () => {
   // 3. 从后端清空全部记录
   const clearReports = async () => {
     try {
-      const response = await fetch(`${getBackendHost()}/api/execution-reports`, {
+      const response = await fetch(buildBackendUrl('/api/execution-reports'), {
         method: 'DELETE'
       })
       if (response.ok) {

@@ -5,6 +5,7 @@ import { ArrowLeft, Plus, Minus, Monitor, Cellphone } from '@element-plus/icons-
 import { ElMessage } from 'element-plus'
 import MindMapNode from './MindMapNode.vue'
 import type { MindNode, NodeStatus, ProcessItem } from './types'
+import { buildBackendUrl } from '@/utils/runtimeUrl'
 
 defineOptions({ name: 'TestProcessEditor' })
 
@@ -14,11 +15,6 @@ const props = defineProps<{
 
 const router = useRouter()
 const processName = ref('未命名流程')
-
-// 协助定位后端地址
-const getBackendHost = () => {
-  return `${window.location.protocol}//${window.location.hostname}:8080`
-}
 
 // ===== 核心数据 =====
 const treeData = ref<MindNode>({
@@ -479,7 +475,7 @@ async function loadProcess() {
   }
 
   try {
-    const response = await fetch(`${getBackendHost()}/api/processes/${props.id}`)
+    const response = await fetch(buildBackendUrl(`/api/processes/${props.id}`))
     if (response.ok) {
       const item: ProcessItem = await response.json()
       processName.value = item.name
@@ -522,7 +518,7 @@ const saveProcess = async (options: { silent?: boolean; redirectNew?: boolean } 
   try {
     saveState.value = 'saving'
     isAutoSaving.value = Boolean(options.silent)
-    const response = await fetch(`${getBackendHost()}/api/processes`, {
+    const response = await fetch(buildBackendUrl('/api/processes'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)

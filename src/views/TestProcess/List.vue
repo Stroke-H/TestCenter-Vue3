@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { Plus, Edit, Delete, Tickets, Search } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import type { ProcessItem } from './types'
+import { buildBackendUrl } from '@/utils/runtimeUrl'
 
 defineOptions({ name: 'TestProcessList' })
 
@@ -11,17 +12,12 @@ const router = useRouter()
 const searchQuery = ref('')
 const processList = ref<ProcessItem[]>([])
 
-// 协助定位后端地址
-const getBackendHost = () => {
-  return `${window.location.protocol}//${window.location.hostname}:8080`
-}
-
 const LIST_STORAGE_KEY = 'test_process_list_v4'
 
 // 加载后台数据
 const loadList = async () => {
   try {
-    const response = await fetch(`${getBackendHost()}/api/processes`)
+    const response = await fetch(buildBackendUrl('/api/processes'))
     if (response.ok) {
       processList.value = await response.json()
     }
@@ -43,7 +39,7 @@ const migrateToBackend = async () => {
     if (processList.value.length === 0) {
       console.log('Migrating local data to backend...')
       for (const item of localList) {
-        await fetch(`${getBackendHost()}/api/processes`, {
+        await fetch(buildBackendUrl('/api/processes'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(item)
@@ -76,7 +72,7 @@ const handleDelete = (id: string) => {
     type: 'warning'
   }).then(async () => {
     try {
-      const response = await fetch(`${getBackendHost()}/api/processes/${id}`, {
+      const response = await fetch(buildBackendUrl(`/api/processes/${id}`), {
         method: 'DELETE'
       })
       if (response.ok) {

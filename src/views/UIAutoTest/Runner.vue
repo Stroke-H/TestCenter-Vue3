@@ -116,6 +116,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlaywrightStore } from '@/stores/modules/playwright'
 import { Timer, ArrowLeft, CircleCheckFilled, CircleCloseFilled, Loading, Delete } from '@element-plus/icons-vue'
+import { buildBackendWsUrl } from '@/utils/runtimeUrl'
 import dayjs from 'dayjs'
 
 const route = useRoute()
@@ -210,12 +211,7 @@ const startExecution = () => {
     duration.value = Math.floor((Date.now() - (startTime.value || 0)) / 1000)
   }, 1000)
 
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.host
-  // Note: Adjusting host for local development if server is on different port
-  const wsHost = host.includes('5173') ? host.replace('5173', '8080') : host
-  
-  socket = new WebSocket(`${protocol}//${wsHost}/api/ws/playwright?caseId=${id}`)
+  socket = new WebSocket(buildBackendWsUrl(`/api/ws/playwright?caseId=${id}`))
 
   socket.onmessage = (event) => {
     const msg = JSON.parse(event.data)

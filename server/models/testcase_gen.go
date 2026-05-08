@@ -49,13 +49,20 @@ type TestCaseReviewResult struct {
 
 // GenerationRecord represents a historical generation session
 type GenerationRecord struct {
-	ID              string                          `json:"id"`
-	Title           string                          `json:"title"`
-	ProjectCode     string                          `json:"project_code"`
-	Module          string                          `json:"module"`
-	RequirementText string                          `json:"requirement_text"`
-	CreatedAt       string                          `json:"created_at"` // ISO8601 string
-	Points          []RequirementPoint              `json:"points"`
-	Cases           []TestCase                      `json:"cases"`
-	ReviewResults   map[string]TestCaseReviewResult `json:"review_results,omitempty"`
+	ID                        string                          `json:"id"`
+	Title                     string                          `json:"title"`
+	ProjectCode               string                          `json:"project_code"`
+	Module                    string                          `json:"module"`
+	RequirementLink           string                          `json:"requirement_link,omitempty"`
+	RequirementText           string                          `json:"requirement_text"`
+	CreatedAt                 string                          `json:"created_at"` // ISO8601 string
+	CurrentStep               int                             `json:"current_step,omitempty"`
+	AnalyzerUsed              bool                            `json:"analyzer_used,omitempty"`
+	Points                    []RequirementPoint              `json:"points"`
+	GeneratedRequirementPoints []RequirementPoint             `json:"generated_requirement_points,omitempty"`
+	Cases                     []TestCase                      `json:"cases"`
+	BaselineCases             []TestCase                      `json:"baseline_cases,omitempty"`
+	OptimizedRemovedCases     []TestCase                      `json:"optimized_removed_cases,omitempty"`
+	OptimizedPreviewActive    bool                            `json:"optimized_preview_active,omitempty"`
+	ReviewResults             map[string]TestCaseReviewResult `json:"review_results,omitempty"`
 }

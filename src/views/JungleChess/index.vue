@@ -4,7 +4,7 @@ import { useGameLogic } from './composables/useGameLogic';
 import { useWebSocket } from './composables/useWebSocket';
 import { useRobotAI } from './composables/useRobotAI';
 import ChessBoard from './components/ChessBoard.vue';
-import { Refresh, ArrowLeft, Trophy, Connection, Loading, Cpu } from '@element-plus/icons-vue';
+import { Refresh, ArrowLeft, ArrowDown, Trophy, Connection, Loading, Cpu } from '@element-plus/icons-vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { PlayerColor } from './types';
@@ -189,7 +189,7 @@ function goBack() {
 
         <el-dropdown v-if="!isOnline && !isMatching" @command="startRobotGame" trigger="click">
           <el-button type="warning" :icon="Cpu" round plain>
-            人机对战 <el-icon class="el-icon--right"><arrow-down /></el-icon>
+            人机对战 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
           </el-button>
           <template #dropdown>
             <el-dropdown-menu>

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDramaRunStore, useReportStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { buildBackendUrl, buildBackendWsUrl } from '@/utils/runtimeUrl'
 import {
   Warning,
   CopyDocument,
@@ -28,16 +29,6 @@ const projectName = ref('ShortsWave')
 // 对于 Web前端压测，重置 projectName 为空，方便输入 URL
 if (toolName.value === 'Web前端压测') {
   projectName.value = ''
-}
-
-// 协助定位后端地址
-const getBackendHost = () => {
-  return `${window.location.protocol}//${window.location.hostname}:8080`
-}
-
-const getWsBase = () => {
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${protocol}://${window.location.hostname}:8080`
 }
 
 // 是否是剧集播放自检工具
@@ -126,7 +117,7 @@ const handleAccountDelete = async (token: string, originalHeaders: Record<string
   scrollToBottom()
 
   try {
-    const response = await fetch(`${getBackendHost()}/api/proxy`, {
+    const response = await fetch(buildBackendUrl('/api/proxy'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -247,7 +238,7 @@ const startExecution = async () => {
     scrollToBottom()
     
     try {
-      const response = await fetch(`${getBackendHost()}/api/proxy`, {
+      const response = await fetch(buildBackendUrl('/api/proxy'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -331,7 +322,7 @@ const startExecution = async () => {
   const profile = serverProfiles[testServer.value as keyof typeof serverProfiles]
   
     // 组装 WebSocket 链接地址，注入动态参数
-    let wsUrl = `${getWsBase()}/api/ws/k6`
+    let wsUrl = buildBackendWsUrl('/api/ws/k6')
     const params: Record<string, string> = {
       script: scriptName,
       email: profile.email,
@@ -341,7 +332,7 @@ const startExecution = async () => {
     }
 
     if (isWebFrontendStressTest) {
-      wsUrl = `${getWsBase()}/api/ws/lighthouse`
+      wsUrl = buildBackendWsUrl('/api/ws/lighthouse')
       // 确保有协议头
       const finalUrl = projectName.value.startsWith('http') ? projectName.value : `http://${projectName.value}`
       delete params.script // lighthouse 不需要 script 参数
@@ -395,7 +386,7 @@ const startExecution = async () => {
           tempLighthouseFile.value = reportFile
         } else {
           const staticPath = 'reports'
-          reportUrl.value = `${getBackendHost()}/${staticPath}/${reportFile}?t=${Date.now()}`
+          reportUrl.value = buildBackendUrl(`/${staticPath}/${reportFile}?t=${Date.now()}`)
         }
         return
       }
@@ -432,7 +423,7 @@ const startExecution = async () => {
         // 如果是 K6 类任务，手动设置报告路径（Lighthouse 类任务由 ws 消息驱动）
         if (!isWebFrontendStressTest && !reportUrl.value) {
           const reportFile = isDramaCheck ? 'drama_check_report.html' : 'summary.html'
-          const finalReportUrl = `${getBackendHost()}/reports/${reportFile}?t=${Date.now()}`
+          const finalReportUrl = buildBackendUrl(`/reports/${reportFile}?t=${Date.now()}`)
           reportUrl.value = finalReportUrl
         }
         
@@ -445,7 +436,7 @@ const startExecution = async () => {
           
           try {
             const jsonFile = tempLighthouseFile.value.replace('.html', '.json')
-            const response = await fetch(`${getBackendHost()}/api/performance/analyze`, {
+            const response = await fetch(buildBackendUrl('/api/performance/analyze'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ filename: jsonFile })
@@ -457,7 +448,7 @@ const startExecution = async () => {
             logs.value.push(`\n${analysisResult.value}\n`)
             
             // 分析完成后，正式显示 HTML 报告
-            reportUrl.value = `${getBackendHost()}/performance-reports/${tempLighthouseFile.value}?t=${Date.now()}`
+            reportUrl.value = buildBackendUrl(`/performance-reports/${tempLighthouseFile.value}?t=${Date.now()}`)
           } catch (e) {
             logs.value.push(`[ERROR] AI 分析失败: ${e}`)
           }

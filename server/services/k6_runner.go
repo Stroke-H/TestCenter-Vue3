@@ -836,7 +836,7 @@ func snapshotDramaReport(rootDir string, suffix string) (string, string, error) 
 		return "", "", err
 	}
 
-	reportURL := "http://localhost:8080/reports/" + fileName
+	reportURL := PlatformBackendURL("/reports/" + fileName)
 	return fileName, reportURL, nil
 }
 

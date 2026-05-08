@@ -24,6 +24,38 @@ if command -v k6 >/dev/null 2>&1; then
     echo -e "${GREEN}✓ k6 is installed.${NC}"
 fi
 
+get_lan_ips() {
+    local DEFAULT_IFACE
+    DEFAULT_IFACE=$(route get default 2>/dev/null | awk '/interface:/{print $2; exit}')
+
+    if [ -n "$DEFAULT_IFACE" ]; then
+        local DEFAULT_IP
+        DEFAULT_IP=$(ipconfig getifaddr "$DEFAULT_IFACE" 2>/dev/null)
+        if [ -n "$DEFAULT_IP" ]; then
+            echo "$DEFAULT_IP"
+        fi
+    fi
+
+    ifconfig 2>/dev/null | awk '/inet / && $2 !~ /^127\./ && $2 !~ /^198\.18\./ {print $2}' | awk '!seen[$0]++'
+}
+
+get_mdns_host() {
+    local LOCAL_HOST_NAME
+    LOCAL_HOST_NAME=$(scutil --get LocalHostName 2>/dev/null)
+
+    if [ -n "$TESTCENTER_LAN_HOST" ]; then
+        echo "$TESTCENTER_LAN_HOST"
+        return 0
+    fi
+
+    if [ -n "$LOCAL_HOST_NAME" ]; then
+        printf "%s.local\n" "$LOCAL_HOST_NAME" | tr '[:upper:]' '[:lower:]'
+        return 0
+    fi
+
+    echo "strokeh.local"
+}
+
 # 2. Setup Node Modules if missing
 if [ ! -d "node_modules" ]; then
     echo -e "\n${YELLOW}Setting up frontend dependencies...${NC}"
@@ -96,9 +128,9 @@ check_and_resolve_port 5173 "node|vite|esbuild" "Vue Frontend"
 echo -e "\n${GREEN}All checks passed. Booting up servers...${NC}\n"
 
 # 4. Start Go Backend in background
-echo -e "${GREEN}► Starting Go Backend (Dispatcher) on :8080...${NC}"
+echo -e "${GREEN}► Starting Go Backend (Dispatcher) on 0.0.0.0:8080...${NC}"
 cd server
-go run main.go &
+TESTCENTER_BACKEND_HOST=0.0.0.0 TESTCENTER_BACKEND_PORT=8080 go run main.go &
 GO_PID=$!
 cd ..
 
@@ -106,7 +138,7 @@ cd ..
 wait_for_backend_ready
 
 # 5. Start Vue Frontend in background
-echo -e "${GREEN}► Starting Vue 3 Frontend Server...${NC}"
+echo -e "${GREEN}► Starting Vue 3 Frontend Server on 0.0.0.0:5173...${NC}"
 npm run dev &
 VUE_PID=$!
 
@@ -126,9 +158,23 @@ cleanup() {
 # Trap SIGINT and SIGTERM signals
 trap cleanup SIGINT SIGTERM
 
+LAN_HOST=$(get_mdns_host)
+LAN_IPS=$(get_lan_ips)
+
 echo -e "\n${GREEN}==========================================${NC}"
 echo -e "${GREEN}  TestCenter is now running concurrently! ${NC}"
-echo -e "${GREEN}  Backend: http://localhost:8080          ${NC}"
+echo -e "${GREEN}  Local Frontend: http://localhost:5173/dashboard${NC}"
+echo -e "${GREEN}  Stable LAN Frontend: http://${LAN_HOST}:5173/dashboard${NC}"
+echo -e "${GREEN}  Stable LAN Backend:  http://${LAN_HOST}:8080${NC}"
+if [ -z "$LAN_IPS" ]; then
+    echo -e "${YELLOW}  LAN IP Fallback: http://<your-computer-ip>:5173/dashboard${NC}"
+else
+    echo -e "${GREEN}  LAN IP Fallback:${NC}"
+    while IFS= read -r LAN_IP; do
+        echo -e "${GREEN}    http://${LAN_IP}:5173/dashboard${NC}"
+    done <<< "$LAN_IPS"
+fi
+echo -e "${YELLOW}  Note: other devices should use Stable LAN Frontend, not their own localhost.${NC}"
 echo -e "${GREEN}  Press Ctrl+C to stop all services.      ${NC}"
 echo -e "${GREEN}==========================================${NC}\n"
 

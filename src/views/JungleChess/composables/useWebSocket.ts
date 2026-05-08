@@ -1,4 +1,5 @@
 import { ref, onUnmounted } from 'vue';
+import { buildBackendWsUrl } from '@/utils/runtimeUrl';
 
 export interface JungleMessage {
   type: 'match_start' | 'sync_board' | 'action' | 'error' | 'disconnect';
@@ -22,11 +23,7 @@ export function useWebSocket() {
     if (socket.value) return;
 
     isMatching.value = true;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Using simple proxy path or direct host depending on environment
-    // In this repo, backend is on 8080 usually
-    const host = window.location.hostname + ':8080';
-    const url = `${protocol}//${host}/api/ws/jungle`;
+    const url = buildBackendWsUrl('/api/ws/jungle');
 
     socket.value = new WebSocket(url);
 

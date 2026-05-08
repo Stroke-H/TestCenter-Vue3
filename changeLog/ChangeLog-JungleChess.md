@@ -51,5 +51,10 @@
 - **Turn Control (回合控制)**: 基于首个翻开棋子的颜色决定阵营，严格拦截非己方回合或非己方阵营的交互动作。
 - **Connection Management (连接管理)**: 具备完善的掉线处理与重连清理机制。
 
+## 7. 2026-05-08 修复记录
+- **Stable LAN WebSocket**: 联机匹配 WebSocket 统一走运行时后端地址工具；从 `strokeh.local` 进入时连接固定局域网主机，从本机 `localhost` 进入时保持同域连接，避免登录 Cookie 跨域丢失。
+- **Jungle WebSocket Route**: 后端补回 `/api/ws/jungle` 路由挂载，修复联机匹配握手直接返回 404 的问题。
+- **Icon Registration**: 修复人机对战下拉按钮的 `ArrowDown` 图标未注册导致的 Vue 组件解析 warning。
+
 ---
 *记录时间：2026-03-26*

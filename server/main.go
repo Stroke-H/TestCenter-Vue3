@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"testcenter-server/feishu"
 	"testcenter-server/services"
 
@@ -45,6 +46,8 @@ func main() {
 		api.GET("/ws/playwright", services.PlaywrightWSHandler)
 		// WebSocket endpoint for UI Inspector
 		api.GET("/ws/inspector", services.ServeInspectorWS)
+		// WebSocket endpoint for Jungle Chess online matching
+		api.GET("/ws/jungle", services.JungleChessWSHandler)
 		// Generic HTTP proxy to avoid CORS for external APIs
 		api.POST("/proxy", services.ProxyHandler)
 
@@ -197,8 +200,18 @@ func main() {
 	feishu.InitFeishuBridge(r)
 	services.InitScheduledTaskService()
 
-	log.Println("TestCenter Go Backend starting on :8080")
-	if err := r.Run(":8080"); err != nil {
+	host := os.Getenv("TESTCENTER_BACKEND_HOST")
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	port := os.Getenv("TESTCENTER_BACKEND_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	addr := host + ":" + port
+
+	log.Println("TestCenter Go Backend starting on " + addr)
+	if err := r.Run(addr); err != nil {
 		log.Fatal("Failed to start server: ", err)
 	}
 }

@@ -13,6 +13,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { useReportStore } from '@/stores'
 import { retryFetch } from '@/utils/retryFetch'
+import { buildBackendUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
 
 // ---------- 1. 状态声明与 Store 挂载 ----------
 const activeFilter = ref('全部')
@@ -27,17 +28,12 @@ const filterOptions = ['全部', 'Web 性能分析', 'K6 压测', '接口验证'
 const reportStore = useReportStore()
 const { reports } = storeToRefs(reportStore)
 
-// 协助定位后端地址
-const getBackendHost = () => {
-  return `${window.location.protocol}//${window.location.hostname}:8080`
-}
-
 const availablePerformanceReports = ref<string[]>([])
 
 // 获取后端 report 目录下真正存在的性能报告文件列表
 const fetchAvailableReports = async () => {
   try {
-    const response = await retryFetch(`${getBackendHost()}/api/performance/reports`)
+    const response = await retryFetch(buildBackendUrl('/api/performance/reports'))
     availablePerformanceReports.value = await response.json()
   } catch (e) {
     console.error('获取性能报告列表失败', e)
@@ -88,7 +84,9 @@ const getStatusType = (status: string) => {
 const viewReport = (row: any) => {
   if (row.reportUrl) {
     selectedReport.value = row
-    iframeUrl.value = row.reportUrl + `?t=${Date.now()}` // 防止缓存
+    const normalizedUrl = normalizeBackendUrl(row.reportUrl)
+    const separator = normalizedUrl.includes('?') ? '&' : '?'
+    iframeUrl.value = `${normalizedUrl}${separator}t=${Date.now()}`
     dialogVisible.value = true
   }
 }

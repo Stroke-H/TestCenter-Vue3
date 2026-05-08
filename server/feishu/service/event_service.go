@@ -118,7 +118,7 @@ func handleMessageReceive(ctx context.Context, event *larkim.P2MessageReceiveV1)
 	if !isBindingCmd {
 		boundUser, err := services.FindUserByFeishuOpenID(stdMsg.SenderID)
 		if err != nil || boundUser == nil {
-			replyText(ctx, stdMsg.MsgID, "⚠️ 【身份验证提醒】\n您尚未绑定测试平台账号，无法使用删号、生成报告等核心功能。\n\n• 请先发送：「绑定 用户名」完成账号关联。\n• 如果您还没有账号，请前往测试平台新建账户：\n🔗 地址: http://strokeh.local:5173/register\n\n完成后即可开始您的报告协作！")
+			replyText(ctx, stdMsg.MsgID, fmt.Sprintf("⚠️ 【身份验证提醒】\n您尚未绑定测试平台账号，无法使用删号、生成报告等核心功能。\n\n• 请先发送：「绑定 用户名」完成账号关联。\n• 如果您还没有账号，请前往测试平台新建账户：\n🔗 地址: %s\n\n完成后即可开始您的报告协作！", services.PlatformFrontendURL("/register")))
 			return
 		}
 	}

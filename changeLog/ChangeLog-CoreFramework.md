@@ -6,6 +6,8 @@
 - **MiMo Casual Providers**: 智能助手新增小米 MiMo 轻聊模型配置入口，接入 OpenAI 兼容接口，并预留 Anthropic 兼容接口与 Omni/TTS 能力位。
 
 ### Changed
+- **Stable LAN Dev Server Access**: 前端开发服务显式绑定 `0.0.0.0:5173` 并开启固定端口，后端默认绑定 `0.0.0.0:8080`；启动脚本优先打印 `strokeh.local` 这类固定局域网主机名，IP 地址仅作为排查备用，避免同网段设备误用各自的 `localhost` 或因 IP 变化失效。
+- **Stable Runtime Links**: 报告大厅、K6/Lighthouse、剧集播放接口测试、UI 自动化、斗兽棋联机和飞书回链统一使用运行时地址工具生成后端 HTTP/WS/报告链接，避免登录后其他功能仍跳到访问者自己的 `localhost`。
 - **Explicit Assistant Mode Routing**: Web 智能助手请求新增显式 `mode` 字段，轻聊模式不再依赖特殊前缀触发，而是由前后端统一按模式路由。
 - **Casual Model Selection**: 轻聊模式新增按提示词进行的模型路由层，当前默认优先使用 `MiMo-V2.5`，在长文本、复杂推理、代码与深度分析场景自动提升到 `MiMo-V2.5-Pro`。
 - **Casual Capability Guardrail**: 针对 Omni 与 TTS 相关请求，当前文本聊天窗口先做能力识别与文本回退，避免在未接入音频/多模态输入输出前误调用不匹配的模型链路。

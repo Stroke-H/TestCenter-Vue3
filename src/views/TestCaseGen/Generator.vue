@@ -23,11 +23,6 @@ const originalProjectCode = ref('')
 const originalModule = ref('')
 const recordTitle = ref('')
 
-const isModified = computed(() => {
-  return selectedProjectCode.value !== originalProjectCode.value || 
-         selectedModule.value !== originalModule.value
-})
-
 const activeStep = ref(0)
 const requirementLink = ref('')
 const requirementDescription = ref('')
@@ -72,6 +67,42 @@ interface ReviewInsightItem {
   text: string
   type: string
   roles: string[]
+}
+
+interface GenerationUndoSnapshot {
+  requirementPoints: RequirementPoint[]
+  generatedRequirementPoints: RequirementPoint[]
+  generatedCases: TestCase[]
+  generationStatuses: GenerationPointStatus[]
+  currentBatch: number
+  totalBatches: number
+  generationInProgress: boolean
+  generationError: string
+  currentGeneratingPointTitle: string
+  baselineCases: TestCase[]
+  optimizedRemovedCases: TestCase[]
+  optimizedPreviewActive: boolean
+  reviewResults: Record<string, ReviewResult>
+  analyzerUsed: boolean
+  activeStep: number
+}
+
+interface ReviewUndoSnapshot {
+  reviewResults: Record<string, ReviewResult>
+  currentReviewModel: string
+  currentReviewProvider: string
+}
+
+interface OptimizeUndoSnapshot {
+  generatedCases: TestCase[]
+  baselineCases: TestCase[]
+  optimizedRemovedCases: TestCase[]
+  optimizedPreviewActive: boolean
+  reviewResults: Record<string, ReviewResult>
+  activeStep: number
+  currentReviewModel: string
+  currentReviewProvider: string
+  analyzerUsed: boolean
 }
 
 const testcaseAIModels = ref<TestcaseAIModelMap>({})
@@ -128,6 +159,9 @@ const reviewReadyRoleResults = computed(() => {
     .map(role => reviewResults.value[role.key])
     .filter(Boolean) as ReviewResult[]
 })
+const generationUndoSnapshot = ref<GenerationUndoSnapshot | null>(null)
+const reviewUndoSnapshot = ref<ReviewUndoSnapshot | null>(null)
+const optimizeUndoSnapshot = ref<OptimizeUndoSnapshot | null>(null)
 
 // --- 项目获取 ---
 const fetchProjects = async () => {
@@ -175,6 +209,21 @@ const fetchReviewRoles = async () => {
     console.error('Failed to fetch review roles:', err)
   }
 }
+
+const cloneRequirementPoints = (points: RequirementPoint[]) => points.map(point => ({
+  ...point,
+  rules: [...point.rules]
+}))
+
+const cloneTestCases = (cases: TestCase[]) => cases.map(item => ({
+  ...item,
+  steps: [...item.steps],
+  test_data: typeof item.test_data === 'object' && item.test_data !== null
+    ? JSON.parse(JSON.stringify(item.test_data))
+    : item.test_data
+}))
+
+const cloneReviewResults = (results: Record<string, ReviewResult>) => JSON.parse(JSON.stringify(results || {})) as Record<string, ReviewResult>
 
 const normalizeCaseText = (value: any) => {
   if (value === null || value === undefined) return ''
@@ -449,6 +498,12 @@ const categoryStats = computed(() => {
 const persistedRequirementPoints = computed(() => {
   return generatedRequirementPoints.value.length > 0 ? generatedRequirementPoints.value : requirementPoints.value
 })
+const saveButtonText = computed(() => {
+  if (optimizedPreviewActive.value) return '保存优化结果'
+  if (activeStep.value >= 3) return '保存评审进度'
+  if (activeStep.value >= 1) return '保存当前进度'
+  return '保存到历史'
+})
 const optimizationSummary = computed(() => {
   const nextCases = generatedCases.value.filter(item => !!item.comparison_status)
   return {
@@ -475,6 +530,9 @@ const selectedMergedPoints = computed(() => {
   return mergedPoints.value.filter(point => !point.is_new || selectedSmartPointKeys.value.includes(getRequirementPointKey(point)))
 })
 const completedGenerationCount = computed(() => generationStatuses.value.filter(item => item.status === 'done').length)
+const canUndoGeneration = computed(() => generationUndoSnapshot.value !== null)
+const canUndoReview = computed(() => reviewUndoSnapshot.value !== null)
+const canUndoOptimize = computed(() => optimizeUndoSnapshot.value !== null)
 
 // 基础 API 地址
 const API_BASE = '/api/testcase-gen'
@@ -488,6 +546,96 @@ const toggleSmartPointSelection = (point: RequirementPoint) => {
     return
   }
   selectedSmartPointKeys.value = [...selectedSmartPointKeys.value, key]
+}
+
+const captureGenerationUndoSnapshot = () => {
+  generationUndoSnapshot.value = {
+    requirementPoints: cloneRequirementPoints(requirementPoints.value),
+    generatedRequirementPoints: cloneRequirementPoints(generatedRequirementPoints.value),
+    generatedCases: cloneTestCases(generatedCases.value),
+    generationStatuses: JSON.parse(JSON.stringify(generationStatuses.value)) as GenerationPointStatus[],
+    currentBatch: currentBatch.value,
+    totalBatches: totalBatches.value,
+    generationInProgress: generationInProgress.value,
+    generationError: generationError.value,
+    currentGeneratingPointTitle: currentGeneratingPointTitle.value,
+    baselineCases: cloneTestCases(baselineCases.value),
+    optimizedRemovedCases: cloneTestCases(optimizedRemovedCases.value),
+    optimizedPreviewActive: optimizedPreviewActive.value,
+    reviewResults: cloneReviewResults(reviewResults.value),
+    analyzerUsed: analyzerUsed.value,
+    activeStep: activeStep.value
+  }
+}
+
+const undoLastGeneration = () => {
+  if (!generationUndoSnapshot.value) return
+  const snapshot = generationUndoSnapshot.value
+  requirementPoints.value = cloneRequirementPoints(snapshot.requirementPoints)
+  generatedRequirementPoints.value = cloneRequirementPoints(snapshot.generatedRequirementPoints)
+  generatedCases.value = cloneTestCases(snapshot.generatedCases)
+  generationStatuses.value = JSON.parse(JSON.stringify(snapshot.generationStatuses)) as GenerationPointStatus[]
+  currentBatch.value = snapshot.currentBatch
+  totalBatches.value = snapshot.totalBatches
+  generationInProgress.value = snapshot.generationInProgress
+  generationError.value = snapshot.generationError
+  currentGeneratingPointTitle.value = snapshot.currentGeneratingPointTitle
+  baselineCases.value = cloneTestCases(snapshot.baselineCases)
+  optimizedRemovedCases.value = cloneTestCases(snapshot.optimizedRemovedCases)
+  optimizedPreviewActive.value = snapshot.optimizedPreviewActive
+  reviewResults.value = cloneReviewResults(snapshot.reviewResults)
+  analyzerUsed.value = snapshot.analyzerUsed
+  activeStep.value = snapshot.activeStep
+  generationUndoSnapshot.value = null
+  ElMessage.success('已回退到本轮生成前的状态')
+}
+
+const captureReviewUndoSnapshot = () => {
+  reviewUndoSnapshot.value = {
+    reviewResults: cloneReviewResults(reviewResults.value),
+    currentReviewModel: currentReviewModel.value,
+    currentReviewProvider: currentReviewProvider.value
+  }
+}
+
+const undoLastReview = () => {
+  if (!reviewUndoSnapshot.value) return
+  const snapshot = reviewUndoSnapshot.value
+  reviewResults.value = cloneReviewResults(snapshot.reviewResults)
+  currentReviewModel.value = snapshot.currentReviewModel
+  currentReviewProvider.value = snapshot.currentReviewProvider
+  reviewUndoSnapshot.value = null
+  ElMessage.success('已恢复到上一轮评审前的状态')
+}
+
+const captureOptimizeUndoSnapshot = () => {
+  optimizeUndoSnapshot.value = {
+    generatedCases: cloneTestCases(generatedCases.value),
+    baselineCases: cloneTestCases(baselineCases.value),
+    optimizedRemovedCases: cloneTestCases(optimizedRemovedCases.value),
+    optimizedPreviewActive: optimizedPreviewActive.value,
+    reviewResults: cloneReviewResults(reviewResults.value),
+    activeStep: activeStep.value,
+    currentReviewModel: currentReviewModel.value,
+    currentReviewProvider: currentReviewProvider.value,
+    analyzerUsed: analyzerUsed.value
+  }
+}
+
+const undoLastOptimize = () => {
+  if (!optimizeUndoSnapshot.value) return
+  const snapshot = optimizeUndoSnapshot.value
+  generatedCases.value = cloneTestCases(snapshot.generatedCases)
+  baselineCases.value = cloneTestCases(snapshot.baselineCases)
+  optimizedRemovedCases.value = cloneTestCases(snapshot.optimizedRemovedCases)
+  optimizedPreviewActive.value = snapshot.optimizedPreviewActive
+  reviewResults.value = cloneReviewResults(snapshot.reviewResults)
+  activeStep.value = snapshot.activeStep
+  currentReviewModel.value = snapshot.currentReviewModel
+  currentReviewProvider.value = snapshot.currentReviewProvider
+  analyzerUsed.value = snapshot.analyzerUsed
+  optimizeUndoSnapshot.value = null
+  ElMessage.success('已撤销评审优化，恢复到优化前状态')
 }
 
 // 拆解需求
@@ -557,12 +705,40 @@ const applyMerged = () => {
   ElMessage.success(`已应用合并结果，当前共 ${requirementPoints.value.length} 个需求点`)
 }
 
+const buildRecordPayload = () => {
+  const pointsForRecord = cloneRequirementPoints(requirementPoints.value)
+  const generatedPointsForRecord = cloneRequirementPoints(persistedRequirementPoints.value)
+  const titleSource = generatedPointsForRecord[0]?.feature || pointsForRecord[0]?.feature || recordTitle.value || '未命名用例集'
+
+  return {
+    id: props.id,
+    title: titleSource,
+    project_code: selectedProjectCode.value,
+    module: selectedModule.value,
+    requirement_link: requirementLink.value,
+    requirement_text: requirementDescription.value,
+    current_step: activeStep.value,
+    analyzer_used: analyzerUsed.value,
+    points: pointsForRecord,
+    generated_requirement_points: generatedPointsForRecord,
+    cases: cloneTestCases(generatedCases.value),
+    baseline_cases: cloneTestCases(baselineCases.value),
+    optimized_removed_cases: cloneTestCases(optimizedRemovedCases.value),
+    optimized_preview_active: optimizedPreviewActive.value,
+    review_results: cloneReviewResults(reviewResults.value)
+  }
+}
+
 // 生成用例
 const handleGenerate = async () => {
   const pointsToGenerate = showSmartResult.value && mergedPoints.value.length > 0
     ? selectedMergedPoints.value
     : requirementPoints.value
   if (pointsToGenerate.length === 0) return
+
+  if (generatedCases.value.length > 0 || Object.keys(reviewResults.value).length > 0 || optimizedPreviewActive.value) {
+    captureGenerationUndoSnapshot()
+  }
 
   rawAIResponse.value = ''
   generatedRequirementPoints.value = [...pointsToGenerate]
@@ -618,6 +794,7 @@ const handleReview = async () => {
     return
   }
 
+  captureReviewUndoSnapshot()
   reviewLoading.value = true
   testcaseGenerationRunStore.startReviewSession(selectedReviewRoles.value.length)
   try {
@@ -682,6 +859,7 @@ const handleOptimizeCases = async () => {
     return
   }
 
+  captureOptimizeUndoSnapshot()
   optimizeLoading.value = true
   testcaseGenerationRunStore.startOptimizeSession()
   try {
@@ -702,9 +880,8 @@ const handleOptimizeCases = async () => {
     if (res.data?.analyzer_used) {
       analyzerUsed.value = true
     }
-    reviewResults.value = {}
     activeStep.value = 2
-    ElMessage.success('已根据多角色评审意见优化用例，当前预览页展示的是优化后的结果，请重新发起评审确认最新质量')
+    ElMessage.success('已根据多角色评审意见优化用例，当前预览页展示的是优化后的结果，你可以直接保存优化结果，或继续重新评审确认最新质量')
   } catch (err: any) {
     console.error(err)
     ElMessage.error(err.response?.data?.error || '智能优化用例失败')
@@ -756,6 +933,9 @@ const resetAll = () => {
   optimizedRemovedCases.value = []
   optimizedPreviewActive.value = false
   reviewResults.value = {}
+  generationUndoSnapshot.value = null
+  reviewUndoSnapshot.value = null
+  optimizeUndoSnapshot.value = null
   reviewLoading.value = false
   optimizeLoading.value = false
   currentReviewModel.value = ''
@@ -774,20 +954,19 @@ const resetAll = () => {
 
 // 保存到历史记录
 const handleSave = async () => {
-  if (generatedCases.value.length === 0) return
+  if (requirementPoints.value.length === 0 && generatedCases.value.length === 0) {
+    ElMessage.warning('当前还没有可保存的阶段数据')
+    return
+  }
   loading.value = true
   try {
-    const title = requirementPoints.value[0]?.feature || '未命名用例集'
-    await axios.post(`${API_BASE}/records`, {
-      title: title,
-      project_code: selectedProjectCode.value,
-      module: selectedModule.value,
-      requirement_text: requirementDescription.value,
-      points: persistedRequirementPoints.value,
-      cases: generatedCases.value,
-      review_results: reviewResults.value
-    })
-    ElMessage.success('已保存到历史记录')
+    const res = await axios.post(`${API_BASE}/records`, buildRecordPayload())
+    const savedId = res.data?.id
+    ElMessage.success('当前阶段进度已保存')
+    if (savedId && !props.id) {
+      router.push(`/testcase_gen/view/${savedId}`)
+      return
+    }
     router.push('/testcase_gen/list')
   } catch (err: any) {
     console.error(err)
@@ -801,17 +980,8 @@ const handleUpdate = async () => {
   if (!props.id) return
   loading.value = true
   try {
-    const title = requirementPoints.value[0]?.feature || '未命名用例集'
-    await axios.put(`${API_BASE}/records/${props.id}`, {
-      title: title,
-      project_code: selectedProjectCode.value,
-      module: selectedModule.value,
-      requirement_text: requirementDescription.value,
-      points: persistedRequirementPoints.value,
-      cases: generatedCases.value,
-      review_results: reviewResults.value
-    })
-    ElMessage.success('历史记录已更新')
+    await axios.put(`${API_BASE}/records/${props.id}`, buildRecordPayload())
+    ElMessage.success('当前阶段进度已更新')
     originalProjectCode.value = selectedProjectCode.value
     originalModule.value = selectedModule.value
     router.push('/testcase_gen/list')
@@ -843,14 +1013,19 @@ onMounted(async () => {
     isViewMode.value = true
     try {
       const res = await axios.get(`${API_BASE}/records/${props.id}`)
+      requirementLink.value = res.data.requirement_link || ''
       requirementDescription.value = res.data.requirement_text
-      requirementPoints.value = res.data.points
-      generatedRequirementPoints.value = res.data.points || []
-      generatedCases.value = res.data.cases
-      baselineCases.value = []
-      optimizedRemovedCases.value = []
-      optimizedPreviewActive.value = false
+      requirementPoints.value = res.data.points || []
+      generatedRequirementPoints.value = res.data.generated_requirement_points || res.data.points || []
+      generatedCases.value = res.data.cases || []
+      baselineCases.value = res.data.baseline_cases || []
+      optimizedRemovedCases.value = res.data.optimized_removed_cases || []
+      optimizedPreviewActive.value = !!res.data.optimized_preview_active
       reviewResults.value = res.data.review_results || {}
+      analyzerUsed.value = !!res.data.analyzer_used
+      generationUndoSnapshot.value = null
+      reviewUndoSnapshot.value = null
+      optimizeUndoSnapshot.value = null
       
       const pCode = res.data.project_code || ''
       const mod = res.data.module || ''
@@ -861,7 +1036,11 @@ onMounted(async () => {
       originalProjectCode.value = pCode
       originalModule.value = mod
       
-      activeStep.value = Object.keys(reviewResults.value).length > 0 ? 3 : 2
+      if (typeof res.data.current_step === 'number' && res.data.current_step >= 0) {
+        activeStep.value = res.data.current_step
+      } else {
+        activeStep.value = Object.keys(reviewResults.value).length > 0 ? 3 : 2
+      }
     } catch (err) {
       ElMessage.error('获取记录详请失败')
       router.push('/testcase_gen/list')
@@ -1153,6 +1332,28 @@ const excelColumns = [
             <div class="action-row">
               <el-button
                 v-if="!isViewMode"
+                plain
+                size="large"
+                class="action-btn"
+                :icon="Collection"
+                @click="handleSave"
+              >
+                保存当前进度
+              </el-button>
+              <el-button
+                v-else
+                type="primary"
+                plain
+                size="large"
+                class="action-btn"
+                :icon="DocumentChecked"
+                :loading="loading"
+                @click="handleUpdate"
+              >
+                更新当前进度
+              </el-button>
+              <el-button
+                v-if="!isViewMode"
                 type="default"
                 size="large"
                 class="action-btn"
@@ -1266,6 +1467,12 @@ const excelColumns = [
                 <el-tag type="warning" effect="dark">调整 {{ optimizationSummary.adjusted }}</el-tag>
                 <el-tag type="danger" effect="dark">新增 {{ optimizationSummary.added }}</el-tag>
                 <el-tag type="info" effect="plain">移除 {{ optimizationSummary.removed }}</el-tag>
+                <el-button v-if="!isViewMode" type="primary" size="small" :icon="Collection" @click="handleSave">
+                  保存优化结果
+                </el-button>
+                <el-button v-if="canUndoOptimize" plain type="warning" size="small" :icon="Refresh" @click="undoLastOptimize">
+                  撤销本轮优化
+                </el-button>
               </div>
             </div>
 
@@ -1318,9 +1525,12 @@ const excelColumns = [
 
               <div class="toolbar-right">
                 <el-button v-if="!isViewMode" @click="prevStep" :icon="ArrowLeft">回退修改</el-button>
+                <el-button v-if="!isViewMode && canUndoGeneration" plain type="warning" :icon="Refresh" @click="undoLastGeneration">
+                  撤销本轮生成
+                </el-button>
                 <el-button type="warning" plain @click="goToReview" :icon="DocumentChecked" :disabled="generatedCases.length === 0 || generationInProgress">进入用例评审</el-button>
-                <el-button v-if="!isViewMode" type="primary" @click="handleSave" :icon="Collection" :loading="loading" :disabled="generationInProgress || generatedCases.length === 0">保存到历史</el-button>
-                <el-button v-if="isViewMode && isModified" type="primary" @click="handleUpdate" :icon="DocumentChecked" :loading="loading" :disabled="generationInProgress">更新记录</el-button>
+                <el-button v-if="!isViewMode" type="primary" @click="handleSave" :icon="Collection" :loading="loading" :disabled="generationInProgress || (requirementPoints.length === 0 && generatedCases.length === 0)">{{ saveButtonText }}</el-button>
+                <el-button v-if="isViewMode" type="primary" @click="handleUpdate" :icon="DocumentChecked" :loading="loading" :disabled="generationInProgress">更新当前进度</el-button>
                 <el-button type="success" @click="handleExport" :icon="Download" :disabled="generatedCases.length === 0">下载 Excel 文件 (.xlsx)</el-button>
               </div>
             </div>
@@ -1472,11 +1682,14 @@ const excelColumns = [
                   <el-button type="primary" :loading="reviewLoading" :icon="MagicStick" @click="handleReview">
                     开始评审
                   </el-button>
+                  <el-button v-if="canUndoReview" plain type="warning" :icon="Refresh" @click="undoLastReview" :disabled="reviewLoading || optimizeLoading">
+                    撤销本轮评审
+                  </el-button>
                   <el-button type="warning" plain :loading="optimizeLoading" :icon="Refresh" @click="handleOptimizeCases" :disabled="!reviewReadyRoleResults.length">
                     根据评审意见智能优化用例
                   </el-button>
-                  <el-button v-if="!isViewMode" type="success" @click="handleSave" :icon="Collection" :loading="loading" :disabled="generationInProgress || generatedCases.length === 0">保存到历史</el-button>
-                  <el-button v-if="isViewMode && isModified" type="success" @click="handleUpdate" :icon="DocumentChecked" :loading="loading" :disabled="generationInProgress">更新记录</el-button>
+                  <el-button v-if="!isViewMode" type="success" @click="handleSave" :icon="Collection" :loading="loading" :disabled="generationInProgress || (requirementPoints.length === 0 && generatedCases.length === 0)">{{ saveButtonText }}</el-button>
+                  <el-button v-if="isViewMode" type="success" @click="handleUpdate" :icon="DocumentChecked" :loading="loading" :disabled="generationInProgress">更新当前进度</el-button>
                 </div>
               </div>
 

@@ -1066,8 +1066,8 @@ func init() {
 
 			FeishuClientInstance.SendChatText(chatID, "🎉 所有维度测试集装盘完毕！请前往控制台审阅下载。")
 
-			url := fmt.Sprintf("http://strokeh.local:5173/testcase_gen/view/%s", record.ID)
-			downloadUrl := fmt.Sprintf("http://strokeh.local:8080/api/testcase-gen/records/%s/download", record.ID)
+			url := services.PlatformFrontendURL(fmt.Sprintf("/testcase_gen/view/%s", record.ID))
+			downloadUrl := services.PlatformBackendURL(fmt.Sprintf("/api/testcase-gen/records/%s/download", record.ID))
 			return fmt.Sprintf("✅ **测试用例已根据你的文档全量生成完毕**\n\n📌 目标范围: %s\n📈 覆盖指标: 智能扩展出 %d 个功能侧面\n📋 结果产出: 总计生成了 %d 条规范化测试用例\n\n👉 [点击在线预览验证用例](%s)\n👉 [📥 点击直接下载 Excel 格式文件](%s) \n\n(_如遇网络打不开，请确保处在内网环境_)", title, len(smartPoints), len(finalCases), url, downloadUrl), nil
 		},
 	})

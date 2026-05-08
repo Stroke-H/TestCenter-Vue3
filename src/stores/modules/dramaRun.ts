@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, shallowRef } from 'vue'
+import { buildBackendUrl, buildBackendWsUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
 
 type DramaRunStatus = 'idle' | 'running' | 'done' | 'failed' | 'stopped'
 
@@ -20,12 +21,6 @@ interface DramaRunSnapshot {
   reportUrl?: string
   duration?: number
   error?: string
-}
-
-const getBackendHost = () => `${window.location.protocol}//${window.location.hostname}:8080`
-const getWsBase = () => {
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${protocol}://${window.location.hostname}:8080`
 }
 
 export const useDramaRunStore = defineStore('dramaRun', () => {
@@ -92,7 +87,7 @@ export const useDramaRunStore = defineStore('dramaRun', () => {
     status.value = snapshot.status || 'idle'
     progress.value = snapshot.progress ?? progress.value
     logs.value = snapshot.logs?.length ? snapshot.logs : logs.value
-    reportUrl.value = snapshot.reportUrl || reportUrl.value
+    reportUrl.value = snapshot.reportUrl ? normalizeBackendUrl(snapshot.reportUrl) : reportUrl.value
     duration.value = snapshot.duration ?? duration.value
     uptime.value = snapshot.duration ?? uptime.value
 
@@ -113,7 +108,7 @@ export const useDramaRunStore = defineStore('dramaRun', () => {
     logs.value = [`[${new Date().toLocaleTimeString()}] 正在创建后端剧集测试任务...`]
     isRunningInBackground.value = false
 
-    const response = await fetch(`${getBackendHost()}/api/drama-runs/start`, {
+    const response = await fetch(buildBackendUrl('/api/drama-runs/start'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(options)
@@ -131,7 +126,7 @@ export const useDramaRunStore = defineStore('dramaRun', () => {
   const recoverCurrentRun = async () => {
     if (status.value === 'running') return
     try {
-      const response = await fetch(`${getBackendHost()}/api/drama-runs/current`)
+      const response = await fetch(buildBackendUrl('/api/drama-runs/current'))
       if (!response.ok) return
       const snapshot = await response.json() as DramaRunSnapshot
       if (snapshot.status !== 'running') return
@@ -147,7 +142,7 @@ export const useDramaRunStore = defineStore('dramaRun', () => {
   const connectSubscriber = () => {
     closeSubscriber()
     intentionalClose = false
-    const socket = new WebSocket(`${getWsBase()}/api/ws/drama-run`)
+    const socket = new WebSocket(buildBackendWsUrl('/api/ws/drama-run'))
     ws.value = socket
 
     socket.onmessage = (event) => {
@@ -170,7 +165,7 @@ export const useDramaRunStore = defineStore('dramaRun', () => {
       }
       if (data.startsWith('REPORT_READY:')) {
         const reportFile = data.split(':')[1] || 'drama_check_report.html'
-        reportUrl.value = `${getBackendHost()}/reports/${reportFile}?t=${Date.now()}`
+        reportUrl.value = buildBackendUrl(`/reports/${reportFile}?t=${Date.now()}`)
         return
       }
       if (data.startsWith('EXECUTION_STATUS:')) {
@@ -200,7 +195,7 @@ export const useDramaRunStore = defineStore('dramaRun', () => {
       stopTimer()
       pushLog(`[${new Date().toLocaleTimeString()}] 任务执行完成。`)
       if (!reportUrl.value) {
-        reportUrl.value = `${getBackendHost()}/reports/drama_check_report.html?t=${Date.now()}`
+        reportUrl.value = buildBackendUrl(`/reports/drama_check_report.html?t=${Date.now()}`)
       }
       if (isRunningInBackground.value) {
         showBubble('当前接口测试完成啦！')
@@ -247,7 +242,7 @@ export const useDramaRunStore = defineStore('dramaRun', () => {
 
   const stop = async () => {
     if (status.value !== 'running') return
-    await fetch(`${getBackendHost()}/api/drama-runs/stop`, { method: 'POST' })
+    await fetch(buildBackendUrl('/api/drama-runs/stop'), { method: 'POST' })
     status.value = 'stopped'
     stopTimer()
     closeSubscriber()

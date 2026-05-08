@@ -9,6 +9,7 @@ import KeywordPanel from './components/KeywordPanel.vue'
 import StepFlow from './components/StepFlow.vue'
 import PropertyPanel from './components/PropertyPanel.vue'
 import { v4 as uuidv4 } from 'uuid'
+import { buildBackendWsUrl } from '@/utils/runtimeUrl'
 
 const route = useRoute()
 const router = useRouter()
@@ -129,7 +130,7 @@ const handleToggleRecording = async () => {
     if (!url) return
 
     isRecording.value = true
-    const wsUrl = `ws://${window.location.hostname}:8080/api/ws/inspector?url=${encodeURIComponent(url)}`
+    const wsUrl = buildBackendWsUrl(`/api/ws/inspector?url=${encodeURIComponent(url)}`)
     const ws = new WebSocket(wsUrl)
     recordingSocket.value = ws
 
