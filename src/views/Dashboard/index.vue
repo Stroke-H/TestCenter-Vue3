@@ -219,6 +219,7 @@ const canShowSkillify = computed(() => permissionStore.canAccess('dashboard.skil
 const canShowPerformance = computed(() => permissionStore.canAccess('dashboard.performance.visible'))
 const canShowJungle = computed(() => permissionStore.canAccess('dashboard.jungle.visible'))
 const canShowNovelReader = computed(() => permissionStore.canAccess('dashboard.novel_reader.visible'))
+const canShowNovelWriter = computed(() => permissionStore.canAccess('dashboard.novel_writer.visible'))
 const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.video_player.visible'))
 
 </script>
@@ -437,7 +438,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
     </div>
 
     <!-- ========== Other Extensions ========== -->
-    <div v-if="canShowJungle || canShowNovelReader || canShowVideoPlayer" class="section">
+    <div v-if="canShowJungle || canShowNovelReader || canShowNovelWriter || canShowVideoPlayer" class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--teal">
@@ -487,6 +488,20 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <div class="tool-card__footer">
             <span class="ready-text">已恢复</span>
             <a href="#" class="open-link" @click.prevent="router.push('/video_player')">打开</a>
+          </div>
+        </div>
+
+        <div v-if="canShowNovelWriter" class="tool-card">
+          <div class="tool-card__top">
+            <div class="tool-card__icon" style="background: rgba(20, 184, 166, 0.12)">
+              <el-icon :size="20" color="#0f766e"><component :is="Icons.EditPen" /></el-icon>
+            </div>
+          </div>
+          <h3 class="tool-card__name">小说智能生成</h3>
+          <p class="tool-card__desc">从素材、文风、大纲到章节审计的 AI 小说创作工作台</p>
+          <div class="tool-card__footer">
+            <span class="ready-text">MVP</span>
+            <a href="#" class="open-link" @click.prevent="router.push('/novel_writer')">打开</a>
           </div>
         </div>
       </div>

@@ -1,5 +1,10 @@
 # ChangeLog - CoreFramework
 
+## 2026-05-09
+
+### Changed
+- **LAN Entry Self-check**: `start.sh` 在前后端就绪后自动检查 `strokeh.local:5173/dashboard`、固定后端入口和 LAN IP fallback 是否可从本机访问，并明确提示本机自检不能替代跨设备/VLAN/firewall 连通性验证。
+
 ## 2026-04-30
 
 ### Added
