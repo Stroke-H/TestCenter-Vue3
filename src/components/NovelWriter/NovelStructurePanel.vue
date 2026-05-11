@@ -13,7 +13,6 @@ const emit = defineEmits<{
   'update:open': [value: boolean]
 }>()
 
-const hasOutline = computed(() => Boolean(props.outline.chapters?.length))
 const factCards = computed(() => [
   ...(props.extracted.characters || []).map((item) => ({ ...item, type: '人物' })),
   ...(props.extracted.conflicts || []).map((item) => ({ ...item, type: '冲突' })),
@@ -25,7 +24,7 @@ const toggleOpen = () => emit('update:open', !props.open)
 </script>
 
 <template>
-  <aside v-if="hasOutline" :class="['insight-floating', { 'insight-floating--open': open }]">
+  <aside :class="['insight-floating', { 'insight-floating--open': open }]">
     <button class="insight-toggle" @click="toggleOpen">
       <span>事实卡片 / 文风画像</span>
       <strong>{{ open ? '收起' : '展开' }}</strong>

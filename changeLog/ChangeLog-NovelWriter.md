@@ -30,3 +30,5 @@
 - **Material Preview Merge Fix**: 事实卡片预览改为合并后端事实库与当前素材图谱内容，避免已生成事实库后新增人物或灵感无法在文风生成页展示。
 - **Material Preview Naming Fix**: 素材图谱本地预览卡片会从“新人物：名称”等首行提取真实名称，并在切到文风生成页前保存最新素材，避免显示“人物 1/人物 2”或旧数据。
 - **Material Preview Deduplication**: 事实卡片合并去重升级为内容归一化匹配，避免人物、冲突、世界观同时展示后端事实库和本地素材预览两份重复数据。
+- **Material Preview Compatibility Fix**: 事实卡片合并兼容旧项目中的非数组事实库字段，避免从素材图谱切换到文风生成时报 `source is not iterable`。
+- **Insight Floating Button Visibility**: 事实卡片/文风画像悬浮按钮不再依赖章节大纲存在，切到文风生成页即可显示并默认展开。

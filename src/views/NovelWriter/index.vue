@@ -126,9 +126,14 @@ const isSimilarInfoCard = (current: NovelInfoCard, existing: NovelInfoCard) => {
   return currentFull.includes(existingFull) || existingFull.includes(currentFull)
 }
 
-const mergeInfoCards = (source: NovelInfoCard[] = [], preview: NovelInfoCard[] = []) => {
+const normalizeInfoCardList = (value: unknown): NovelInfoCard[] => {
+  if (Array.isArray(value)) return value
+  return []
+}
+
+const mergeInfoCards = (source: unknown, preview: unknown) => {
   const result: NovelInfoCard[] = []
-  ;[...preview, ...source].forEach((item) => {
+  ;[...normalizeInfoCardList(preview), ...normalizeInfoCardList(source)].forEach((item) => {
     if (!String(item.name || item.description || '').trim()) return
     if (result.some((existing) => isSimilarInfoCard(item, existing))) return
     result.push(item)
@@ -293,6 +298,7 @@ const analyzeStyle = () => runProjectAction('文风画像', async () => {
 const switchToGeneration = async () => {
   await saveBeforeAIAction()
   activeStep.value = 'generation'
+  insightsOpen.value = true
   await nextTick()
 }
 
