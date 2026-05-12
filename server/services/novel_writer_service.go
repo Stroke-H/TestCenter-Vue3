@@ -59,9 +59,14 @@ type NovelInfoCard struct {
 }
 
 type NovelOutline struct {
-	Logline  string                `json:"logline"`
-	Acts     []NovelInfoCard       `json:"acts"`
-	Chapters []NovelChapterOutline `json:"chapters"`
+	Logline           string                `json:"logline"`
+	Acts              []NovelInfoCard       `json:"acts"`
+	Chapters          []NovelChapterOutline `json:"chapters"`
+	GenerationStatus  string                `json:"generation_status"`
+	TargetChapters    int                   `json:"target_chapters"`
+	GeneratedChapters int                   `json:"generated_chapters"`
+	BatchSize         int                   `json:"batch_size"`
+	GenerationError   string                `json:"generation_error"`
 }
 
 type NovelChapterOutline struct {
@@ -323,6 +328,9 @@ func UpdateNovelProjectHandler(c *gin.Context) {
 	project.TargetChapters = req.TargetChapters
 	project.Materials = req.Materials
 	project.Extracted = req.Extracted
+	if shouldKeepPersistedOutline(project.Outline, req.Outline) {
+		req.Outline = project.Outline
+	}
 	project.Outline = req.Outline
 	project.StyleProfile = req.StyleProfile
 	project.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
@@ -331,6 +339,13 @@ func UpdateNovelProjectHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, project)
+}
+
+func shouldKeepPersistedOutline(persisted NovelOutline, incoming NovelOutline) bool {
+	if len(persisted.Chapters) <= len(incoming.Chapters) {
+		return false
+	}
+	return persisted.GenerationStatus == "generating" || persisted.GenerationStatus == "ready"
 }
 
 func DeleteNovelProjectHandler(c *gin.Context) {
@@ -373,7 +388,7 @@ func ExtractNovelInfoHandler(c *gin.Context) {
 	project.Extracted = extracted
 	project.CurrentStage = "info_extracted"
 	project.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
-	if err := saveNovelProject(project); err != nil {
+	if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -390,33 +405,22 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 	if chapterCount <= 0 {
 		chapterCount = 8
 	}
-	system := "你是商业小说结构规划师。请只输出 JSON，不要输出 Markdown。"
-	user := fmt.Sprintf(`基于事实库生成小说大纲和章节规格。
-%s
-
-要求：
-1. chapters 数量尽量接近 %d。
-2. 每章必须有 title、goal、conflict、hook、summary、before_state、after_state、must_happen、tension_curve、key_scenes、new_hooks。
-3. acts 是三幕式或卷结构。
-4. 不要虚构事实库之外的硬设定；可以在不冲突的前提下补充剧情规划。
-5. 输出 JSON schema:
-{"logline":"","acts":[{"name":"","description":""}],"chapters":[{"title":"","goal":"","conflict":"","hook":"","summary":"","before_state":{"characters":[{"name":"","state":"","location":""}],"plot_hooks":[""],"plot_advances":[]},"after_state":{"characters":[{"name":"","state":"","location":""}],"plot_hooks":[""],"plot_advances":[""]},"must_happen":[""],"tension_curve":[{"position":0,"value":3,"note":""},{"position":50,"value":8,"note":""},{"position":100,"value":5,"note":""}],"key_scenes":[""],"new_hooks":[""]}]}
-
-小说：%s
-题材：%s
-当前素材：%s
-事实库：%s
-文风画像：%s`, novelOutlineSkillGuide, chapterCount, project.Title, project.Genre, mustJSON(project.Materials), mustJSON(project.Extracted), mustJSON(project.StyleProfile))
-
-	var outline NovelOutline
-	if err := callNovelAIJSON(system, user, &outline); err != nil {
+	batchSize := 1
+	if chapterCount < batchSize {
+		batchSize = chapterCount
+	}
+	outline, err := generateNovelOutlineBatch(project, 1, batchSize, chapterCount, NovelOutline{})
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	for i := range outline.Chapters {
-		if outline.Chapters[i].ID == "" {
-			outline.Chapters[i].ID = fmt.Sprintf("outline-%02d", i+1)
-		}
+	outline.TargetChapters = chapterCount
+	outline.GeneratedChapters = len(outline.Chapters)
+	outline.BatchSize = 5
+	outline.GenerationStatus = "ready"
+	outline.GenerationError = ""
+	if len(outline.Chapters) < chapterCount {
+		outline.GenerationStatus = "generating"
 	}
 	project.Outline = outline
 	project.CurrentStage = "outline_ready"
@@ -424,6 +428,9 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 	if err := saveNovelProject(project); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	if outline.GenerationStatus == "generating" {
+		go continueNovelOutlineGeneration(project.ID)
 	}
 	c.JSON(http.StatusOK, project)
 }
@@ -457,7 +464,7 @@ func AnalyzeNovelStyleHandler(c *gin.Context) {
 	project.StyleProfile = profile
 	project.CurrentStage = "style_ready"
 	project.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
-	if err := saveNovelProject(project); err != nil {
+	if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -530,7 +537,7 @@ func GenerateNovelChapterHandler(c *gin.Context) {
 	project.Chapters = append(project.Chapters, chapter)
 	project.CurrentStage = "chapter_drafting"
 	project.UpdatedAt = now
-	if err := saveNovelProject(project); err != nil {
+	if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -565,7 +572,7 @@ func AuditNovelChapterHandler(c *gin.Context) {
 	project.Chapters[index] = chapter
 	project.CurrentStage = "chapter_auditing"
 	project.UpdatedAt = chapter.UpdatedAt
-	if err := saveNovelProject(project); err != nil {
+	if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -607,7 +614,7 @@ func ReviseNovelChapterHandler(c *gin.Context) {
 	project.Chapters[index] = chapter
 	project.CurrentStage = "chapter_revising"
 	project.UpdatedAt = now
-	if err := saveNovelProject(project); err != nil {
+	if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -626,7 +633,7 @@ func ApproveNovelChapterHandler(c *gin.Context) {
 	project.Memory.ChapterSummaries = upsertNovelInfoCard(project.Memory.ChapterSummaries, chapter.Title, chapter.Summary)
 	project.CurrentStage = "chapter_approved"
 	project.UpdatedAt = now
-	if err := saveNovelProject(project); err != nil {
+	if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -668,6 +675,29 @@ func saveNovelProject(project NovelProject) error {
 		return err
 	}
 	return sqlUpsertJSON("novel_projects", project)
+}
+
+func saveNovelProjectPreservingGeneratedOutline(project NovelProject) error {
+	latest, err := getNovelProject(project.ID)
+	if err == nil && shouldKeepPersistedOutline(latest.Outline, project.Outline) {
+		project.Outline = latest.Outline
+	}
+	return saveNovelProject(project)
+}
+
+func saveNovelProjectOutline(projectID string, outline NovelOutline) error {
+	latest, err := getNovelProject(projectID)
+	if err != nil {
+		return err
+	}
+	if len(latest.Outline.Chapters) > len(outline.Chapters) {
+		outline.Chapters = mergeNovelOutlineChapters(latest.Outline.Chapters, outline.Chapters)
+		outline.GeneratedChapters = len(outline.Chapters)
+	}
+	latest.Outline = outline
+	latest.CurrentStage = "outline_ready"
+	latest.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
+	return saveNovelProject(latest)
 }
 
 func deleteNovelProject(id string) error {
@@ -722,6 +752,243 @@ func hasChapterForOutline(chapters []NovelChapter, outlineID string) bool {
 		}
 	}
 	return false
+}
+
+func generateNovelOutlineBatchAdaptive(project NovelProject, startChapter int, totalChapters int, existing NovelOutline, preferredBatchSize int) (NovelOutline, int, error) {
+	var lastErr error
+	for _, batchSize := range novelOutlineBatchCandidates(preferredBatchSize, totalChapters-startChapter+1) {
+		endChapter := startChapter + batchSize - 1
+		if endChapter > totalChapters {
+			endChapter = totalChapters
+		}
+		outline, err := generateNovelOutlineBatch(project, startChapter, endChapter, totalChapters, existing)
+		if err == nil {
+			return outline, batchSize, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no outline batch size is available")
+	}
+	return NovelOutline{}, 0, fmt.Errorf("outline batch starting at chapter %d failed after adaptive retries: %w", startChapter, lastErr)
+}
+
+func novelOutlineBatchCandidates(preferredBatchSize int, remainingChapters int) []int {
+	raw := []int{preferredBatchSize, 5, 3, 1}
+	candidates := make([]int, 0, len(raw))
+	seen := map[int]bool{}
+	for _, size := range raw {
+		if size <= 0 {
+			continue
+		}
+		if size > remainingChapters {
+			size = remainingChapters
+		}
+		if size <= 0 || seen[size] {
+			continue
+		}
+		seen[size] = true
+		candidates = append(candidates, size)
+	}
+	return candidates
+}
+
+func generateNovelOutlineBatch(project NovelProject, startChapter int, endChapter int, totalChapters int, existing NovelOutline) (NovelOutline, error) {
+	system := "你是商业小说结构规划师。请只输出 JSON，不要输出 Markdown。"
+	existingForPrompt := compactNovelOutlineForPrompt(existing)
+	user := fmt.Sprintf(`基于事实库生成小说大纲和第 %d-%d 章的完整章节规格。
+%s
+
+要求：
+1. 本次只输出第 %d-%d 章，必须严格生成 %d 个 chapters。
+2. 每章必须有 title、goal、conflict、hook、summary、before_state、after_state、must_happen、tension_curve、key_scenes、new_hooks。
+3. before_state/after_state 要包含 characters、plot_hooks、plot_advances；tension_curve 至少包含 position 0、50、100 三个点。
+4. acts 是三幕式或卷结构。已有 logline/acts 时保持一致，不要重写主方向。
+5. 不要虚构事实库之外的硬设定；可以在不冲突的前提下补充剧情规划。
+6. 输出 JSON schema:
+{"logline":"","acts":[{"name":"","description":""}],"chapters":[{"title":"","goal":"","conflict":"","hook":"","summary":"","before_state":{"characters":[{"name":"","state":"","location":""}],"plot_hooks":[""],"plot_advances":[""]},"after_state":{"characters":[{"name":"","state":"","location":""}],"plot_hooks":[""],"plot_advances":[""]},"must_happen":[""],"tension_curve":[{"position":0,"value":3,"note":""},{"position":50,"value":8,"note":""},{"position":100,"value":5,"note":""}],"key_scenes":[""],"new_hooks":[""]}]}
+
+小说：%s
+题材：%s
+目标总章节数：%d
+当前素材：%s
+事实库：%s
+文风画像：%s
+已有大纲摘要：%s`, startChapter, endChapter, novelOutlineSkillGuide, startChapter, endChapter, endChapter-startChapter+1, project.Title, project.Genre, totalChapters, mustJSON(compactNovelMaterialsForOutline(project.Materials)), mustJSON(compactNovelExtractedForPrompt(project.Extracted)), mustJSON(project.StyleProfile), mustJSON(existingForPrompt))
+
+	var batch NovelOutline
+	if err := callNovelAIJSONWithMaxTokens(system, user, &batch, novelOutlineMaxTokens(endChapter-startChapter+1)); err != nil {
+		return NovelOutline{}, err
+	}
+	if len(batch.Chapters) == 0 {
+		return NovelOutline{}, fmt.Errorf("outline batch %d-%d returned no chapters", startChapter, endChapter)
+	}
+	if existing.Logline == "" {
+		existing.Logline = batch.Logline
+	}
+	if len(existing.Acts) == 0 {
+		existing.Acts = batch.Acts
+	}
+	for index := range batch.Chapters {
+		globalIndex := startChapter + index
+		batch.Chapters[index].ID = fmt.Sprintf("outline-%02d", globalIndex)
+	}
+	existing.Chapters = mergeNovelOutlineChapters(existing.Chapters, batch.Chapters)
+	return existing, nil
+}
+
+func compactNovelMaterialsForOutline(materials NovelMaterials) NovelMaterials {
+	return NovelMaterials{
+		RawText:      truncateForAI(materials.RawText, 4000),
+		CharacterRaw: truncateForAI(materials.CharacterRaw, 6000),
+		WorldRaw:     truncateForAI(materials.WorldRaw, 5000),
+		ConflictRaw:  truncateForAI(materials.ConflictRaw, 5000),
+		ReferenceRaw: "",
+	}
+}
+
+func compactNovelExtractedForPrompt(extracted NovelExtractedInfo) NovelExtractedInfo {
+	return NovelExtractedInfo{
+		Characters:    compactNovelInfoCardsForPrompt(extracted.Characters, 40),
+		WorldRules:    compactNovelInfoCardsForPrompt(extracted.WorldRules, 40),
+		Conflicts:     compactNovelInfoCardsForPrompt(extracted.Conflicts, 40),
+		KeyEvents:     compactNovelInfoCardsForPrompt(extracted.KeyEvents, 40),
+		OpenQuestions: compactNovelStringsForPrompt(extracted.OpenQuestions, 40, 300),
+	}
+}
+
+func compactNovelInfoCardsForPrompt(items []NovelInfoCard, limit int) []NovelInfoCard {
+	if limit <= 0 || len(items) <= limit {
+		limit = len(items)
+	}
+	result := make([]NovelInfoCard, 0, limit)
+	for _, item := range items[:limit] {
+		result = append(result, NovelInfoCard{
+			Name:        truncateForAI(item.Name, 120),
+			Description: truncateForAI(item.Description, 500),
+		})
+	}
+	return result
+}
+
+func compactNovelStringsForPrompt(items []string, limit int, maxRunes int) []string {
+	if limit <= 0 || len(items) <= limit {
+		limit = len(items)
+	}
+	result := make([]string, 0, limit)
+	for _, item := range items[:limit] {
+		result = append(result, truncateForAI(item, maxRunes))
+	}
+	return result
+}
+
+func compactNovelOutlineForPrompt(outline NovelOutline) NovelOutline {
+	compact := NovelOutline{
+		Logline: outline.Logline,
+		Acts:    outline.Acts,
+	}
+	compact.Chapters = make([]NovelChapterOutline, 0, len(outline.Chapters))
+	for _, chapter := range outline.Chapters {
+		compact.Chapters = append(compact.Chapters, NovelChapterOutline{
+			ID:       chapter.ID,
+			Title:    chapter.Title,
+			Goal:     chapter.Goal,
+			Conflict: chapter.Conflict,
+			Hook:     chapter.Hook,
+			Summary:  chapter.Summary,
+			NewHooks: chapter.NewHooks,
+		})
+	}
+	return compact
+}
+
+func mergeNovelOutlineChapters(current []NovelChapterOutline, incoming []NovelChapterOutline) []NovelChapterOutline {
+	byID := make(map[string]NovelChapterOutline, len(current)+len(incoming))
+	order := make([]string, 0, len(current)+len(incoming))
+	for _, chapter := range current {
+		if chapter.ID == "" {
+			continue
+		}
+		if _, exists := byID[chapter.ID]; !exists {
+			order = append(order, chapter.ID)
+		}
+		byID[chapter.ID] = chapter
+	}
+	for _, chapter := range incoming {
+		if chapter.ID == "" {
+			continue
+		}
+		if _, exists := byID[chapter.ID]; !exists {
+			order = append(order, chapter.ID)
+		}
+		byID[chapter.ID] = chapter
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return order[i] < order[j]
+	})
+	result := make([]NovelChapterOutline, 0, len(order))
+	for _, id := range order {
+		result = append(result, byID[id])
+	}
+	return result
+}
+
+func continueNovelOutlineGeneration(projectID string) {
+	for {
+		project, err := getNovelProject(projectID)
+		if err != nil {
+			return
+		}
+		target := project.Outline.TargetChapters
+		if target <= 0 {
+			target = project.TargetChapters
+		}
+		if target <= 0 || len(project.Outline.Chapters) >= target {
+			project.Outline.GenerationStatus = "ready"
+			project.Outline.GeneratedChapters = len(project.Outline.Chapters)
+			_ = saveNovelProjectOutline(project.ID, project.Outline)
+			return
+		}
+		batchSize := project.Outline.BatchSize
+		if batchSize <= 0 {
+			batchSize = 5
+		}
+		start := len(project.Outline.Chapters) + 1
+		end := start + batchSize - 1
+		if end > target {
+			end = target
+		}
+		previousCount := len(project.Outline.Chapters)
+		outline, usedBatchSize, err := generateNovelOutlineBatchAdaptive(project, start, target, project.Outline, end-start+1)
+		if err != nil {
+			project.Outline.GenerationStatus = "failed"
+			project.Outline.GenerationError = err.Error()
+			project.Outline.GeneratedChapters = len(project.Outline.Chapters)
+			_ = saveNovelProjectOutline(project.ID, project.Outline)
+			return
+		}
+		if len(outline.Chapters) <= previousCount {
+			project.Outline.GenerationStatus = "failed"
+			project.Outline.GenerationError = fmt.Sprintf("outline batch %d-%d did not add new chapters", start, end)
+			project.Outline.GeneratedChapters = len(project.Outline.Chapters)
+			_ = saveNovelProjectOutline(project.ID, project.Outline)
+			return
+		}
+		outline.TargetChapters = target
+		outline.BatchSize = usedBatchSize
+		outline.GeneratedChapters = len(outline.Chapters)
+		outline.GenerationStatus = "generating"
+		outline.GenerationError = ""
+		if len(outline.Chapters) >= target {
+			outline.GenerationStatus = "ready"
+		}
+		if err := saveNovelProjectOutline(project.ID, outline); err != nil {
+			return
+		}
+		if outline.GenerationStatus == "ready" {
+			return
+		}
+	}
 }
 
 func novelChapterTargetWords(project NovelProject) int {
@@ -785,30 +1052,88 @@ func previousNovelChapterContext(project NovelProject, outlineID string, limit i
 }
 
 func callNovelAIJSON(systemPrompt string, userPrompt string, target any) error {
+	return callNovelAIJSONWithMaxTokens(systemPrompt, userPrompt, target, 0)
+}
+
+func callNovelAIJSONWithMaxTokens(systemPrompt string, userPrompt string, target any, maxTokens int) error {
 	provider, err := selectNovelProvider()
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	metrics := novelAIRequestMetrics(provider, systemPrompt, userPrompt, maxTokens)
+	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
 	defer cancel()
 	clientConfig := openai.DefaultConfig(provider.APIKey)
 	clientConfig.BaseURL = provider.BaseURL
 	client := openai.NewClientWithConfig(clientConfig)
-	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+	req := openai.ChatCompletionRequest{
 		Model: provider.Model,
 		Messages: []openai.ChatCompletionMessage{
 			{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
 			{Role: openai.ChatMessageRoleUser, Content: userPrompt},
 		},
 		Temperature: 0.7,
-	})
+	}
+	if maxTokens > 0 {
+		req.MaxTokens = maxTokens
+	}
+	resp, err := client.CreateChatCompletion(ctx, req)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w; %s", err, metrics)
 	}
 	if len(resp.Choices) == 0 {
-		return fmt.Errorf("novel AI provider returned no choices")
+		return fmt.Errorf("novel AI provider returned no choices; %s", metrics)
 	}
-	return decodeNovelJSON(resp.Choices[0].Message.Content, target)
+	if err := decodeNovelJSON(resp.Choices[0].Message.Content, target); err != nil {
+		return fmt.Errorf("%w; %s; output_runes=%d", err, metrics, len([]rune(resp.Choices[0].Message.Content)))
+	}
+	return nil
+}
+
+func novelOutlineMaxTokens(chapterCount int) int {
+	if chapterCount <= 1 {
+		return 9000
+	}
+	if chapterCount <= 3 {
+		return 18000
+	}
+	return 30000
+}
+
+func novelAIRequestMetrics(provider feishumodel.AIProviderConfig, systemPrompt string, userPrompt string, maxTokens int) string {
+	contextTokens := novelModelContextTokens(provider.Model)
+	if contextTokens <= 0 {
+		return fmt.Sprintf(
+			"provider=%s model=%s capability=%s prompt_runes=%d system_runes=%d user_runes=%d max_tokens=%d context_tokens=unknown",
+			provider.Name,
+			provider.Model,
+			provider.Capability,
+			len([]rune(systemPrompt))+len([]rune(userPrompt)),
+			len([]rune(systemPrompt)),
+			len([]rune(userPrompt)),
+			maxTokens,
+		)
+	}
+	return fmt.Sprintf(
+		"provider=%s model=%s capability=%s prompt_runes=%d system_runes=%d user_runes=%d max_tokens=%d context_tokens=%d",
+		provider.Name,
+		provider.Model,
+		provider.Capability,
+		len([]rune(systemPrompt))+len([]rune(userPrompt)),
+		len([]rune(systemPrompt)),
+		len([]rune(userPrompt)),
+		maxTokens,
+		contextTokens,
+	)
+}
+
+func novelModelContextTokens(model string) int {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "mimo-v2-pro", "xiaomi/mimo-v2-pro":
+		return 1048576
+	default:
+		return 0
+	}
 }
 
 func selectNovelProvider() (feishumodel.AIProviderConfig, error) {
@@ -833,13 +1158,18 @@ func decodeNovelJSON(content string, target any) error {
 	cleaned = strings.TrimSpace(cleaned)
 	if err := json.Unmarshal([]byte(cleaned), target); err == nil {
 		return nil
+	} else if cleaned == "" {
+		return fmt.Errorf("AI output is empty")
 	}
 	re := regexp.MustCompile(`(?s)\{.*\}`)
 	match := re.FindString(cleaned)
 	if match == "" {
-		return fmt.Errorf("AI output is not valid JSON")
+		return fmt.Errorf("AI output is not valid JSON: no JSON object found, output length=%d", len([]rune(cleaned)))
 	}
-	return json.Unmarshal([]byte(match), target)
+	if err := json.Unmarshal([]byte(match), target); err != nil {
+		return fmt.Errorf("AI output is not valid JSON: %w, output length=%d", err, len([]rune(cleaned)))
+	}
+	return nil
 }
 
 func mustJSON(value any) string {

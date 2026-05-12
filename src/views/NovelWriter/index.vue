@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, shallowRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import NovelProjectList from '@/components/NovelWriter/NovelProjectList.vue'
 import NovelMaterialMap from '@/components/NovelWriter/NovelMaterialMap.vue'
@@ -29,6 +29,7 @@ const createDialogVisible = shallowRef(false)
 const activeStep = shallowRef<'materials' | 'generation'>('materials')
 const insightsOpen = shallowRef(false)
 const materialPanelRef = shallowRef<InstanceType<typeof NovelMaterialPanel> | null>(null)
+const outlinePollingTimer = shallowRef<number | undefined>()
 
 const workspaceSwitchItemClass = (step: 'materials' | 'generation') => [
   'workspace-switch__item',
@@ -181,6 +182,14 @@ const displayStyleProfile = computed<NovelStyleProfile>(() => {
   }
 })
 
+const getErrorMessage = (error: unknown) => {
+  if (error && typeof error === 'object' && 'customMessage' in error) {
+    return String((error as { customMessage?: unknown }).customMessage || error)
+  }
+  if (error instanceof Error) return error.message
+  return String(error)
+}
+
 const refreshProjects = async () => {
   loading.value = true
   try {
@@ -190,7 +199,7 @@ const refreshProjects = async () => {
       if (latest) selectProject(latest)
     }
   } catch (error) {
-    ElMessage.error(`加载小说项目失败：${error}`)
+    ElMessage.error(`加载小说项目失败：${getErrorMessage(error)}`)
   } finally {
     loading.value = false
   }
@@ -201,9 +210,15 @@ const selectProject = (project: NovelProject) => {
   selectedOutlineId.value = project.outline?.chapters?.[0]?.id || ''
   selectedChapterId.value = project.chapters?.[0]?.id || ''
   activeStep.value = 'materials'
+  if (project.outline?.generation_status === 'generating') {
+    startOutlinePolling(project.id)
+  } else {
+    stopOutlinePolling()
+  }
 }
 
 const backToProjectList = () => {
+  stopOutlinePolling()
   selectedProject.value = null
   selectedOutlineId.value = ''
   selectedChapterId.value = ''
@@ -230,7 +245,7 @@ const createProject = async () => {
     })
     ElMessage.success('小说项目已创建')
   } catch (error) {
-    ElMessage.error(`创建失败：${error}`)
+    ElMessage.error(`创建失败：${getErrorMessage(error)}`)
   } finally {
     saving.value = false
   }
@@ -244,6 +259,26 @@ const syncSelectedProject = (project: NovelProject) => {
   if (!selectedChapterId.value) selectedChapterId.value = project.chapters?.[0]?.id || ''
 }
 
+const stopOutlinePolling = () => {
+  if (!outlinePollingTimer.value) return
+  window.clearInterval(outlinePollingTimer.value)
+  outlinePollingTimer.value = undefined
+}
+
+const startOutlinePolling = (projectId: string) => {
+  stopOutlinePolling()
+  outlinePollingTimer.value = window.setInterval(async () => {
+    try {
+      const project = await novelWriterApi.getProject(projectId)
+      syncSelectedProject(project)
+      if (project.outline?.generation_status !== 'generating') stopOutlinePolling()
+    } catch (error) {
+      stopOutlinePolling()
+      ElMessage.error(`刷新大纲进度失败：${getErrorMessage(error)}`)
+    }
+  }, 5000)
+}
+
 const saveCurrentProject = async () => {
   if (!selectedProject.value) return
   saving.value = true
@@ -251,7 +286,7 @@ const saveCurrentProject = async () => {
     syncSelectedProject(await novelWriterApi.updateProject(selectedProject.value))
     ElMessage.success('素材已保存')
   } catch (error) {
-    ElMessage.error(`保存失败：${error}`)
+    ElMessage.error(`保存失败：${getErrorMessage(error)}`)
   } finally {
     saving.value = false
   }
@@ -266,7 +301,7 @@ const runProjectAction = async (label: string, action: () => Promise<NovelProjec
     ElMessage.success(`${label}完成`)
     return project
   } catch (error) {
-    ElMessage.error(`${label}失败：${error}`)
+    ElMessage.error(`${label}失败：${getErrorMessage(error)}`)
   } finally {
     running.value = false
   }
@@ -287,7 +322,14 @@ const planOutline = async () => {
     await saveBeforeAIAction()
     return novelWriterApi.planOutline(selectedProject.value!.id)
   })
-  if (project?.outline?.chapters?.length) insightsOpen.value = true
+  if (project?.outline?.chapters?.length) {
+    insightsOpen.value = true
+    if (project.outline.generation_status === 'generating') {
+      startOutlinePolling(project.id)
+      const generated = project.outline.generated_chapters || project.outline.chapters.length
+      ElMessage.info(`已生成前 ${generated} 章完整大纲，剩余章节正在后台继续生成`)
+    }
+  }
 }
 
 const analyzeStyle = () => runProjectAction('文风画像', async () => {
@@ -323,7 +365,7 @@ const handleMaterialMapNext = async () => {
       materialPanelRef.value?.openReferenceDialog()
       return
     }
-    ElMessage.error(`文风画像生成失败：${error}`)
+    ElMessage.error(`文风画像生成失败：${getErrorMessage(error)}`)
   }
 }
 
@@ -344,7 +386,9 @@ const ensureOutlineReady = async () => {
 
   if (!selectedProject.value.outline?.chapters?.length) {
     ElMessage.info('正在先生成章节大纲...')
-    syncSelectedProject(await novelWriterApi.planOutline(selectedProject.value.id))
+    const project = await novelWriterApi.planOutline(selectedProject.value.id)
+    syncSelectedProject(project)
+    if (project.outline?.generation_status === 'generating') startOutlinePolling(project.id)
   }
 
   const outlineId = selectedOutlineId.value || selectedProject.value.outline?.chapters?.[0]?.id || ''
@@ -398,11 +442,12 @@ const deleteProject = async (project: NovelProject) => {
     ElMessage.success('小说项目已删除')
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
-    ElMessage.error(`删除失败：${error}`)
+    ElMessage.error(`删除失败：${getErrorMessage(error)}`)
   }
 }
 
 onMounted(refreshProjects)
+onBeforeUnmount(stopOutlinePolling)
 </script>
 
 <template>

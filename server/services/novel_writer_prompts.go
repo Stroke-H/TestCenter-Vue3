@@ -8,7 +8,7 @@ const novelOutlineSkillGuide = `参考项目级 open-novel-writing skill 的大�
 4. 人物弧光：主角欲望、弱点、选择和变化要贯穿章节。
 5. 高潮/结局设计：关键爆点、伏笔回收和最终抉择要提前规划。
 
-每个章节都要生成章节规格 spec，包含：
+每个章节都要生成完整章节规格 spec，包含：
 - summary：200 字以内摘要。
 - before_state：本章开始前人物状态、位置、未回收伏笔。
 - after_state：本章结束后人物状态、位置、剧情推进。
@@ -16,6 +16,7 @@ const novelOutlineSkillGuide = `参考项目级 open-novel-writing skill 的大�
 - tension_curve：0/50/100 三段张力曲线，value 为 1-10。
 - key_scenes：本章关键场景。
 - new_hooks：本章结尾或过程中新增伏笔/钩子。
+为保证质量，允许分批生成，但每一章都不能偷工减料。
 `
 
 const novelWritingSkillGuide = `参考项目级 open-novel-writing skill 的正文生成原则。

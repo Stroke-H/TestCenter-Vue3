@@ -42,6 +42,25 @@ const chapterStatusByOutlineId = computed(() => {
   return new Map(props.chapters.map((chapter) => [chapter.outline_id, chapter]))
 })
 
+const outlineGenerationText = computed(() => {
+  const generated = props.outline.generated_chapters || props.outline.chapters?.length || 0
+  const target = props.outline.target_chapters || generated
+  const remaining = Math.max(target - generated, 0)
+
+  if (props.outline.generation_status === 'generating') {
+    return `已生成前 ${generated} 章完整大纲，剩余 ${remaining} 章正在后台继续加载`
+  }
+  if (props.outline.generation_status === 'failed') {
+    return `后续章节大纲生成失败：${props.outline.generation_error || '请稍后重试'}`
+  }
+  return ''
+})
+
+const outlineGenerationClass = computed(() => [
+  'outline-progress',
+  { 'outline-progress--failed': props.outline.generation_status === 'failed' }
+])
+
 const compactList = (items?: string[], limit = 3) => {
   return (items || [])
     .map((item) => String(item || '').trim())
@@ -65,6 +84,10 @@ const selectOutline = (outlineId: string) => {
         <h3 class="panel-title">分章生成 / 审计修订</h3>
       </div>
       <el-button type="primary" :loading="running" @click="emit('generate')">生成选中章节</el-button>
+    </div>
+
+    <div v-if="outlineGenerationText" :class="outlineGenerationClass">
+      <span>{{ outlineGenerationText }}</span>
     </div>
 
     <div class="chapter-layout">
@@ -168,6 +191,27 @@ const selectOutline = (outlineId: string) => {
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 18px;
+}
+
+.outline-progress {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  margin: -4px 0 16px;
+  padding: 10px 13px;
+  border: 1px solid #99f6e4;
+  border-radius: 12px;
+  background: #f0fdfa;
+  color: #0f766e;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.outline-progress--failed {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
 }
 
 .panel-kicker {

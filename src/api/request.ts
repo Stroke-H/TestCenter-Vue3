@@ -84,7 +84,7 @@ service.interceptors.response.use(
           errorMsg = '请求地址错误 (404)'
           break
         case 500:
-          errorMsg = '后端服务器运行报错 (500)'
+          errorMsg = response.data?.error || response.data?.message || '后端服务器运行报错 (500)'
           break
         case 502:
         case 503:

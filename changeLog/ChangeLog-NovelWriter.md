@@ -9,6 +9,13 @@
 ### Changed
 - **Skill-guided Chapter Generation**: 章节正文生成接入项目级小说写作规则，基于章节规格、前 3 章上下文、事实库、文风画像和长期记忆生成正文，并强化 AI 味红线、动作细节和节奏要求。
 - **Chapter Outline Preview**: 分章生成左侧大纲卡片补充展示章节摘要、必发事件和关键场景，方便生成前确认章节规格。
+- **Material Character Roles**: 素材图谱添加人物改为角色类型选择，支持男主角、女主角、主要配角、次要配角、重要 NPC 和普通 NPC，并在人物模板中补充性格字段。
+- **Conflict Character Selection**: 添加冲突前必须先选择冲突人物；单选人物生成自身冲突，多选人物生成人物间冲突卡片。
+- **Material Role Editing**: 人物卡片左上角角色标签支持直接下拉修改，并同步写回素材文本。
+- **Outline Batch Generation**: 大纲生成保持完整章节规格不降级，首屏先返回第 1 章可用大纲，剩余章节在后台按 5/3/1 自适应批次继续生成并展示加载状态。
+- **Novel AI Error Detail**: 小说 AI 请求失败时保留后端具体错误，并附带 provider、model、prompt 长度、输出长度和已知上下文规格，便于定位模型、网关或 JSON 截断问题。
+- **Outline Background Save Fix**: 后台续生成章节大纲时只更新大纲字段，避免覆盖用户刚生成、审计或修订完成的章节正文。
+- **Outline Output Budget Fix**: 后台分批大纲生成提高输出 token 预算，避免单章完整规格因 JSON 被截断导致后续章节生成失败。
 
 ## 2026-05-11
 

@@ -62,6 +62,11 @@ export interface NovelOutline {
   logline: string
   acts: NovelInfoCard[]
   chapters: NovelChapterOutline[]
+  generation_status: string
+  target_chapters: number
+  generated_chapters: number
+  batch_size: number
+  generation_error: string
 }
 
 export interface NovelStyleProfile {
@@ -162,6 +167,9 @@ export const novelWriterApi = {
   },
   createProject(payload: CreateNovelProjectPayload) {
     return request.post('/novel-writer/projects', payload) as Promise<NovelProject>
+  },
+  getProject(projectId: string) {
+    return request.get(`/novel-writer/projects/${projectId}`) as Promise<NovelProject>
   },
   updateProject(project: NovelProject) {
     return request.put(`/novel-writer/projects/${project.id}`, project) as Promise<NovelProject>

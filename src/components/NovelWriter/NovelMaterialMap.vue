@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, shallowRef, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Minus, Plus } from '@element-plus/icons-vue'
 import type { NovelMaterials } from '@/api/novelWriter'
 
@@ -33,6 +34,12 @@ interface CanvasEdge {
   dashed?: boolean
 }
 
+interface CharacterRoleOption {
+  label: string
+  value: string
+  template: string
+}
+
 const form = reactive<NovelMaterials>({ ...props.modelValue })
 const canvasRef = shallowRef<HTMLElement | null>(null)
 const zoomLevel = shallowRef(0.92)
@@ -44,9 +51,22 @@ const draggingIdea = shallowRef('')
 const draggingIdeaIndex = shallowRef(-1)
 const dropActive = shallowRef(false)
 const activeDropCharacterId = shallowRef('')
+const conflictDialogVisible = shallowRef(false)
+const selectedConflictCharacterIds = shallowRef<string[]>([])
 
 let panFrame = 0
 let pendingPan: PointerEvent | null = null
+
+const characterRoleOptions: CharacterRoleOption[] = [
+  { label: '男主角', value: '男主角', template: '名称：\n性格：\n身份：\n欲望：\n弱点：' },
+  { label: '女主角', value: '女主角', template: '名称：\n性格：\n身份：\n欲望：\n弱点：' },
+  { label: '主要男配角', value: '主要男配角', template: '名称：\n性格：\n身份：\n欲望：\n弱点：' },
+  { label: '主要女配角', value: '主要女配角', template: '名称：\n性格：\n身份：\n欲望：\n弱点：' },
+  { label: '次要男配角', value: '次要男配角', template: '名称：\n性格：\n身份：\n欲望：\n弱点：' },
+  { label: '次要女配角', value: '次要女配角', template: '名称：\n性格：\n身份：\n欲望：\n弱点：' },
+  { label: '重要NPC', value: '重要NPC', template: '名称：\n性格：\n身份：\n功能：\n与主线关系：' },
+  { label: '普通NPC', value: '普通NPC', template: '名称：\n性格：\n身份：\n出场作用：' }
+]
 
 const splitBlocks = (text: string) => {
   return String(text || '')
@@ -72,6 +92,39 @@ const appendLine = (current: string, next: string) => {
   return trimmed ? `${trimmed}\n${next}` : next
 }
 
+const readLabeledLine = (text: string, label: string) => {
+  const matched = String(text || '').match(new RegExp(`^${label}[:：]\\s*(.+)$`, 'm'))
+  return matched?.[1]?.trim() || ''
+}
+
+const getCharacterRole = (value: string) => {
+  const role = readLabeledLine(value, '角色类型')
+  return role || '人物'
+}
+
+const getCharacterName = (value: string, fallback: string) => {
+  const name = readLabeledLine(value, '名称')
+  if (name) return name
+  const firstLine = String(value || '').split('\n').map((item) => item.trim()).find(Boolean) || ''
+  return firstLine.replace(/^(?:新人物|人物|角色|男主角|女主角|主要男配角|主要女配角|次要男配角|次要女配角|重要NPC|普通NPC)\s*[:：]?/, '').trim() || fallback
+}
+
+const getCharacterNodeLabel = (value: string, fallback: string) => {
+  const role = getCharacterRole(value)
+  const name = getCharacterName(value, fallback)
+  return role === '人物' ? name : `${role}：${name}`
+}
+
+const normalizeName = (value: string) => String(value || '').replace(/[，,；;。.\s:：]/g, '').toLowerCase()
+
+const replaceOrPrependLabeledLine = (text: string, label: string, nextValue: string) => {
+  const normalized = String(text || '')
+  const line = `${label}：${nextValue}`
+  const pattern = new RegExp(`^${label}[:：].*$`, 'm')
+  if (pattern.test(normalized)) return normalized.replace(pattern, line)
+  return normalized.trim() ? `${line}\n${normalized}` : line
+}
+
 const worldNode = computed<CanvasNode>(() => ({
   id: 'world',
   type: 'world',
@@ -88,7 +141,7 @@ const characterNodes = computed<CanvasNode[]>(() => {
   return cards.map((value, index) => ({
     id: `character-${index}`,
     type: 'character',
-    title: `人物 ${index + 1}`,
+    title: getCharacterNodeLabel(value, `人物 ${index + 1}`),
     value,
     x: 160 + (index % 3) * 360,
     y: 360 + Math.floor(index / 3) * 260,
@@ -137,10 +190,16 @@ const canvasEdges = computed<CanvasEdge[]>(() => {
     edges.push({ id: `world-${node.id}`, from: worldNode.value, to: node })
   })
   conflictNodes.value.forEach((node, index) => {
-    const from = characterNodes.value[index % Math.max(characterNodes.value.length, 1)]
-    const to = characterNodes.value[(index + 1) % Math.max(characterNodes.value.length, 1)]
-    if (from) edges.push({ id: `${from.id}-${node.id}`, from, to: node })
-    if (to && to.id !== from?.id) edges.push({ id: `${node.id}-${to.id}`, from: node, to })
+    const linkedCharacters = characterNodes.value.filter((character) => {
+      const characterName = normalizeName(getCharacterName(character.value, character.title))
+      return characterName && normalizeName(node.value).includes(characterName)
+    })
+    const participants = linkedCharacters.length > 0
+      ? linkedCharacters
+      : characterNodes.value.slice(index % Math.max(characterNodes.value.length, 1), index % Math.max(characterNodes.value.length, 1) + 1)
+    participants.forEach((character) => {
+      edges.push({ id: `${character.id}-${node.id}`, from: character, to: node })
+    })
   })
   ideaNodes.value.forEach((node) => {
     edges.push({ id: `idea-${node.id}`, from: node, to: worldNode.value, dashed: true })
@@ -251,12 +310,40 @@ const handlePointerUp = (event?: PointerEvent) => {
   }
 }
 
-const addCharacter = () => {
-  form.character_raw = appendWithBlankLine(form.character_raw, '新人物：\n身份：\n欲望：\n弱点：')
+const addCharacter = (role: string) => {
+  const option = characterRoleOptions.find((item) => item.value === role) || characterRoleOptions[0]!
+  form.character_raw = appendWithBlankLine(form.character_raw, `角色类型：${option.value}\n${option.template}`)
 }
 
 const addConflict = () => {
-  form.conflict_raw = appendLine(form.conflict_raw, '主人公 ↔ 对手：围绕目标产生直接冲突')
+  if (characterNodes.value.length === 0) {
+    ElMessage.warning('请先添加人物，再创建冲突')
+    return
+  }
+  selectedConflictCharacterIds.value = []
+  conflictDialogVisible.value = true
+}
+
+const createConflict = () => {
+  const characters = selectedConflictCharacterIds.value
+    .map((id) => characterNodes.value.find((node) => node.id === id))
+    .filter((node): node is CanvasNode => Boolean(node))
+  if (characters.length === 0) {
+    ElMessage.warning('请至少选择一个冲突人物')
+    return
+  }
+
+  if (characters.length === 1) {
+    const character = characters[0]
+    if (!character) return
+    const characterName = getCharacterName(character.value, character.title)
+    form.conflict_raw = appendLine(form.conflict_raw, `${characterName}：自身欲望、弱点或处境引发的内部冲突`)
+  } else {
+    const characterNames = characters.map((node) => getCharacterName(node.value, node.title))
+    form.conflict_raw = appendLine(form.conflict_raw, `${characterNames.join(' ↔ ')}：围绕目标、秘密或利益产生直接冲突`)
+  }
+  conflictDialogVisible.value = false
+  selectedConflictCharacterIds.value = []
 }
 
 const addIdea = () => {
@@ -267,6 +354,11 @@ const updateCharacter = (index: number, value: string) => {
   const cards = [...characterNodes.value.map((node) => node.value)]
   cards[index] = value
   form.character_raw = cards.filter((item) => item.trim()).join('\n\n')
+}
+
+const updateCharacterRole = (node: CanvasNode, role: string) => {
+  const index = Number(node.id.split('-')[1] || 0)
+  updateCharacter(index, replaceOrPrependLabeledLine(node.value, '角色类型', role))
 }
 
 const updateConflict = (index: number, value: string) => {
@@ -335,7 +427,7 @@ const handleCharacterDrop = (node: CanvasNode) => {
     resetIdeaDrag()
     return
   }
-  const characterName = node.value.split('\n')[0]?.replace(/^新人物：?/, '').trim() || node.title
+  const characterName = getCharacterName(node.value, node.title)
   form.conflict_raw = appendLine(form.conflict_raw, `${characterName} ← 灵感转入：${draggingIdea.value}`)
   if (draggingIdeaIndex.value >= 0) {
     form.raw_text = splitLines(form.raw_text)
@@ -398,7 +490,20 @@ onMounted(() => {
         <el-button size="small" :icon="Minus" @click="zoomAtPoint(zoomLevel - 0.1)" />
         <el-button size="small" @click="centerCanvas">{{ Math.round(zoomLevel * 100) }}%</el-button>
         <el-button size="small" :icon="Plus" @click="zoomAtPoint(zoomLevel + 0.1)" />
-        <el-button size="small" @click="addCharacter">添加人物</el-button>
+        <el-dropdown trigger="click" @command="(role: string | number | object) => addCharacter(String(role))">
+          <el-button size="small">添加人物</el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-for="role in characterRoleOptions"
+                :key="role.value"
+                :command="role.value"
+              >
+                {{ role.label }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button size="small" @click="addConflict">添加冲突</el-button>
         <el-button size="small" @click="addIdea">添加灵感</el-button>
       </div>
@@ -431,7 +536,25 @@ onMounted(() => {
         >
           <div class="canvas-node__header">
             <div>
-              <span>{{ node.type }}</span>
+              <el-dropdown
+                v-if="node.type === 'character'"
+                trigger="click"
+                @command="(role: string | number | object) => updateCharacterRole(node, String(role))"
+              >
+                <button class="role-chip" type="button">{{ getCharacterRole(node.value) }}</button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      v-for="role in characterRoleOptions"
+                      :key="role.value"
+                      :command="role.value"
+                    >
+                      {{ role.label }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+              <span v-else>{{ node.type }}</span>
               <strong>{{ node.title }}</strong>
             </div>
             <el-button
@@ -455,6 +578,25 @@ onMounted(() => {
         </article>
       </div>
     </div>
+
+    <el-dialog v-model="conflictDialogVisible" title="选择冲突人物" width="520px">
+      <div class="conflict-dialog">
+        <el-checkbox-group v-model="selectedConflictCharacterIds" class="conflict-character-list">
+          <el-checkbox
+            v-for="character in characterNodes"
+            :key="character.id"
+            :label="character.id"
+            border
+          >
+            {{ character.title }}
+          </el-checkbox>
+        </el-checkbox-group>
+      </div>
+      <template #footer>
+        <el-button @click="conflictDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="createConflict">生成冲突卡片</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -546,6 +688,28 @@ onMounted(() => {
   box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08);
 }
 
+.canvas-toolbar :deep(.el-dropdown) {
+  display: inline-flex;
+}
+
+.conflict-dialog {
+  display: grid;
+  gap: 14px;
+}
+
+.conflict-character-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.conflict-character-list :deep(.el-checkbox) {
+  height: auto;
+  margin: 0;
+  padding: 10px 12px;
+  white-space: normal;
+}
+
 .mindmap-scroller {
   position: absolute;
   left: 0;
@@ -618,16 +782,23 @@ onMounted(() => {
 }
 
 .canvas-node__header span,
+.role-chip,
 .canvas-node__header strong {
   display: block;
 }
 
-.canvas-node__header span {
+.canvas-node__header span,
+.role-chip {
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #0f766e;
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.1em;
   text-transform: uppercase;
+  cursor: pointer;
 }
 
 .canvas-node__header strong {
