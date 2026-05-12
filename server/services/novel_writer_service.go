@@ -65,11 +65,36 @@ type NovelOutline struct {
 }
 
 type NovelChapterOutline struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Goal     string `json:"goal"`
-	Conflict string `json:"conflict"`
-	Hook     string `json:"hook"`
+	ID           string              `json:"id"`
+	Title        string              `json:"title"`
+	Goal         string              `json:"goal"`
+	Conflict     string              `json:"conflict"`
+	Hook         string              `json:"hook"`
+	Summary      string              `json:"summary"`
+	BeforeState  NovelChapterState   `json:"before_state"`
+	AfterState   NovelChapterState   `json:"after_state"`
+	MustHappen   []string            `json:"must_happen"`
+	TensionCurve []NovelTensionPoint `json:"tension_curve"`
+	KeyScenes    []string            `json:"key_scenes"`
+	NewHooks     []string            `json:"new_hooks"`
+}
+
+type NovelChapterState struct {
+	Characters   []NovelCharacterState `json:"characters"`
+	PlotHooks    []string              `json:"plot_hooks"`
+	PlotAdvances []string              `json:"plot_advances"`
+}
+
+type NovelCharacterState struct {
+	Name     string `json:"name"`
+	State    string `json:"state"`
+	Location string `json:"location"`
+}
+
+type NovelTensionPoint struct {
+	Position int    `json:"position"`
+	Value    int    `json:"value"`
+	Note     string `json:"note"`
 }
 
 type NovelStyleProfile struct {
@@ -366,17 +391,22 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 		chapterCount = 8
 	}
 	system := "你是商业小说结构规划师。请只输出 JSON，不要输出 Markdown。"
-	user := fmt.Sprintf(`基于事实库生成小说大纲。
+	user := fmt.Sprintf(`基于事实库生成小说大纲和章节规格。
+%s
+
 要求：
 1. chapters 数量尽量接近 %d。
-2. 每章必须有 title、goal、conflict、hook。
+2. 每章必须有 title、goal、conflict、hook、summary、before_state、after_state、must_happen、tension_curve、key_scenes、new_hooks。
 3. acts 是三幕式或卷结构。
-4. 输出 JSON schema:
-{"logline":"","acts":[{"name":"","description":""}],"chapters":[{"title":"","goal":"","conflict":"","hook":""}]}
+4. 不要虚构事实库之外的硬设定；可以在不冲突的前提下补充剧情规划。
+5. 输出 JSON schema:
+{"logline":"","acts":[{"name":"","description":""}],"chapters":[{"title":"","goal":"","conflict":"","hook":"","summary":"","before_state":{"characters":[{"name":"","state":"","location":""}],"plot_hooks":[""],"plot_advances":[]},"after_state":{"characters":[{"name":"","state":"","location":""}],"plot_hooks":[""],"plot_advances":[""]},"must_happen":[""],"tension_curve":[{"position":0,"value":3,"note":""},{"position":50,"value":8,"note":""},{"position":100,"value":5,"note":""}],"key_scenes":[""],"new_hooks":[""]}]}
 
 小说：%s
 题材：%s
-事实库：%s`, chapterCount, project.Title, project.Genre, mustJSON(project.Extracted))
+当前素材：%s
+事实库：%s
+文风画像：%s`, novelOutlineSkillGuide, chapterCount, project.Title, project.Genre, mustJSON(project.Materials), mustJSON(project.Extracted), mustJSON(project.StyleProfile))
 
 	var outline NovelOutline
 	if err := callNovelAIJSON(system, user, &outline); err != nil {
@@ -447,24 +477,33 @@ func GenerateNovelChapterHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "outline chapter is required"})
 		return
 	}
+	targetWords := novelChapterTargetWords(project)
+	previousContext := previousNovelChapterContext(project, outline.ID, 3)
 	system := "你是小说写手。请原创生成正文，不要复刻参考文本的句子、人物、世界观或情节。输出 JSON。"
 	user := fmt.Sprintf(`请根据上下文生成一个章节草稿。
+%s
+
 要求：
 1. 正文 content 以中文小说正文形式输出。
 2. summary 概括本章发生的关键事实。
 3. 风格只参考 style_profile 的抽象规则，不复制参考文本。
-4. 输出 JSON schema: {"title":"","content":"","summary":""}
+4. 本章目标字数约 %d 字；如果上下文不足，也要优先保证完整场景和章节钩子。
+5. 必须覆盖章节规格中的 must_happen，并让结尾承接 hook/new_hooks。
+6. 输出 JSON schema: {"title":"","content":"","summary":"","after_state":{"characters":[{"name":"","state":"","location":""}],"plot_hooks":[""],"plot_advances":[""]},"new_hooks":[""]}
 
 小说：%s
-章节大纲：%s
+章节规格：%s
+前三章上下文：%s
 事实库：%s
 文风画像：%s
-长期记忆：%s`, project.Title, mustJSON(outline), mustJSON(project.Extracted), mustJSON(project.StyleProfile), mustJSON(project.Memory))
+长期记忆：%s`, novelWritingSkillGuide, targetWords, project.Title, mustJSON(outline), previousContext, mustJSON(project.Extracted), mustJSON(project.StyleProfile), mustJSON(project.Memory))
 
 	var generated struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
-		Summary string `json:"summary"`
+		Title      string            `json:"title"`
+		Content    string            `json:"content"`
+		Summary    string            `json:"summary"`
+		AfterState NovelChapterState `json:"after_state"`
+		NewHooks   []string          `json:"new_hooks"`
 	}
 	if err := callNovelAIJSON(system, user, &generated); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -505,13 +544,15 @@ func AuditNovelChapterHandler(c *gin.Context) {
 	}
 	system := "你是小说审计员，从 AI 味、人物一致性、剧情漏洞、文风贴合度审计章节。请只输出 JSON。"
 	user := fmt.Sprintf(`审计以下章节。
+%s
+
 输出 JSON schema:
 {"total_score":0,"ai_flavor_score":0,"character_score":0,"logic_score":0,"style_score":0,"issues":[{"severity":"high|medium|low","title":"","detail":"","suggestion":""}],"revision_advice":""}
 
 事实库：%s
 文风画像：%s
 章节标题：%s
-章节正文：%s`, mustJSON(project.Extracted), mustJSON(project.StyleProfile), chapter.Title, truncateForAI(chapter.Content, 16000))
+章节正文：%s`, novelAuditSkillGuide, mustJSON(project.Extracted), mustJSON(project.StyleProfile), chapter.Title, truncateForAI(chapter.Content, 16000))
 
 	var report NovelAuditReport
 	if err := callNovelAIJSON(system, user, &report); err != nil {
@@ -681,6 +722,66 @@ func hasChapterForOutline(chapters []NovelChapter, outlineID string) bool {
 		}
 	}
 	return false
+}
+
+func novelChapterTargetWords(project NovelProject) int {
+	if project.TargetWords > 0 && project.TargetChapters > 0 {
+		average := project.TargetWords / project.TargetChapters
+		if average < 1200 {
+			return 1200
+		}
+		if average > 5000 {
+			return 5000
+		}
+		return average
+	}
+	return 3000
+}
+
+func previousNovelChapterContext(project NovelProject, outlineID string, limit int) string {
+	if limit <= 0 {
+		limit = 3
+	}
+	outlineOrder := map[string]int{}
+	for index, outline := range project.Outline.Chapters {
+		outlineOrder[outline.ID] = index
+	}
+	currentOrder, hasCurrentOrder := outlineOrder[outlineID]
+
+	type chapterContext struct {
+		Order   int    `json:"order"`
+		Title   string `json:"title"`
+		Status  string `json:"status"`
+		Summary string `json:"summary"`
+	}
+
+	items := make([]chapterContext, 0, len(project.Chapters))
+	for index, chapter := range project.Chapters {
+		order, ok := outlineOrder[chapter.OutlineID]
+		if !ok {
+			order = index
+		}
+		if hasCurrentOrder && order >= currentOrder {
+			continue
+		}
+		items = append(items, chapterContext{
+			Order:   order,
+			Title:   chapter.Title,
+			Status:  chapter.Status,
+			Summary: firstNonEmpty(strings.TrimSpace(chapter.Summary), truncateForAI(chapter.Content, 600)),
+		})
+	}
+
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].Order > items[j].Order
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].Order < items[j].Order
+	})
+	return mustJSON(items)
 }
 
 func callNovelAIJSON(systemPrompt string, userPrompt string, target any) error {

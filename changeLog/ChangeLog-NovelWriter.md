@@ -1,5 +1,15 @@
 # ChangeLog - NovelWriter
 
+## 2026-05-12
+
+### Added
+- **Open Novel Writing Skill Assets**: 项目级 `.agents/skills/open-novel-writing` 纳入小说写作 skill 资料，便于后续生成策略和团队协作共享。
+- **Chapter Spec Outline**: 大纲生成升级为章节规格生成，新增章节摘要、前后状态、必发事件、张力曲线、关键场景和新增钩子等结构化字段。
+
+### Changed
+- **Skill-guided Chapter Generation**: 章节正文生成接入项目级小说写作规则，基于章节规格、前 3 章上下文、事实库、文风画像和长期记忆生成正文，并强化 AI 味红线、动作细节和节奏要求。
+- **Chapter Outline Preview**: 分章生成左侧大纲卡片补充展示章节摘要、必发事件和关键场景，方便生成前确认章节规格。
+
 ## 2026-05-11
 
 ### Added

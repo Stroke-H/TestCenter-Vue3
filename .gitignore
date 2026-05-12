@@ -36,4 +36,6 @@ k6-scripts/reports/*
 !k6-scripts/reports/.gitkeep
 
 Skills/
+!.agents/skills/
+!.agents/skills/**
 report/

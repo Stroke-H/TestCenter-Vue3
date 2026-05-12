@@ -42,6 +42,13 @@ const chapterStatusByOutlineId = computed(() => {
   return new Map(props.chapters.map((chapter) => [chapter.outline_id, chapter]))
 })
 
+const compactList = (items?: string[], limit = 3) => {
+  return (items || [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, limit)
+}
+
 const selectOutline = (outlineId: string) => {
   previewVersionId.value = ''
   emit('selectOutline', outlineId)
@@ -69,8 +76,23 @@ const selectOutline = (outlineId: string) => {
           @click="selectOutline(chapter.id)"
         >
           <strong>{{ chapter.title }}</strong>
+          <span v-if="chapter.summary" class="chapter-tab__summary">{{ chapter.summary }}</span>
           <span class="chapter-tab__meta">目标：{{ chapter.goal || '待补充' }}</span>
           <span class="chapter-tab__meta">冲突：{{ chapter.conflict || '待补充' }}</span>
+          <span
+            v-for="event in compactList(chapter.must_happen, 2)"
+            :key="`${chapter.id}-must-${event}`"
+            class="chapter-tab__spec"
+          >
+            必发：{{ event }}
+          </span>
+          <span
+            v-for="scene in compactList(chapter.key_scenes, 2)"
+            :key="`${chapter.id}-scene-${scene}`"
+            class="chapter-tab__spec"
+          >
+            场景：{{ scene }}
+          </span>
           <em class="chapter-tab__hook">钩子：{{ chapter.hook || '待补充' }}</em>
           <small>{{ chapterStatusByOutlineId.get(chapter.id)?.status || '待生成' }}</small>
         </button>
@@ -112,6 +134,21 @@ const selectOutline = (outlineId: string) => {
 
       <article v-else class="chapter-preview chapter-preview--empty">
         <h4>{{ selectedOutline?.title || '等待选择章节' }}</h4>
+        <div v-if="selectedOutline" class="outline-spec">
+          <p v-if="selectedOutline.summary">{{ selectedOutline.summary }}</p>
+          <div v-if="compactList(selectedOutline.must_happen).length" class="outline-spec__group">
+            <strong>必须发生</strong>
+            <span v-for="event in compactList(selectedOutline.must_happen)" :key="event">{{ event }}</span>
+          </div>
+          <div v-if="compactList(selectedOutline.key_scenes).length" class="outline-spec__group">
+            <strong>关键场景</strong>
+            <span v-for="scene in compactList(selectedOutline.key_scenes)" :key="scene">{{ scene }}</span>
+          </div>
+          <div v-if="compactList(selectedOutline.new_hooks).length" class="outline-spec__group">
+            <strong>新增钩子</strong>
+            <span v-for="hook in compactList(selectedOutline.new_hooks)" :key="hook">{{ hook }}</span>
+          </div>
+        </div>
         <p>当前章节还没有生成正文。确认左侧目标、冲突和钩子后，点击“生成选中章节”。</p>
       </article>
     </div>
@@ -189,11 +226,23 @@ const selectOutline = (outlineId: string) => {
 }
 
 .chapter-tab__meta,
-.chapter-tab__hook {
+.chapter-tab__hook,
+.chapter-tab__summary,
+.chapter-tab__spec {
   color: #64748b;
   font-size: 12px;
   font-style: normal;
   line-height: 1.55;
+}
+
+.chapter-tab__summary {
+  margin-bottom: 6px;
+  color: #475569;
+}
+
+.chapter-tab__spec {
+  margin-top: 4px;
+  color: #0f766e;
 }
 
 .chapter-tab small {
@@ -232,6 +281,38 @@ const selectOutline = (outlineId: string) => {
   margin: 0;
   color: #64748b;
   line-height: 1.7;
+}
+
+.outline-spec {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.outline-spec__group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.outline-spec__group strong,
+.outline-spec__group span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.outline-spec__group strong {
+  background: #ecfeff;
+  color: #0f766e;
+}
+
+.outline-spec__group span {
+  background: #f1f5f9;
+  color: #475569;
 }
 
 .chapter-preview__top {

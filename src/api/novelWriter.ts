@@ -9,6 +9,24 @@ export interface NovelInfoCard {
   description: string
 }
 
+export interface NovelCharacterState {
+  name: string
+  state: string
+  location: string
+}
+
+export interface NovelChapterState {
+  characters: NovelCharacterState[]
+  plot_hooks: string[]
+  plot_advances: string[]
+}
+
+export interface NovelTensionPoint {
+  position: number
+  value: number
+  note: string
+}
+
 export interface NovelMaterials {
   raw_text: string
   character_raw: string
@@ -31,6 +49,13 @@ export interface NovelChapterOutline {
   goal: string
   conflict: string
   hook: string
+  summary: string
+  before_state: NovelChapterState
+  after_state: NovelChapterState
+  must_happen: string[]
+  tension_curve: NovelTensionPoint[]
+  key_scenes: string[]
+  new_hooks: string[]
 }
 
 export interface NovelOutline {
