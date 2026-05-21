@@ -15,6 +15,7 @@ interface ToolDef {
   iconName: string
   iconColor: string
   iconBg: string
+  path?: string
   action?: string
   statusIndicator?: 'toggle-off' | 'toggle-on' | 'dots' | 'ready' | 'on-hold'
   statusText?: string
@@ -28,6 +29,7 @@ interface RecentTool {
   iconName: string
   iconColor: string
   iconBg: string
+  path?: string
   timestamp: number
 }
 
@@ -51,6 +53,7 @@ const addToRecent = (tool: ToolDef | RecentTool) => {
     iconName: tool.iconName,
     iconColor: tool.iconColor,
     iconBg: tool.iconBg,
+    path: tool.path,
     timestamp: Date.now()
   }
 
@@ -75,6 +78,10 @@ const clearHistory = () => {
 // 通用跳转与记录逻辑
 const handleLaunch = (tool: ToolDef | RecentTool) => {
   addToRecent(tool)
+  if (tool.path) {
+    router.push(tool.path)
+    return
+  }
   router.push({
     path: '/com_api_commit',
     query: {
@@ -82,6 +89,10 @@ const handleLaunch = (tool: ToolDef | RecentTool) => {
       desc: tool.description
     }
   })
+}
+
+const handleRouteLaunch = (path: string, tool: ToolDef) => {
+  handleLaunch({ ...tool, path })
 }
 
 // ===== 静态卡片数据列表 =====
@@ -219,7 +230,6 @@ const canShowSkillify = computed(() => permissionStore.canAccess('dashboard.skil
 const canShowPerformance = computed(() => permissionStore.canAccess('dashboard.performance.visible'))
 const canShowJungle = computed(() => permissionStore.canAccess('dashboard.jungle.visible'))
 const canShowNovelReader = computed(() => permissionStore.canAccess('dashboard.novel_reader.visible'))
-const canShowNovelWriter = computed(() => permissionStore.canAccess('dashboard.novel_writer.visible'))
 const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.video_player.visible'))
 
 </script>
@@ -227,7 +237,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
 <template>
   <div class="dashboard">
     <!-- ========== Recently Used ========== -->
-    <div class="section" v-if="recentTools.length > 0">
+    <div class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--blue">
@@ -235,10 +245,14 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           </div>
           <h2 class="section-title">最近使用</h2>
         </div>
-        <a href="#" class="clear-link" @click.prevent="clearHistory">清除历史</a>
+        <a v-if="recentTools.length > 0" href="#" class="clear-link" @click.prevent="clearHistory">清除历史</a>
       </div>
 
-      <div class="card-grid card-grid--4">
+      <el-empty v-if="recentTools.length === 0" class="recent-empty" description="还没有最近使用记录">
+        <span class="recent-empty__tip">从下方工具卡片打开一次后，这里会自动显示常用入口。</span>
+      </el-empty>
+
+      <div v-else class="card-grid card-grid--4">
         <div
           v-for="tool in recentTools"
           :key="tool.id"
@@ -326,7 +340,18 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <p class="tool-card__desc">管理与跟踪核心业务流程的测试状态（思维导图模式）</p>
           <div class="tool-card__footer">
             <span class="ready-text">V1.0</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/test_process')">打开</a>
+            <a
+              href="#"
+              class="open-link"
+              @click.prevent="handleRouteLaunch('/test_process', {
+                id: 'test-process',
+                name: '必测流程验证',
+                description: '管理与跟踪核心业务流程的测试状态（思维导图模式）',
+                iconName: 'Tickets',
+                iconColor: '#f59e0b',
+                iconBg: 'rgba(245, 158, 11, 0.1)'
+              })"
+            >打开</a>
           </div>
         </div>
 
@@ -340,7 +365,18 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <p class="tool-card__desc">集中查看与管理测试流程中使用的沙盒账号与数说测试账号</p>
           <div class="tool-card__footer">
             <span class="ready-text">V0.1</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/sandbox_accounts')">打开</a>
+            <a
+              href="#"
+              class="open-link"
+              @click.prevent="handleRouteLaunch('/sandbox_accounts', {
+                id: 'sandbox-accounts',
+                name: '测试账号管理',
+                description: '集中查看与管理测试流程中使用的沙盒账号与数说测试账号',
+                iconName: 'User',
+                iconColor: '#10b981',
+                iconBg: 'rgba(16, 185, 129, 0.12)'
+              })"
+            >打开</a>
           </div>
         </div>
       </div>
@@ -368,7 +404,18 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <p class="tool-card__desc">基于 Playwright 引擎的可视化 UI 自动化编排与执行平台</p>
           <div class="tool-card__footer">
             <span class="ready-text">V1.0</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/ui_auto')">打开</a>
+            <a
+              href="#"
+              class="open-link"
+              @click.prevent="handleRouteLaunch('/ui_auto', {
+                id: 'ui-auto',
+                name: 'UI 自动化工作台',
+                description: '基于 Playwright 引擎的可视化 UI 自动化编排与执行平台',
+                iconName: 'Monitor',
+                iconColor: '#8b5cf6',
+                iconBg: 'rgba(139, 92, 246, 0.1)'
+              })"
+            >打开</a>
           </div>
         </div>
 
@@ -383,7 +430,18 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <p class="tool-card__desc">基于需求自动生成覆盖正向、逆向、异常、并发的测试用例</p>
           <div class="tool-card__footer">
             <span class="ready-text">V1.0</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/testcase_gen/new')">打开</a>
+            <a
+              href="#"
+              class="open-link"
+              @click.prevent="handleRouteLaunch('/testcase_gen/new', {
+                id: 'testcase-gen',
+                name: '测试用例生成',
+                description: '基于需求自动生成覆盖正向、逆向、异常、并发的测试用例',
+                iconName: 'Notebook',
+                iconColor: '#8b5cf6',
+                iconBg: 'rgba(139, 92, 246, 0.1)'
+              })"
+            >打开</a>
           </div>
         </div>
 
@@ -397,7 +455,18 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <p class="tool-card__desc">自动化将测试节点转化为可重用的原子 Skill 组件</p>
           <div class="tool-card__footer">
             <span class="ready-text">V1.0</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/skillify')">打开</a>
+            <a
+              href="#"
+              class="open-link"
+              @click.prevent="handleRouteLaunch('/skillify', {
+                id: 'skillify',
+                name: '节点Skill化工具',
+                description: '自动化将测试节点转化为可重用的原子 Skill 组件',
+                iconName: 'MagicStick',
+                iconColor: '#6366f1',
+                iconBg: 'rgba(99, 102, 241, 0.1)'
+              })"
+            >打开</a>
           </div>
         </div>
       </div>
@@ -438,7 +507,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
     </div>
 
     <!-- ========== Other Extensions ========== -->
-    <div v-if="canShowJungle || canShowNovelReader || canShowNovelWriter || canShowVideoPlayer" class="section">
+    <div v-if="canShowJungle || canShowNovelReader || canShowVideoPlayer" class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--teal">
@@ -459,7 +528,18 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <p class="tool-card__desc">休闲类游戏自动化策略验证（实验性功能）</p>
           <div class="tool-card__footer">
             <span class="ready-text">V0.1-Beta</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/ui_auto_jungle')">打开</a>
+            <a
+              href="#"
+              class="open-link"
+              @click.prevent="handleRouteLaunch('/ui_auto_jungle', {
+                id: 'jungle-chess',
+                name: '斗兽棋',
+                description: '休闲类游戏自动化策略验证（实验性功能）',
+                iconName: 'Grid',
+                iconColor: '#14b8a6',
+                iconBg: 'rgba(20, 184, 166, 0.12)'
+              })"
+            >打开</a>
           </div>
         </div>
 
@@ -473,7 +553,18 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <p class="tool-card__desc">打开本地 TXT 小说，自动解析章节并进入沉浸式阅读</p>
           <div class="tool-card__footer">
             <span class="ready-text">本地可用</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/novel_reader')">打开</a>
+            <a
+              href="#"
+              class="open-link"
+              @click.prevent="handleRouteLaunch('/novel_reader', {
+                id: 'novel-reader',
+                name: '小说阅读器',
+                description: '打开本地 TXT 小说，自动解析章节并进入沉浸式阅读',
+                iconName: 'Reading',
+                iconColor: '#0f766e',
+                iconBg: 'rgba(20, 184, 166, 0.12)'
+              })"
+            >打开</a>
           </div>
         </div>
 
@@ -487,23 +578,21 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           <p class="tool-card__desc">平台内打开 BBYS，并可切到摸鱼模式悬浮播放</p>
           <div class="tool-card__footer">
             <span class="ready-text">已恢复</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/video_player')">打开</a>
+            <a
+              href="#"
+              class="open-link"
+              @click.prevent="handleRouteLaunch('/video_player', {
+                id: 'video-player',
+                name: '视频播放器',
+                description: '平台内打开 BBYS，并可切到摸鱼模式悬浮播放',
+                iconName: 'VideoCamera',
+                iconColor: '#0284c7',
+                iconBg: 'rgba(14, 165, 233, 0.12)'
+              })"
+            >打开</a>
           </div>
         </div>
 
-        <div v-if="canShowNovelWriter" class="tool-card">
-          <div class="tool-card__top">
-            <div class="tool-card__icon" style="background: rgba(20, 184, 166, 0.12)">
-              <el-icon :size="20" color="#0f766e"><component :is="Icons.EditPen" /></el-icon>
-            </div>
-          </div>
-          <h3 class="tool-card__name">小说智能生成</h3>
-          <p class="tool-card__desc">从素材、文风、大纲到章节审计的 AI 小说创作工作台</p>
-          <div class="tool-card__footer">
-            <span class="ready-text">MVP</span>
-            <a href="#" class="open-link" @click.prevent="router.push('/novel_writer')">打开</a>
-          </div>
-        </div>
       </div>
     </div>
   </div>
@@ -566,6 +655,17 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
 
 .clear-link:hover {
   color: #2563eb;
+}
+
+.recent-empty {
+  border: 1px dashed #dbe4f0;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.recent-empty__tip {
+  color: #64748b;
+  font-size: 13px;
 }
 
 /* ==================== 卡片网格 ==================== */

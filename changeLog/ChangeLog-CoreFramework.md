@@ -1,5 +1,19 @@
 # ChangeLog - CoreFramework
 
+## 2026-05-21
+
+### Changed
+- **Dashboard Recent Tools Recovery**: 仪表盘“最近使用”模块在没有缓存记录时也会显示空状态，并让流程验证、UI 自动化、测试用例生成、节点 Skill 化、小说阅读器和视频播放器等直接跳转卡片同步写入最近使用记录。
+
+## 2026-05-18
+
+### Changed
+- **LAN Sharing Diagnostics**: `start.sh` 现在会去重 `LAN IP Fallback` 输出，并在启动结果里直接提示如何区分 `.local` / Bonjour 解析异常与访客网络隔离、VLAN、VPN、AP isolation 等跨设备访问问题，减少“本机自检通过但别的设备打不开”时的排查成本。
+- **mDNS Boundary Guidance**: 启动提示与部署文档新增了 `.local` 访问边界说明，明确 `strokeh.local` 依赖客户端 Bonjour/mDNS 与网络组播环境；如果业务要求跨设备绝对稳定访问，需升级为真实 DNS 或局域网 DNS 方案，而不是只依赖 `.local`。
+- **Configurable Stable Host Mode**: `start.sh` 新增 `.env.lan.local` 配置入口，并提供 `.env.lan.example` 模板。配置了固定域名后，启动输出与后端生成链接会优先使用该主机名，未配置时才回退到 Bonjour/mDNS 的 `.local` 模式。
+- **Stable Host DNS Check**: 固定域名模式下，`start.sh` 会解析配置的用户访问域名，并检查它是否指向当前 Mac 的局域网 IP；如果不匹配，会提示保持用户域名不变，只更新 DNS / hosts 映射。
+- **IP Fallback Detection**: 启动脚本会识别 `.env.lan.local` 中的 IP 字面量，并把它标记为 fallback 模式；固定访问入口仍以 `testcenter.lan` / `strokeh.local` 这类不变名称为主，避免把临时 IP 误当长期分享地址。
+
 ## 2026-05-09
 
 ### Changed
