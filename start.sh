@@ -5,6 +5,7 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+RUNTIME_ENV_FILE=".env.lan.local"
 
 echo -e "${GREEN}==========================================${NC}"
 echo -e "${GREEN}   Starting TestCenter Environment Check  ${NC}"
@@ -24,19 +25,48 @@ if command -v k6 >/dev/null 2>&1; then
     echo -e "${GREEN}✓ k6 is installed.${NC}"
 fi
 
+load_runtime_env() {
+    if [ -f "$RUNTIME_ENV_FILE" ]; then
+        echo -e "${GREEN}✓ Loading LAN runtime config from ${RUNTIME_ENV_FILE}.${NC}"
+        set -a
+        . "./${RUNTIME_ENV_FILE}"
+        set +a
+    else
+        echo -e "${YELLOW}⚠ No ${RUNTIME_ENV_FILE} found. Falling back to Bonjour/mDNS host discovery.${NC}"
+    fi
+}
+
+is_mdns_host() {
+    case "$1" in
+        *.local) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_ipv4_host() {
+    case "$1" in
+        *[!0-9.]* | "" | *..* | .* | *.) return 1 ;;
+        *.*.*.*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+load_runtime_env
+
 get_lan_ips() {
     local DEFAULT_IFACE
     DEFAULT_IFACE=$(route get default 2>/dev/null | awk '/interface:/{print $2; exit}')
-
-    if [ -n "$DEFAULT_IFACE" ]; then
-        local DEFAULT_IP
-        DEFAULT_IP=$(ipconfig getifaddr "$DEFAULT_IFACE" 2>/dev/null)
-        if [ -n "$DEFAULT_IP" ]; then
-            echo "$DEFAULT_IP"
+    {
+        if [ -n "$DEFAULT_IFACE" ]; then
+            local DEFAULT_IP
+            DEFAULT_IP=$(ipconfig getifaddr "$DEFAULT_IFACE" 2>/dev/null)
+            if [ -n "$DEFAULT_IP" ]; then
+                echo "$DEFAULT_IP"
+            fi
         fi
-    fi
 
-    ifconfig 2>/dev/null | awk '/inet / && $2 !~ /^127\./ && $2 !~ /^198\.18\./ {print $2}' | awk '!seen[$0]++'
+        ifconfig 2>/dev/null | awk '/inet / && $2 !~ /^127\./ && $2 !~ /^198\.18\./ {print $2}'
+    } | awk '!seen[$0]++'
 }
 
 get_mdns_host() {
@@ -59,6 +89,119 @@ get_mdns_host() {
 http_status() {
     local URL=$1
     curl --noproxy "*" -s -o /dev/null -w "%{http_code}" --max-time 5 "$URL" || true
+}
+
+resolve_host_ips() {
+    local HOST=$1
+    if command -v dscacheutil >/dev/null 2>&1; then
+        dscacheutil -q host -a name "$HOST" 2>/dev/null | awk '/ip_address:/{print $2}' | awk '!seen[$0]++'
+        return 0
+    fi
+
+    if command -v getent >/dev/null 2>&1; then
+        getent hosts "$HOST" 2>/dev/null | awk '{print $1}' | awk '!seen[$0]++'
+    fi
+}
+
+ip_list_contains() {
+    local NEEDLE=$1
+    local HAYSTACK=$2
+
+    while IFS= read -r ITEM; do
+        if [ "$ITEM" = "$NEEDLE" ]; then
+            return 0
+        fi
+    done <<< "$HAYSTACK"
+
+    return 1
+}
+
+check_stable_host_resolution() {
+    local LAN_HOST=$1
+    local LAN_IPS=$2
+
+    if is_mdns_host "$LAN_HOST"; then
+        return 0
+    fi
+
+    if is_ipv4_host "$LAN_HOST"; then
+        echo -e "${YELLOW}  IP Fallback Self-check:${NC}"
+        if ip_list_contains "$LAN_HOST" "$LAN_IPS"; then
+            echo -e "${YELLOW}    ⚠ ${LAN_HOST} belongs to this Mac, but IP literals are not a stable user-facing entry.${NC}"
+            echo -e "${YELLOW}      Prefer a fixed hostname such as testcenter.lan or strokeh.local for shared access.${NC}"
+        else
+            echo -e "${YELLOW}    ⚠ IP fallback ${LAN_HOST} is not currently found on this Mac.${NC}"
+            echo -e "${YELLOW}      Check whether the wired network changed IP, then update ${RUNTIME_ENV_FILE} if needed.${NC}"
+        fi
+        return 0
+    fi
+
+    echo -e "${GREEN}  Stable DNS Self-check:${NC}"
+    local RESOLVED_IPS
+    RESOLVED_IPS=$(resolve_host_ips "$LAN_HOST")
+
+    if [ -z "$RESOLVED_IPS" ]; then
+        echo -e "${YELLOW}    ⚠ ${LAN_HOST} is not resolvable on this Mac. Add/update your router DNS, local DNS, or hosts rule.${NC}"
+        return 0
+    fi
+
+    echo -e "${GREEN}    Resolved ${LAN_HOST} to:${NC}"
+    while IFS= read -r RESOLVED_IP; do
+        if [ -n "$RESOLVED_IP" ]; then
+            echo -e "${GREEN}      ${RESOLVED_IP}${NC}"
+        fi
+    done <<< "$RESOLVED_IPS"
+
+    while IFS= read -r RESOLVED_IP; do
+        if [ -n "$RESOLVED_IP" ] && ip_list_contains "$RESOLVED_IP" "$LAN_IPS"; then
+            echo -e "${GREEN}    ✓ ${LAN_HOST} points to this Mac's LAN IP.${NC}"
+            return 0
+        fi
+    done <<< "$RESOLVED_IPS"
+
+    echo -e "${YELLOW}    ⚠ ${LAN_HOST} does not currently resolve to this Mac's LAN IP.${NC}"
+    echo -e "${YELLOW}      Keep the user-facing domain unchanged, but update its DNS/hosts mapping to one of these LAN IPs:${NC}"
+    while IFS= read -r LAN_IP; do
+        if [ -n "$LAN_IP" ]; then
+            echo -e "${YELLOW}      ${LAN_IP}${NC}"
+        fi
+    done <<< "$LAN_IPS"
+}
+
+print_remote_access_help() {
+    local LAN_HOST=$1
+    local LAN_IPS=$2
+
+    echo -e "${YELLOW}  Remote Device Troubleshooting:${NC}"
+    echo -e "${YELLOW}    1. 先在另一台设备打开 Stable LAN Frontend。${NC}"
+    if is_mdns_host "$LAN_HOST"; then
+        echo -e "${YELLOW}    2. 如果 ${LAN_HOST} 打不开，但 LAN IP Fallback 能打开，说明是该设备的 .local / Bonjour 解析问题。${NC}"
+        echo -e "${YELLOW}    3. 如果 hostname 和 IP fallback 都打不开，通常是没在同一网段、开了访客网络隔离、VPN 接管，或 AP/client isolation 阻止了设备互访。${NC}"
+        echo -e "${YELLOW}    4. Windows 设备如果只在 .local 上失败，通常需要 Bonjour 支持；临时可直接使用 LAN IP Fallback。${NC}"
+    elif is_ipv4_host "$LAN_HOST"; then
+        echo -e "${YELLOW}    2. 当前使用固定有线 IP：${LAN_HOST}。如果别的设备打不开，先确认对方和这台 Mac 在同一办公网络内。${NC}"
+        echo -e "${YELLOW}    3. 如果固定 IP 偶尔失效，通常是有线网口重新拿到了新 IP；重新启动脚本会在 Fixed IP Self-check 中提示。${NC}"
+        echo -e "${YELLOW}    4. 如果 IP 一直不通，优先检查访客网络隔离、VPN 接管、防火墙或 AP/client isolation。${NC}"
+    else
+        echo -e "${YELLOW}    2. 如果 ${LAN_HOST} 打不开，但 LAN IP Fallback 能打开，优先检查该设备的 DNS 是否正确，或是否还在命中旧缓存。${NC}"
+        echo -e "${YELLOW}    3. 如果 hostname 和 IP fallback 都打不开，通常是没在同一网段、开了访客网络隔离、VPN 接管，或 AP/client isolation 阻止了设备互访。${NC}"
+        echo -e "${YELLOW}    4. 使用固定域名时，关键前提是所有客户端都能把 ${LAN_HOST} 解析到当前局域网 IP，而不是依赖 Bonjour 广播。${NC}"
+    fi
+    if [ -n "$LAN_IPS" ]; then
+        local PRIMARY_IP
+        PRIMARY_IP=$(printf "%s\n" "$LAN_IPS" | awk 'NF {print; exit}')
+        if [ -n "$PRIMARY_IP" ]; then
+            echo -e "${YELLOW}    5. 最直接的排查法：让对方先试 http://${PRIMARY_IP}:5173/dashboard${NC}"
+        fi
+    fi
+    if is_mdns_host "$LAN_HOST"; then
+        echo -e "${YELLOW}    6. 如果你要求所有设备都稳定使用 ${LAN_HOST}，那访问设备必须支持 Bonjour/mDNS，且网络必须允许 UDP 5353 组播在同一广播域内传播。${NC}"
+        echo -e "${YELLOW}    7. 若业务要求是“无论设备类型如何都必须稳定访问”，不要只依赖 .local；应改为真实 DNS 域名或局域网 DNS 方案。${NC}"
+    elif is_ipv4_host "$LAN_HOST"; then
+        echo -e "${YELLOW}    6. 当前已切到固定 IP 模式；推荐只把这个有线 IP 分享给同网段使用者。${NC}"
+    else
+        echo -e "${YELLOW}    6. 当前已切到固定域名模式；如果个别设备仍不稳定，优先检查 ${LAN_HOST} 在该设备上的解析结果是否命中当前局域网 IP。${NC}"
+    fi
 }
 
 # 2. Setup Node Modules if missing
@@ -261,7 +404,17 @@ LAN_IPS=$(get_lan_ips)
 
 echo -e "\n${GREEN}==========================================${NC}"
 echo -e "${GREEN}  TestCenter is now running concurrently! ${NC}"
+if [ -f "$RUNTIME_ENV_FILE" ]; then
+    if is_ipv4_host "$LAN_HOST"; then
+        echo -e "${YELLOW}  Stable Host Mode: IP fallback via ${RUNTIME_ENV_FILE}${NC}"
+    else
+        echo -e "${GREEN}  Stable Host Mode: configured hostname via ${RUNTIME_ENV_FILE}${NC}"
+    fi
+else
+    echo -e "${YELLOW}  Stable Host Mode: Bonjour/mDNS auto-discovery (.local)${NC}"
+fi
 echo -e "${GREEN}  Local Frontend: http://localhost:5173/dashboard${NC}"
+echo -e "${GREEN}  Share This Address: http://${LAN_HOST}:5173/dashboard${NC}"
 echo -e "${GREEN}  Stable LAN Frontend: http://${LAN_HOST}:5173/dashboard${NC}"
 echo -e "${GREEN}  Stable LAN Backend:  http://${LAN_HOST}:8080${NC}"
 if [ -z "$LAN_IPS" ]; then
@@ -274,6 +427,8 @@ else
 fi
 echo -e "${YELLOW}  Note: other devices should use Stable LAN Frontend, not their own localhost.${NC}"
 check_lan_entry "$LAN_HOST" "$LAN_IPS"
+check_stable_host_resolution "$LAN_HOST" "$LAN_IPS"
+print_remote_access_help "$LAN_HOST" "$LAN_IPS"
 echo -e "${GREEN}  Press Ctrl+C to stop all services.      ${NC}"
 echo -e "${GREEN}==========================================${NC}\n"
 

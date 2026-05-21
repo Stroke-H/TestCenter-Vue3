@@ -64,11 +64,17 @@ TestCenter_Vue3/
 ## 🚀 快速启动
 
 1. **环境准备**: 确保已安装 Node.js (v18+), Go (v1.21+), 以及 K6 环境。
-2. **启动服务**:
+2. **配置固定访问入口**  
+   如果你希望其他设备稳定访问服务，应该固定一个入口地址，例如 `testcenter.lan` 或可用的 `strokeh.local`，并让使用者始终打开同一个地址：
+   ```bash
+   cp .env.lan.example .env.lan.local
+   ```
+   然后把其中的 `TESTCENTER_LAN_HOST`、`TESTCENTER_FRONTEND_ORIGIN`、`TESTCENTER_BACKEND_ORIGIN` 统一改成这个固定入口。IP 地址只作为排查备用，不作为长期分享入口。
+3. **启动服务**:
   ```bash
    ./start.sh
   ```
-   该脚本会自动并行拉起 5173 (Vue) 和 8080 (Go) 两个核心服务。
+   该脚本会自动并行拉起 5173 (Vue) 和 8080 (Go) 两个核心服务，并优先使用 `.env.lan.local` 中配置的固定入口；未配置时才回退到 Bonjour/mDNS 的 `.local` 入口。
 
 ### MySQL 连接配置
 
