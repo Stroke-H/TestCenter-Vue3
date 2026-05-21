@@ -136,9 +136,6 @@ func main() {
 			execReports.DELETE("", services.ClearExecutionReportsHandler)
 		}
 
-		// Novel Writer
-		services.RegisterNovelWriterRoutes(api)
-
 		// Scheduled Tasks
 		scheduledTasks := api.Group("/scheduled-tasks")
 		{

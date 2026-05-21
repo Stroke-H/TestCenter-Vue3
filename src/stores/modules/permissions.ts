@@ -27,7 +27,6 @@ export const PERMISSION_MODULES: PermissionModule[] = [
   { key: 'dashboard.performance.visible', title: '性能测试', description: 'Web 前端压测等性能工具入口', group: '仪表盘' },
   { key: 'dashboard.jungle.visible', title: '斗兽棋', description: '斗兽棋入口', group: '仪表盘' },
   { key: 'dashboard.novel_reader.visible', title: '小说阅读器', description: '小说阅读器入口', group: '仪表盘' },
-  { key: 'dashboard.novel_writer.visible', title: '小说智能生成', description: '小说创作工作台入口', group: '仪表盘' },
   { key: 'dashboard.video_player.visible', title: '视频播放器', description: '视频播放与摸鱼模式入口', group: '仪表盘' },
   { key: 'dashboard.feishu_assistant.visible', title: '飞书助手', description: '飞书助手入口', group: '仪表盘' },
   { key: 'reports.test_reports.visible', title: '测试报告', description: '测试报告入口', group: '报告中心' },
@@ -44,7 +43,6 @@ function defaultPermissions(username?: string) {
   const defaults = Object.fromEntries(PERMISSION_MODULES.map((item) => [item.key, true])) as Record<string, boolean>
   defaults['dashboard.jungle.visible'] = false
   defaults['dashboard.novel_reader.visible'] = false
-  defaults['dashboard.novel_writer.visible'] = isPermissionAdminUsername(username)
   defaults['dashboard.video_player.visible'] = false
   defaults['settings.permissions.visible'] = isPermissionAdminUsername(username)
   return defaults

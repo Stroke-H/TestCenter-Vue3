@@ -1,5 +1,11 @@
 # ChangeLog - NovelWriter
 
+## 2026-05-21
+
+### Removed
+- **Novel Writer App Removal**: 按当前产品边界移除小说智能生成在 TestCenter 内的前端入口、路由、权限模块、UI 组件、前端 API 封装和 `/api/novel-writer` 后端服务注册。
+- **Novel Writer Service Removal**: 移除小说项目、大纲、文风、章节生成、审计和修订相关后端服务文件，保留本地小说阅读器等其他拓展功能不受影响。
+
 ## 2026-05-12
 
 ### Added
@@ -12,10 +18,13 @@
 - **Material Character Roles**: 素材图谱添加人物改为角色类型选择，支持男主角、女主角、主要配角、次要配角、重要 NPC 和普通 NPC，并在人物模板中补充性格字段。
 - **Conflict Character Selection**: 添加冲突前必须先选择冲突人物；单选人物生成自身冲突，多选人物生成人物间冲突卡片。
 - **Material Role Editing**: 人物卡片左上角角色标签支持直接下拉修改，并同步写回素材文本。
+- **Material Card Edit Mode**: 人物角色卡编辑完成后切换为展示态，右下角提供编辑按钮，编辑页拆分为角色类型、名称、性格、身份、欲望、弱点独立输入项。
+- **Canvas Drag Gesture Support**: 素材图谱节点支持鼠标左键拖动，画布支持 Mac 触摸板两指平移和缩放。
 - **Outline Batch Generation**: 大纲生成保持完整章节规格不降级，首屏先返回第 1 章可用大纲，剩余章节在后台按 5/3/1 自适应批次继续生成并展示加载状态。
 - **Novel AI Error Detail**: 小说 AI 请求失败时保留后端具体错误，并附带 provider、model、prompt 长度、输出长度和已知上下文规格，便于定位模型、网关或 JSON 截断问题。
 - **Outline Background Save Fix**: 后台续生成章节大纲时只更新大纲字段，避免覆盖用户刚生成、审计或修订完成的章节正文。
 - **Outline Output Budget Fix**: 后台分批大纲生成提高输出 token 预算，避免单章完整规格因 JSON 被截断导致后续章节生成失败。
+- **Book Cover Card Layout**: 小说创作入口项目卡片参考书籍横幅样式，改为三列 32% 紧凑封面卡，底部操作在封面右侧横向排列。
 
 ## 2026-05-11
 

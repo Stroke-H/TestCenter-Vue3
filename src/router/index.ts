@@ -97,12 +97,6 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '小说阅读器', hidden: true, permissionKey: 'dashboard.novel_reader.visible' }
       },
       {
-        path: 'novel_writer',
-        name: 'NovelWriter',
-        component: () => import('@/views/NovelWriter/index.vue'),
-        meta: { title: '小说智能生成', hidden: true, permissionKey: 'dashboard.novel_writer.visible' }
-      },
-      {
         path: 'video_player',
         name: 'VideoPlayer',
         component: () => import('@/views/VideoPlayer/index.vue'),
