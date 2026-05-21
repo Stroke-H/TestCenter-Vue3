@@ -1,5 +1,10 @@
 # ChangeLog - Acceptance Report
 
+## 2026-05-19
+
+### Changed
+- **Project-aware Version Placeholder**: 新建验收报告时，版本号输入框会根据当前项目代码自动查找该项目最近一份历史报告的版本号，并用它替换默认示例占位文案，方便沿用上一版本信息。
+
 ## 2026-05-06
 
 ### Changed

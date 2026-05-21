@@ -245,6 +245,35 @@ const formatAutoFetchedLinks = (links: string[]) => {
   return links.length > 0 ? links.join('\n') : '无'
 }
 
+const normalizeProjectCode = (value: string) => value.trim().toUpperCase()
+
+const getReportTimestamp = (report: any) => {
+  const parsedTime = Date.parse(report?.updated_at || report?.created_at || '')
+  if (!Number.isNaN(parsedTime)) return parsedTime
+
+  const idTime = String(report?.id || '').match(/\d{10,}/)?.[0]
+  return idTime ? Number(idTime) : 0
+}
+
+const latestProjectVersion = computed(() => {
+  if (previewMode.value !== 'create') return ''
+
+  const projectCode = normalizeProjectCode(reportForm.value.project_code || '')
+  if (!projectCode) return ''
+
+  return recentReports.value
+    .filter((report) =>
+      normalizeProjectCode(report.project_code || '') === projectCode &&
+      String(report.version || '').trim()
+    )
+    .sort((a, b) => getReportTimestamp(b) - getReportTimestamp(a))[0]
+    ?.version || ''
+})
+
+const versionInputPlaceholder = computed(() => {
+  return latestProjectVersion.value ? `最近版本 ${latestProjectVersion.value}` : '例如 2.58.0'
+})
+
 const clearAutoFetchProjectItemsTimer = () => {
   if (autoFetchProjectItemsTimer) {
     clearTimeout(autoFetchProjectItemsTimer)
@@ -788,7 +817,7 @@ onBeforeUnmount(() => {
         <div class="preview-section">
           <div class="preview-item">
             <span class="label">版本号:</span>
-            <el-input v-model="reportForm.version" placeholder="例如 2.58.0" />
+            <el-input v-model="reportForm.version" :placeholder="versionInputPlaceholder" />
           </div>
           <div class="preview-item">
             <span class="label">测试时间:</span>
