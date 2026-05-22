@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useDramaRunStore, useReportStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { buildBackendUrl, buildBackendWsUrl } from '@/utils/runtimeUrl'
+import { buildBackendUrl, buildBackendWsUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
 import {
   Warning,
   CopyDocument,
@@ -379,11 +379,18 @@ const startExecution = async () => {
         return
       }
       // 识别后端发送的报告就绪信号
+      if (typeof data === 'string' && data.startsWith('REPORT_READY_URL:')) {
+        const nextReportUrl = data.slice('REPORT_READY_URL:'.length)
+        reportUrl.value = nextReportUrl ? normalizeBackendUrl(nextReportUrl) : ''
+        return
+      }
       if (typeof data === 'string' && data.startsWith('REPORT_READY:')) {
         const reportFile = data.split(':')[1] || ''
         if (isWebFrontendStressTest) {
           // 暂存文件名，等分析完再显示
           tempLighthouseFile.value = reportFile
+        } else if (isDramaCheck) {
+          logs.value.push(`[WARN] 收到旧版报告文件事件，已忽略以避免读取可覆盖报告。`)
         } else {
           const staticPath = 'reports'
           reportUrl.value = buildBackendUrl(`/${staticPath}/${reportFile}?t=${Date.now()}`)
@@ -402,7 +409,7 @@ const startExecution = async () => {
       if (timer) clearInterval(timer)
       if (currentStatus.value === 'Executing') {
         // K6 类任务必须等后端明确返回成功信号，避免异常关闭时展示旧报告。
-        const reportType = isWebFrontendStressTest ? 'Web 性能分析' : (isDramaCheck ? '业务自动化' : 'K6 压测')
+        const reportType = isWebFrontendStressTest ? 'Web 性能分析' : 'K6 压测'
         if (!isWebFrontendStressTest && (!executionSucceeded.value || executionFailed.value)) {
           currentStatus.value = 'Failed'
           logs.value.push(`[${new Date().toLocaleTimeString()}] 任务执行失败，未生成新报告。`)
@@ -422,7 +429,21 @@ const startExecution = async () => {
 
         // 如果是 K6 类任务，手动设置报告路径（Lighthouse 类任务由 ws 消息驱动）
         if (!isWebFrontendStressTest && !reportUrl.value) {
-          const reportFile = isDramaCheck ? 'drama_check_report.html' : 'summary.html'
+          if (isDramaCheck) {
+            currentStatus.value = 'Failed'
+            logs.value.push(`[${new Date().toLocaleTimeString()}] 剧集测试未收到唯一报告快照，已阻止写入默认覆盖报告。`)
+            await reportStore.addReport({
+              name: toolName.value,
+              type: reportType,
+              status: 'Failed',
+              duration: formatTime(duration.value),
+              author: authStore.user?.username || 'tester',
+              reportUrl: '',
+              analysisResult: ''
+            })
+            return
+          }
+          const reportFile = 'summary.html'
           const finalReportUrl = buildBackendUrl(`/reports/${reportFile}?t=${Date.now()}`)
           reportUrl.value = finalReportUrl
         }
@@ -489,7 +510,7 @@ const stopExecution = async () => {
   if (!isDramaCheck) {
     await reportStore.addReport({
       name: toolName.value,
-      type: isDramaCheck ? '业务自动化' : 'K6 压测',
+      type: 'K6 压测',
       status: 'Failed',
       duration: formatTime(duration.value),
       author: authStore.user?.username || 'tester',

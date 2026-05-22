@@ -70,20 +70,12 @@ get_lan_ips() {
 }
 
 get_mdns_host() {
-    local LOCAL_HOST_NAME
-    LOCAL_HOST_NAME=$(scutil --get LocalHostName 2>/dev/null)
-
     if [ -n "$TESTCENTER_LAN_HOST" ]; then
         echo "$TESTCENTER_LAN_HOST"
         return 0
     fi
 
-    if [ -n "$LOCAL_HOST_NAME" ]; then
-        printf "%s.local\n" "$LOCAL_HOST_NAME" | tr '[:upper:]' '[:lower:]'
-        return 0
-    fi
-
-    echo "strokeh.local"
+    echo "www.inspdance.com"
 }
 
 http_status() {
@@ -128,7 +120,7 @@ check_stable_host_resolution() {
         echo -e "${YELLOW}  IP Fallback Self-check:${NC}"
         if ip_list_contains "$LAN_HOST" "$LAN_IPS"; then
             echo -e "${YELLOW}    ⚠ ${LAN_HOST} belongs to this Mac, but IP literals are not a stable user-facing entry.${NC}"
-            echo -e "${YELLOW}      Prefer a fixed hostname such as testcenter.lan or strokeh.local for shared access.${NC}"
+            echo -e "${YELLOW}      Prefer a fixed hostname such as www.inspdance.com or testcenter.lan for shared access.${NC}"
         else
             echo -e "${YELLOW}    ⚠ IP fallback ${LAN_HOST} is not currently found on this Mac.${NC}"
             echo -e "${YELLOW}      Check whether the wired network changed IP, then update ${RUNTIME_ENV_FILE} if needed.${NC}"
@@ -411,7 +403,7 @@ if [ -f "$RUNTIME_ENV_FILE" ]; then
         echo -e "${GREEN}  Stable Host Mode: configured hostname via ${RUNTIME_ENV_FILE}${NC}"
     fi
 else
-    echo -e "${YELLOW}  Stable Host Mode: Bonjour/mDNS auto-discovery (.local)${NC}"
+    echo -e "${GREEN}  Stable Host Mode: default DNS hostname${NC}"
 fi
 echo -e "${GREEN}  Local Frontend: http://localhost:5173/dashboard${NC}"
 echo -e "${GREEN}  Share This Address: http://${LAN_HOST}:5173/dashboard${NC}"

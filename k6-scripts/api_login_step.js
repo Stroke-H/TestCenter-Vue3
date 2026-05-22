@@ -89,6 +89,6 @@ export default function (data) {
 export function handleSummary(data) {
     return {
         // 输出到 Go 服务端开放的静态路由文件夹，以使得 Vue 前端也能直接获取这套详细数据
-        "reports/api_login_summary.html": htmlReport(data),
+        "report/api_report/api_login_summary.html": htmlReport(data),
     };
 }

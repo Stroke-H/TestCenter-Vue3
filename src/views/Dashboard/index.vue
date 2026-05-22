@@ -248,9 +248,24 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
         <a v-if="recentTools.length > 0" href="#" class="clear-link" @click.prevent="clearHistory">清除历史</a>
       </div>
 
-      <el-empty v-if="recentTools.length === 0" class="recent-empty" description="还没有最近使用记录">
-        <span class="recent-empty__tip">从下方工具卡片打开一次后，这里会自动显示常用入口。</span>
-      </el-empty>
+      <div v-if="recentTools.length === 0" class="card-grid card-grid--4">
+        <div class="tool-card tool-card--empty">
+          <div class="tool-card__top">
+            <div class="tool-card__icon recent-empty-icon">
+              <el-icon :size="22" color="#3b82f6">
+                <component :is="Icons.Clock" />
+              </el-icon>
+            </div>
+          </div>
+          <h3 class="tool-card__name">暂无最近使用</h3>
+          <p class="tool-card__desc">从下方工具卡片打开一次后，这里会自动显示常用入口。</p>
+          <div class="tool-card__footer tool-card__footer--launch">
+            <button class="launch-btn launch-btn--disabled" disabled>
+              等待使用记录
+            </button>
+          </div>
+        </div>
+      </div>
 
       <div v-else class="card-grid card-grid--4">
         <div
@@ -657,17 +672,6 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
   color: #2563eb;
 }
 
-.recent-empty {
-  border: 1px dashed #dbe4f0;
-  border-radius: 14px;
-  background: #f8fafc;
-}
-
-.recent-empty__tip {
-  color: #64748b;
-  font-size: 13px;
-}
-
 /* ==================== 卡片网格 ==================== */
 .card-grid {
   display: grid;
@@ -701,6 +705,15 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
   opacity: 0.6;
 }
 
+.tool-card--empty {
+  cursor: default;
+}
+
+.tool-card--empty:hover {
+  box-shadow: none;
+  transform: none;
+}
+
 /* 卡片顶部：图标 + 状态 */
 .tool-card__top {
   display: flex;
@@ -717,6 +730,10 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.recent-empty-icon {
+  background: rgba(59, 130, 246, 0.1);
 }
 
 /* 状态标签 */
@@ -781,6 +798,14 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
   background: #eef2ff;
   color: #3b82f6;
   border-color: #c7d2fe;
+}
+
+.launch-btn--disabled,
+.launch-btn--disabled:hover {
+  background: #f8f9fb;
+  border-color: #eef0f3;
+  color: #94a3b8;
+  cursor: default;
 }
 
 /* Open 链接 */

@@ -1,5 +1,36 @@
 # ChangeLog - Test Reports
 
+## 2026-05-22
+
+### Changed
+- **Unified Report Storage**: 所有报告文件统一收束到根目录 `report/`，接口/K6/剧集播放类报告写入 `report/api_report/`，Web 性能报告写入 `report/web_test_report/`，旧 `k6-scripts/reports` 与 `server/storage/test-runs` 不再作为报告存储位置。
+- **Embedded Failed Checks Analytics**: 剧集播放 Failed Checks 趋势分析从弹窗入口调整为报告大厅内嵌模块，固定显示在顶部操作区与报告信息表格之间。
+- **K6 Report Filter Alignment**: 报告大厅顶部筛选去除“全部”，剧集播放 Failed Checks 趋势仅在 K6 压测页签展示，并将历史“业务自动化”报告归类到 K6 压测列表。
+- **K6 First Report View**: 进入测试报告页默认展示 K6 压测页签，报告信息表格改为随页面向下延伸，由整页滚动承载更多记录。
+- **Analytics Selection Label**: 将趋势模块中的“当前选中”调整为“桑基图选中报告”，明确它代表当前展开失败来源流向的报告点。
+
+## 2026-05-21
+
+### Added
+- **Failed Checks Trend View**: 报告大厅标题旁新增 Failed Checks 趋势入口，支持从剧集播放接口测试报告读取 Failed Checks、失败类型构成，并在点击某次报告后用桑基图展开失败来源流向。
+- **ECharts Report Analytics**: Failed Checks 趋势分析切换为 ECharts 渲染折线图、堆叠柱状图和桑基图，提升图表质感、悬浮提示和点击交互体验。
+- **Immutable Test Run Archive**: 剧集播放接口测试新增基于 `runId` 的归档目录，按次保存 metadata、实时日志、HTML artifact 与结构化 metrics，报告访问不再依赖历史域名或临时文件名。
+- **Test Run Analytics API**: 新增 `/api/test-runs/analytics/drama-failed-checks`，趋势图直接读取归档指标，不再从可覆盖的本地 HTML 文件夹推测数据。
+- **Test Run Artifact API**: 新增 `/api/test-runs/:runId/artifacts/report` 与 `/api/test-runs/:runId/logs`，为后续报告详情和日志回放提供稳定入口。
+
+### Fixed
+- **Analytics Dialog Render Lifecycle**: 修复 Failed Checks 趋势弹窗重复打开时，折线图/堆叠柱状图与桑基图因 loading 时序和旧 ECharts 实例残留导致首次只显示部分图表、再次打开数据丢失的问题。
+- **Failure Breakdown Semantics**: Failed Checks 趋势图继续使用 k6 检查失败数，桑基图改用异常分类合计作为源头，避免将不同统计口径强行混用导致流向总量对不上。
+- **Analytics Data Source Guard**: Failed Checks 趋势视图改为优先读取后端执行记录中的唯一剧集报告快照，执行记录接口失败时不再静默切换到本地文件夹；本地兜底也会排除会被覆盖的 `drama_check_report.html`。
+- **Legacy Report URL Recovery**: 后端返回和保存执行记录时会把历史 `strokeh.local`、`localhost`、旧 IP 报告链接归一到当前后端入口，恢复旧报告在域名切换后的可访问性。
+- **Drama Snapshot Guard**: 剧集播放接口测试完成后如果没有收到唯一 HTML 快照文件名，不再把会被覆盖的 `drama_check_report.html` 写入历史报告，避免后续趋势数据源被污染。
+- **Scheduled Drama Archive Fix**: 修复定时剧集播放接口测试使用固定任务 ID 生成 HTML，导致每天覆盖同一份 `drama_check_report_ST-*.html` 的问题；后续定时任务按运行时间生成独立归档，并且报告大厅优先打开归档 artifact。
+- **Truthful Report Source Rule**: 清理剧集报告趋势与报告大厅的本地文件扫描兜底，主动执行和定时执行都必须拿到唯一归档 artifact 才记录报告；没有归档就按无报告显示。
+- **Archived Report URL Normalization**: 前端将 `/api/test-runs/...` 归档报告统一识别为后端资源，避免报告 iframe 因域名、端口或访问入口变化继续使用旧地址。
+
+### Changed
+- **Analytics Glass Dialog**: Failed Checks 趋势弹窗改为液态玻璃质感外框，并收敛弹窗内容高度，避免底部操作区超出边界。
+
 ## 2026-04-24
 
 ### Added

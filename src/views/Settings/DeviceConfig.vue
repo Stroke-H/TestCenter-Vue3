@@ -22,6 +22,7 @@ const devices = ref<Device[]>([])
 const projects = ref<Project[]>([])
 const loading = ref(false)
 const searchQuery = ref('')
+const osFilter = ref<'all' | 'iOS' | 'Android'>('all')
 const dialogVisible = ref(false)
 const dialogType = ref<'add' | 'edit'>('add')
 const form = ref<Device>({
@@ -100,13 +101,16 @@ const submitForm = async () => {
 }
 
 const filteredDevices = computed(() => {
-  if (!searchQuery.value) return devices.value
   const q = searchQuery.value.toLowerCase()
-  return devices.value.filter(d => 
-    d.device_name.toLowerCase().includes(q) ||
-    d.model.toLowerCase().includes(q) ||
-    d.allowed_app.toLowerCase().includes(q)
-  )
+  return devices.value.filter((device) => {
+    const matchesOs = osFilter.value === 'all' || device.os === osFilter.value
+    const matchesSearch = !q ||
+      device.device_name.toLowerCase().includes(q) ||
+      device.model.toLowerCase().includes(q) ||
+      device.allowed_app.toLowerCase().includes(q)
+
+    return matchesOs && matchesSearch
+  })
 })
 
 onMounted(() => {
@@ -129,7 +133,17 @@ onMounted(() => {
     </div>
 
     <el-table :data="filteredDevices" v-loading="loading" style="width: 100%" border stripe>
-      <el-table-column label="设备信息" min-width="200">
+      <el-table-column min-width="240">
+        <template #header>
+          <div class="device-info-header">
+            <span>设备信息</span>
+            <el-radio-group v-model="osFilter" size="small" class="os-quick-filter">
+              <el-radio-button label="all">全部</el-radio-button>
+              <el-radio-button label="iOS">iOS</el-radio-button>
+              <el-radio-button label="Android">Android</el-radio-button>
+            </el-radio-group>
+          </div>
+        </template>
         <template #default="{ row }">
           <div class="device-info">
             <el-tag :type="row.os === 'iOS' ? 'primary' : 'success'" size="small" class="mr-2">{{ row.os }}</el-tag>
@@ -227,6 +241,17 @@ onMounted(() => {
 .device-info {
   display: flex;
   align-items: center;
+}
+
+.device-info-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.os-quick-filter {
+  flex-shrink: 0;
 }
 
 .device-name {

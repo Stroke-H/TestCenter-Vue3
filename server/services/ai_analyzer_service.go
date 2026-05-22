@@ -43,7 +43,7 @@ func AnalyzeLighthouseHandler(c *gin.Context) {
 		return
 	}
 
-	reportPath := filepath.Join("..", "report", req.Filename)
+	reportPath := filepath.Join(webTestReportStorageRoot(projectRootDir()), req.Filename)
 	data, err := os.ReadFile(reportPath)
 	if err != nil {
 		log.Printf("[ERROR] Read JSON report failed: %v", err)

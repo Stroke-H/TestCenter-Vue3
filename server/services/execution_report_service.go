@@ -3,7 +3,11 @@ package services
 import (
 	"log"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +17,7 @@ import (
 // ExecutionReport 定义执行历史记录的结构
 type ExecutionReport struct {
 	ID             string `json:"id"`
+	RunID          string `json:"runId,omitempty"`
 	Name           string `json:"name"`
 	Type           string `json:"type"`
 	Status         string `json:"status"`
@@ -43,6 +48,9 @@ func GetExecutionReportsHandler(c *gin.Context) {
 	sort.Slice(reports, func(i, j int) bool {
 		return reports[i].ID > reports[j].ID
 	})
+	for index := range reports {
+		reports[index].ReportURL = resolveReportURLForResponse(reports[index])
+	}
 
 	c.JSON(http.StatusOK, reports)
 }
@@ -72,6 +80,7 @@ func AddExecutionReport(r ExecutionReport) (ExecutionReport, error) {
 	if r.CreatedAt == "" {
 		r.CreatedAt = time.Now().Format("2006/01/02 15:04:05")
 	}
+	r.ReportURL = normalizeStoredReportURL(r.ReportURL)
 
 	execReportMu.Lock()
 	defer execReportMu.Unlock()
@@ -80,6 +89,42 @@ func AddExecutionReport(r ExecutionReport) (ExecutionReport, error) {
 		return r, err
 	}
 	return r, nil
+}
+
+func normalizeStoredReportURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+
+	if strings.HasPrefix(parsed.Path, "/reports/") || strings.HasPrefix(parsed.Path, "/performance-reports/") {
+		pathWithQuery := parsed.Path
+		if parsed.RawQuery != "" {
+			pathWithQuery += "?" + parsed.RawQuery
+		}
+		return PlatformBackendURL(pathWithQuery)
+	}
+	return rawURL
+}
+
+func resolveReportURLForResponse(report ExecutionReport) string {
+	rootDir := projectRootDir()
+	for _, runID := range []string{
+		report.RunID,
+	} {
+		if strings.TrimSpace(runID) == "" {
+			continue
+		}
+		artifactPath := filepath.Join(testRunStorageRoot(rootDir), runID, "artifacts", "report.html")
+		if _, err := os.Stat(artifactPath); err == nil {
+			return PlatformBackendURL("/api/test-runs/" + url.PathEscape(runID) + "/artifacts/report")
+		}
+	}
+	return normalizeStoredReportURL(report.ReportURL)
 }
 
 // ClearExecutionReportsHandler 清空所有执行记录

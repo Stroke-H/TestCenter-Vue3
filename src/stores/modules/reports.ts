@@ -5,6 +5,7 @@ import { buildBackendUrl } from '@/utils/runtimeUrl'
 
 export interface ReportItem {
   id: string
+  runId?: string
   name: string
   type: string
   status: 'Passed' | 'Failed' | 'Running'

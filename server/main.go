@@ -25,10 +25,10 @@ func main() {
 	config.AllowCredentials = true
 	r.Use(cors.New(config))
 
-	// Serve static files for K6 reports
-	r.StaticFS("/reports", http.Dir("../k6-scripts/reports"))
+	// Serve static files for K6/API reports from the unified report directory.
+	r.StaticFS("/reports", http.Dir("../report/api_report"))
 	// Serve static files for Lighthouse performance reports
-	r.StaticFS("/performance-reports", http.Dir("../report"))
+	r.StaticFS("/performance-reports", http.Dir("../report/web_test_report"))
 
 	// API Routes
 	services.StartMatchmaker() // Start the matching worker
@@ -134,6 +134,14 @@ func main() {
 			execReports.GET("", services.GetExecutionReportsHandler)
 			execReports.POST("", services.AddExecutionReportHandler)
 			execReports.DELETE("", services.ClearExecutionReportsHandler)
+		}
+
+		// Immutable Test Run Archives
+		testRuns := api.Group("/test-runs")
+		{
+			testRuns.GET("/analytics/drama-failed-checks", services.ListDramaRunAnalyticsHandler)
+			testRuns.GET("/:runId/logs", services.GetTestRunLogsHandler)
+			testRuns.GET("/:runId/artifacts/:artifact", services.GetTestRunArtifactHandler)
 		}
 
 		// Scheduled Tasks

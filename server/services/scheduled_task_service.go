@@ -243,9 +243,11 @@ func runDueScheduledTasks() {
 
 func executeScheduledTask(task ScheduledTask) {
 	start := time.Now()
+	runID := fmt.Sprintf("ST-%s-%d", sanitizeReportSuffix(task.ID), start.UnixMilli())
+	reportDir := dramaRuntimeReportDir(runID)
 	log.Printf("[ScheduledTask] executing %s (%s)", task.Name, task.ID)
 
-	err := runDramaPlaybackTask(task.TestEnv)
+	err := runDramaPlaybackTask(task.TestEnv, reportDir)
 	duration := time.Since(start)
 	result := "success"
 	status := "Passed"
@@ -257,25 +259,32 @@ func executeScheduledTask(task ScheduledTask) {
 
 	reportURL := ""
 	if status == "Passed" {
-		rootDir, _ := filepath.Abs("..")
-		if _, snapshotURL, snapshotErr := snapshotDramaReport(rootDir, task.ID); snapshotErr != nil {
+		rootDir := projectRootDir()
+		reportFile, snapshotURL, snapshotErr := snapshotDramaReport(rootDir, reportDir, runID)
+		if snapshotErr != nil {
 			log.Printf("[ScheduledTask] snapshot report failed: %v", snapshotErr)
 		} else {
 			reportURL = snapshotURL
+			if archive, archiveErr := CreateScheduledDramaArchive(rootDir, runID, task, status, duration, start, reportFile); archiveErr != nil {
+				log.Printf("[ScheduledTask] archive report failed: %v", archiveErr)
+			} else if len(archive.Artifacts) > 0 {
+				reportURL = archive.Artifacts[0].URL
+			}
 		}
 	}
 	if _, addErr := AddExecutionReport(ExecutionReport{
 		Name:      task.Name,
-		Type:      "业务自动化",
+		Type:      "K6 压测",
 		Status:    status,
 		Duration:  formatDuration(duration),
 		Author:    task.Creator,
 		ReportURL: reportURL,
+		RunID:     runID,
 	}); addErr != nil {
 		log.Printf("[ScheduledTask] add report failed: %v", addErr)
 	}
 
-	notice := buildScheduledTaskNotice(task, status, result, formatDuration(duration), reportURL, start)
+	notice := buildScheduledTaskNotice(task, status, result, formatDuration(duration), reportURL, start, reportDir)
 	if notifyErr := notifyScheduledTaskCreator(task.Creator, notice); notifyErr != nil {
 		log.Printf("[ScheduledTask] notify failed: %v", notifyErr)
 	}
@@ -285,7 +294,7 @@ func executeScheduledTask(task ScheduledTask) {
 	updateScheduledTaskAfterRun(task, start, result)
 }
 
-func runDramaPlaybackTask(testEnv string) error {
+func runDramaPlaybackTask(testEnv string, reportDir string) error {
 	profile := getDramaProfile(testEnv)
 	rootDir, _ := filepath.Abs("..")
 	env := append(os.Environ(),
@@ -293,16 +302,18 @@ func runDramaPlaybackTask(testEnv string) error {
 		"PASSWORD="+profile.Password,
 		"LOGIN_URL="+profile.LoginURL,
 		"DRAMA_LIST_URL="+profile.DramaListURL,
+		"DRAMA_REPORT_DIR="+reportDir,
 	)
 
-	removeDramaRetryArtifacts(rootDir)
+	_ = os.MkdirAll(filepath.Join(rootDir, reportDir), 0755)
+	removeDramaRetryArtifacts(rootDir, reportDir)
 	if err := runCommand(rootDir, env, "node", filepath.Join("k6-scripts", "prepare_data.js")); err != nil {
 		return fmt.Errorf("prepare data failed: %w", err)
 	}
 	if err := runCommand(rootDir, env, "k6", "run", filepath.Join("k6-scripts", "drama_check_flow.js")); err != nil {
 		return fmt.Errorf("k6 run failed: %w", err)
 	}
-	if err := rerunDramaRetryCandidates(rootDir, env, func(message string) {
+	if err := rerunDramaRetryCandidates(rootDir, reportDir, env, func(message string) {
 		log.Printf("[ScheduledTask][Retry] %s", message)
 	}); err != nil {
 		return fmt.Errorf("retry failed cases failed: %w", err)
@@ -321,8 +332,8 @@ func runCommand(dir string, env []string, name string, args ...string) error {
 	return err
 }
 
-func buildScheduledTaskNotice(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time) string {
-	analysis, err := analyzeScheduledTaskReportWithAI(task, status, result, duration, startedAt)
+func buildScheduledTaskNotice(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time, reportDir string) string {
+	analysis, err := analyzeScheduledTaskReportWithAI(task, status, result, duration, startedAt, reportDir)
 	if err != nil {
 		log.Printf("[ScheduledTask] report analysis skipped: %v", err)
 		analysis = "报告分析暂未生成，请打开平台查看完整报告。"
@@ -394,13 +405,13 @@ func statusToAuditStatus(status string) string {
 	return "failed"
 }
 
-func analyzeScheduledTaskReportWithAI(task ScheduledTask, status string, result string, duration string, startedAt time.Time) (string, error) {
+func analyzeScheduledTaskReportWithAI(task ScheduledTask, status string, result string, duration string, startedAt time.Time, reportDir string) (string, error) {
 	provider, err := selectScheduledReportProvider()
 	if err != nil {
 		return "", err
 	}
 
-	reportText, err := readScheduledTaskReportText(startedAt)
+	reportText, err := readScheduledTaskReportText(startedAt, reportDir)
 	if err != nil {
 		return "", err
 	}
@@ -542,9 +553,9 @@ func selectScheduledReportProvider() (feishumodel.AIProviderConfig, error) {
 	return feishumodel.AIProviderConfig{}, fmt.Errorf("scheduled_report provider is not configured")
 }
 
-func readScheduledTaskReportText(startedAt time.Time) (string, error) {
+func readScheduledTaskReportText(startedAt time.Time, reportDir string) (string, error) {
 	rootDir, _ := filepath.Abs("..")
-	reportPath := filepath.Join(rootDir, "k6-scripts", "reports", "drama_check_report.html")
+	reportPath := filepath.Join(rootDir, reportDir, "drama_check_report.html")
 	info, err := os.Stat(reportPath)
 	if err != nil {
 		return "", err
@@ -558,10 +569,10 @@ func readScheduledTaskReportText(startedAt time.Time) (string, error) {
 	}
 
 	text := htmlToPlainText(string(content))
-	if retryContent, err := os.ReadFile(filepath.Join(rootDir, "k6-scripts", "reports", "drama_retry_result.json")); err == nil {
+	if retryContent, err := os.ReadFile(filepath.Join(rootDir, reportDir, "drama_retry_result.json")); err == nil {
 		text += "\n\nRetry result JSON:\n" + string(retryContent)
 	}
-	if candidateContent, err := os.ReadFile(filepath.Join(rootDir, "k6-scripts", "reports", "drama_retry_candidates.json")); err == nil {
+	if candidateContent, err := os.ReadFile(filepath.Join(rootDir, reportDir, "drama_retry_candidates.json")); err == nil {
 		text += "\n\nRetry candidate JSON:\n" + string(candidateContent)
 	}
 	return text, nil

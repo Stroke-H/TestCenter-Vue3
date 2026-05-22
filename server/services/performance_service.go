@@ -11,9 +11,8 @@ import (
 
 // ListLighthouseReportsHandler scans the report/ directory and returns existing files
 func ListLighthouseReportsHandler(c *gin.Context) {
-	// Root of project is .. relative to server/ dir
-	reportDir := filepath.Join("..", "report")
-	
+	reportDir := webTestReportStorageRoot(projectRootDir())
+
 	files, err := os.ReadDir(reportDir)
 	if err != nil {
 		if os.IsNotExist(err) {

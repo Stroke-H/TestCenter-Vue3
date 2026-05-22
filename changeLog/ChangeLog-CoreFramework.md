@@ -4,6 +4,9 @@
 
 ### Changed
 - **Dashboard Recent Tools Recovery**: 仪表盘“最近使用”模块在没有缓存记录时也会显示空状态，并让流程验证、UI 自动化、测试用例生成、节点 Skill 化、小说阅读器和视频播放器等直接跳转卡片同步写入最近使用记录。
+- **Dashboard Recent Empty Style**: “最近使用”无记录状态改回仪表盘原生工具卡片样式，避免 Element Plus 空状态和原卡片视觉不一致。
+- **Legacy Report URL Normalization**: 历史报告中保存的 `strokeh.local`、旧 IP 或其他旧后端地址，在读取 `/reports/` 与 `/performance-reports/` 时会自动归一到当前后端入口，避免关闭 Bonjour 或切换域名后报告分析读取失败。
+- **Default DNS Entry**: 后端平台链接与启动脚本默认固定入口切换为 `www.inspdance.com`，避免未配置本地环境时继续回退到 Bonjour/mDNS 的 `strokeh.local`。
 
 ## 2026-05-18
 

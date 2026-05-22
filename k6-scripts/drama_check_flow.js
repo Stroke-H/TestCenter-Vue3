@@ -19,6 +19,7 @@ const RETRY_MARKER_PREFIX = '__DRAMA_RETRY_720_NETWORK__|';
 const PROGRESS_MARKER_PREFIX = '__DRAMA_CASE_DONE__|';
 const isRetryPhase = __ENV.DRAMA_RETRY_PHASE === '1';
 const retryIds = parseRetryIds(__ENV.DRAMA_RETRY_IDS || '');
+const reportOutputDir = (__ENV.DRAMA_REPORT_DIR || 'report/api_report/.runtime/default').replace(/\/+$/, '');
 
 const data = new SharedArray('drama_info_loader', function () {
     // 强制读取根目录下的 drama_info.json 文件 (由 Node 脚本生成)
@@ -323,8 +324,8 @@ export function handleSummary(data) {
 
     const output = {};
     if (isRetryPhase) {
-        output["k6-scripts/reports/drama_retry_report.html"] = unescapedHtml;
-        output["k6-scripts/reports/drama_retry_result.json"] = JSON.stringify({
+        output[`${reportOutputDir}/drama_retry_report.html`] = unescapedHtml;
+        output[`${reportOutputDir}/drama_retry_result.json`] = JSON.stringify({
             generatedAt: new Date().toISOString(),
             phase: 'retry',
             retryIds,
@@ -333,8 +334,8 @@ export function handleSummary(data) {
         return output;
     }
 
-    output["k6-scripts/reports/drama_check_report.html"] = unescapedHtml;
-    output["k6-scripts/reports/drama_retry_candidates.json"] = JSON.stringify({
+    output[`${reportOutputDir}/drama_check_report.html`] = unescapedHtml;
+    output[`${reportOutputDir}/drama_retry_candidates.json`] = JSON.stringify({
         generatedAt: new Date().toISOString(),
         phase: 'initial',
         candidates: retryCandidates,

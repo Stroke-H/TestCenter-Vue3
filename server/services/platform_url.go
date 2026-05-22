@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const defaultPlatformLANHost = "strokeh.local"
+const defaultPlatformLANHost = "www.inspdance.com"
 
 func platformLANHost() string {
 	host := strings.TrimSpace(os.Getenv("TESTCENTER_LAN_HOST"))

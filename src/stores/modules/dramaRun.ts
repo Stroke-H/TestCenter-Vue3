@@ -163,9 +163,13 @@ export const useDramaRunStore = defineStore('dramaRun', () => {
         }
         return
       }
+      if (data.startsWith('REPORT_READY_URL:')) {
+        const nextReportUrl = data.slice('REPORT_READY_URL:'.length)
+        reportUrl.value = nextReportUrl ? normalizeBackendUrl(nextReportUrl) : ''
+        return
+      }
       if (data.startsWith('REPORT_READY:')) {
-        const reportFile = data.split(':')[1] || 'drama_check_report.html'
-        reportUrl.value = buildBackendUrl(`/reports/${reportFile}?t=${Date.now()}`)
+        pushLog(`[WARN] 收到旧版报告文件事件，已忽略以避免读取可覆盖报告。`)
         return
       }
       if (data.startsWith('EXECUTION_STATUS:')) {
@@ -191,12 +195,14 @@ export const useDramaRunStore = defineStore('dramaRun', () => {
     const [, nextStatus, reason] = data.split(':')
     if (nextStatus === 'success') {
       progress.value = 100
-      status.value = 'done'
       stopTimer()
-      pushLog(`[${new Date().toLocaleTimeString()}] 任务执行完成。`)
       if (!reportUrl.value) {
-        reportUrl.value = buildBackendUrl(`/reports/drama_check_report.html?t=${Date.now()}`)
+        status.value = 'failed'
+        pushLog(`[${new Date().toLocaleTimeString()}] 任务完成但未收到唯一报告快照，已阻止使用默认覆盖报告。`)
+        return
       }
+      status.value = 'done'
+      pushLog(`[${new Date().toLocaleTimeString()}] 任务执行完成。`)
       if (isRunningInBackground.value) {
         showBubble('当前接口测试完成啦！')
       }

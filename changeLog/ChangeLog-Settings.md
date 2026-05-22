@@ -1,5 +1,10 @@
 # ChangeLog - Settings (配置中心)
 
+## 2026-05-21
+
+### Added
+- **Device OS Quick Filter**: 测试设备列表的“设备信息”表头新增 iOS / Android 快捷筛选，可与搜索框叠加使用，方便快速区分不同系统设备。
+
 ## 2026-05-06
 
 ### Added

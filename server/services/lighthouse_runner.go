@@ -33,8 +33,8 @@ func RunLighthouseHandler(c *gin.Context) {
 	ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("[INFO] 准备开始 Lighthouse 分析: %s", targetURL)))
 	ws.WriteMessage(websocket.TextMessage, []byte("--------------------------------------------------"))
 
-	// Ensure reports directory exists at project root (relative to server/ dir is ../report)
-	reportDir := filepath.Join("..", "report")
+	// Store web test reports under the unified report directory.
+	reportDir := webTestReportStorageRoot(projectRootDir())
 	if _, err := os.Stat(reportDir); os.IsNotExist(err) {
 		os.MkdirAll(reportDir, 0755)
 	}
@@ -48,7 +48,7 @@ func RunLighthouseHandler(c *gin.Context) {
 			// If parse fails or protocol missing, try a simpler split
 			host = strings.Split(targetURL, "/")[0]
 		}
-		
+
 		// Remove 'www.' if present and take the main segment
 		host = strings.TrimPrefix(host, "www.")
 		parts := strings.Split(host, ".")
@@ -56,7 +56,7 @@ func RunLighthouseHandler(c *gin.Context) {
 			hostname = parts[0]
 		}
 	}
-	
+
 	// Sanitize hostname for filename
 	hostname = strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
@@ -73,11 +73,11 @@ func RunLighthouseHandler(c *gin.Context) {
 
 	// Execute Lighthouse command with HTML and JSON outputs
 	// Lighthouse will append '.report.html' and '.report.json' to the output-path
-	cmd := exec.Command("lighthouse", 
-		targetURL, 
-		"--output", "html", 
-		"--output", "json", 
-		"--output-path", absReportPath, 
+	cmd := exec.Command("lighthouse",
+		targetURL,
+		"--output", "html",
+		"--output", "json",
+		"--output-path", absReportPath,
 		"--chrome-flags=--no-sandbox --headless --disable-gpu",
 		"--quiet",
 	)
@@ -109,7 +109,7 @@ func RunLighthouseHandler(c *gin.Context) {
 
 	ws.WriteMessage(websocket.TextMessage, []byte("\n--------------------------------------------------"))
 	ws.WriteMessage(websocket.TextMessage, []byte("[SUCCESS] Lighthouse 分析任务执行完成。"))
-	
+
 	// Notification for frontend with the dynamic filename
 	// Lighthouse adds .report.html
 	finalHtmlReport := fmt.Sprintf("%s.report.html", reportBaseName)

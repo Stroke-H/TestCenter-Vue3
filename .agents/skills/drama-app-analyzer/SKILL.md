@@ -1,6 +1,7 @@
 ---
 
-## name: drama-app-analyzer  
+## name: drama-app-analyzer
+
 description: Analytical profile of the ShortsWave (novel/short drama) mobile application. Breaks down functional modules and core interaction logic for AI context.  
 version: 1.0.0
 
@@ -121,4 +122,3 @@ This skill provides a comprehensive breakdown of the ShortsWave application, a c
 - `task_check_in_btn`: Reward trigger.
 - `payment_iap_tier_1`: Purchase button.
 - `profile_history_list`: Progress retrieval.
-

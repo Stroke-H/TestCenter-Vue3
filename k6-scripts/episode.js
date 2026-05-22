@@ -53,7 +53,7 @@ export default function () {
 // Function executed at the end of the test to generate the HTML report
 export function handleSummary(data) {
   return {
-    "reports/summary.html": htmlReport(data, { title: "Episode Performance Test (剧集播放压测报告)" }),
+    "report/api_report/summary.html": htmlReport(data, { title: "Episode Performance Test (剧集播放压测报告)" }),
     stdout: textSummary(data, { indent: " ", enableColors: false }),
   };
 }

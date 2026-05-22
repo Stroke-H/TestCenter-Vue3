@@ -32,10 +32,15 @@ server/data/processes/
 server/feishu/*.jsonl
 backup/legacy/*.jsonl
 drama_info.json
-k6-scripts/reports/*
-!k6-scripts/reports/.gitkeep
+report/*
+!report/.gitkeep
+!report/api_report/
+report/api_report/*
+!report/api_report/.gitkeep
+!report/web_test_report/
+report/web_test_report/*
+!report/web_test_report/.gitkeep
 
 Skills/
 !.agents/skills/
 !.agents/skills/**
-report/

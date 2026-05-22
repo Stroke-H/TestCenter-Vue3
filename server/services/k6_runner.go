@@ -181,7 +181,10 @@ func SubscribeDramaRunHandler(c *gin.Context) {
 }
 
 func (job *dramaRunJob) execute(ctx context.Context, rootDir string, env []string) {
-	removeDramaRetryArtifacts(rootDir)
+	reportDir := dramaRuntimeReportDir(job.id)
+	env = append(env, "DRAMA_REPORT_DIR="+reportDir)
+	_ = os.MkdirAll(filepath.Join(rootDir, reportDir), 0755)
+	removeDramaRetryArtifacts(rootDir, reportDir)
 	job.publishLog("[Step 1/2] 正在初始化前置数据业务 (prepare_data.js)...")
 
 	if err := job.runCommandStream(ctx, rootDir, env, "node", filepath.Join("k6-scripts", "prepare_data.js")); err != nil {
@@ -218,7 +221,7 @@ func (job *dramaRunJob) execute(ctx context.Context, rootDir string, env []strin
 		return
 	}
 
-	if err := rerunDramaRetryCandidates(rootDir, env, func(message string) {
+	if err := rerunDramaRetryCandidates(rootDir, reportDir, env, func(message string) {
 		if strings.HasPrefix(message, "DRAMA_PROGRESS:") {
 			job.handleControlMessage(message)
 			return
@@ -232,7 +235,7 @@ func (job *dramaRunJob) execute(ctx context.Context, rootDir string, env []strin
 		return
 	}
 
-	reportFile, reportURL, err := snapshotDramaReport(rootDir, job.id)
+	reportFile, reportURL, err := snapshotDramaReport(rootDir, reportDir, job.id)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -347,6 +350,7 @@ func (job *dramaRunJob) publishLog(message string) {
 	if strings.TrimSpace(message) == "" {
 		return
 	}
+	appendTestRunLog(job.id, message)
 	job.mu.Lock()
 	job.logs = append(job.logs, message)
 	if len(job.logs) > 1200 {
@@ -391,17 +395,31 @@ func (job *dramaRunJob) complete(reportFile string, reportURL string) {
 	job.reportURL = reportURL
 	job.finishedAt = time.Now()
 	job.mu.Unlock()
+
+	rootDir := projectRootDir()
+	archive, archiveErr := CreateDramaTestRunArchive(rootDir, job, reportFile, reportURL)
+	if archiveErr != nil {
+		log.Printf("[DramaRun] create archive failed: %v", archiveErr)
+	}
+	if archiveErr == nil && len(archive.Artifacts) > 0 {
+		reportURL = archive.Artifacts[0].URL
+		job.mu.Lock()
+		job.reportURL = reportURL
+		job.mu.Unlock()
+	}
+
 	job.publishLog("\nExecution completed successfully.")
 	job.publish("DRAMA_PROGRESS:100")
-	job.publish("REPORT_READY:" + reportFile)
+	job.publish("REPORT_READY_URL:" + reportURL)
 	job.publish("EXECUTION_STATUS:success")
 	if _, err := AddExecutionReport(ExecutionReport{
 		Name:      job.toolName,
-		Type:      "业务自动化",
+		Type:      "K6 压测",
 		Status:    "Passed",
 		Duration:  formatDuration(time.Since(job.startedAt)),
 		Author:    job.author,
 		ReportURL: reportURL,
+		RunID:     job.id,
 	}); err != nil {
 		log.Printf("[DramaRun] add report failed: %v", err)
 	}
@@ -414,13 +432,18 @@ func (job *dramaRunJob) fail(reason string) {
 	job.finishedAt = time.Now()
 	job.mu.Unlock()
 	job.publishLog(fmt.Sprintf("[ERROR] 执行失败: %s", reason))
+	rootDir, _ := filepath.Abs("..")
+	if err := CreateDramaFailureArchive(rootDir, job); err != nil {
+		log.Printf("[DramaRun] create failed archive failed: %v", err)
+	}
 	job.publish("EXECUTION_STATUS:failed:" + reason)
 	if _, err := AddExecutionReport(ExecutionReport{
 		Name:     job.toolName,
-		Type:     "业务自动化",
+		Type:     "K6 压测",
 		Status:   "Failed",
 		Duration: formatDuration(time.Since(job.startedAt)),
 		Author:   job.author,
+		RunID:    job.id,
 	}); err != nil {
 		log.Printf("[DramaRun] add failed report failed: %v", err)
 	}
@@ -514,6 +537,8 @@ func RunK6TestHandler(c *gin.Context) {
 
 	// Get parameters from query
 	scriptName := c.DefaultQuery("script", "episode.js")
+	runID := fmt.Sprintf("WS-%d", time.Now().UnixMilli())
+	startedAt := time.Now()
 	email := c.Query("email")
 	password := c.Query("password")
 	loginUrl := c.Query("loginUrl")
@@ -546,8 +571,12 @@ func RunK6TestHandler(c *gin.Context) {
 	}
 
 	// Special orchestration: if running drama_check_flow, run prepare_data FIRST
+	reportDir := ""
 	if scriptName == "drama_check_flow.js" {
-		removeDramaRetryArtifacts(rootDir)
+		reportDir = dramaRuntimeReportDir(runID)
+		env = append(env, "DRAMA_REPORT_DIR="+reportDir)
+		_ = os.MkdirAll(filepath.Join(rootDir, reportDir), 0755)
+		removeDramaRetryArtifacts(rootDir, reportDir)
 		ws.WriteMessage(websocket.TextMessage, []byte("[Step 1/2] 正在初始化前置数据业务 (prepare_data.js)..."))
 		prepCmd := exec.Command("node", prepareScriptPath)
 		prepCmd.Env = env
@@ -652,7 +681,7 @@ func RunK6TestHandler(c *gin.Context) {
 		ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:k6 command failed"))
 	} else {
 		if scriptName == "drama_check_flow.js" {
-			if err := rerunDramaRetryCandidates(rootDir, env, func(message string) {
+			if err := rerunDramaRetryCandidates(rootDir, reportDir, env, func(message string) {
 				ws.WriteMessage(websocket.TextMessage, []byte(message))
 			}); err != nil {
 				ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\n[❌] 720p失败case二次尝试失败: %v", err)))
@@ -666,15 +695,32 @@ func RunK6TestHandler(c *gin.Context) {
 			ws.WriteMessage(websocket.TextMessage, []byte("DRAMA_PROGRESS:100"))
 		}
 		reportFile := "summary.html"
+		reportURL := ""
 		if scriptName == "drama_check_flow.js" {
-			reportFile, _, err = snapshotDramaReport(rootDir, fmt.Sprintf("ws-%d", time.Now().UnixMilli()))
+			reportFile, _, err = snapshotDramaReport(rootDir, reportDir, runID)
 			if err != nil {
 				ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\n[❌] 生成剧集播放报告快照失败: %v", err)))
 				ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:report snapshot failed"))
 				return
 			}
+			task := ScheduledTask{
+				ID:      runID,
+				Name:    "剧集播放接口测试",
+				Creator: "tester",
+			}
+			if archive, archiveErr := CreateScheduledDramaArchive(rootDir, runID, task, "Passed", time.Since(startedAt), startedAt, reportFile); archiveErr != nil {
+				ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\n[❌] 归档剧集播放报告失败: %v", archiveErr)))
+				ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:report archive failed"))
+				return
+			} else if len(archive.Artifacts) > 0 {
+				reportURL = archive.Artifacts[0].URL
+			}
 		}
-		ws.WriteMessage(websocket.TextMessage, []byte("REPORT_READY:"+reportFile))
+		if reportURL != "" {
+			ws.WriteMessage(websocket.TextMessage, []byte("REPORT_READY_URL:"+reportURL))
+		} else {
+			ws.WriteMessage(websocket.TextMessage, []byte("REPORT_READY:"+reportFile))
+		}
 		ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:success"))
 	}
 }
@@ -712,14 +758,14 @@ func isDramaProgressMarkerLine(text string) bool {
 		strings.Contains(trimmed, `msg="__DRAMA_CASE_DONE__|`)
 }
 
-func rerunDramaRetryCandidates(rootDir string, env []string, logMessage func(string)) error {
-	candidates, err := readDramaRetryCandidates(rootDir)
+func rerunDramaRetryCandidates(rootDir string, reportDir string, env []string, logMessage func(string)) error {
+	candidates, err := readDramaRetryCandidates(rootDir, reportDir)
 	if err != nil {
 		return err
 	}
 	if len(candidates) == 0 {
 		logIfPresent(logMessage, "\n[Retry] 第一轮没有720p网络失败case，无需二次尝试。")
-		return appendDramaRetrySection(rootDir, nil, "第一轮没有720p网络失败case，无需二次尝试。")
+		return appendDramaRetrySection(rootDir, reportDir, nil, "第一轮没有720p网络失败case，无需二次尝试。")
 	}
 
 	ids := make([]string, 0, len(candidates))
@@ -730,7 +776,7 @@ func rerunDramaRetryCandidates(rootDir string, env []string, logMessage func(str
 	}
 	if len(ids) == 0 {
 		logIfPresent(logMessage, "\n[Retry] 720p网络失败候选为空，无需二次尝试。")
-		return appendDramaRetrySection(rootDir, nil, "720p网络失败候选为空，无需二次尝试。")
+		return appendDramaRetrySection(rootDir, reportDir, nil, "720p网络失败候选为空，无需二次尝试。")
 	}
 
 	logIfPresent(logMessage, fmt.Sprintf("\n[Retry] 发现 %d 个720p网络失败case，开始二次尝试...", len(ids)))
@@ -749,30 +795,30 @@ func rerunDramaRetryCandidates(rootDir string, env []string, logMessage func(str
 		return runErr
 	}
 
-	result, err := readDramaRetryResult(rootDir)
+	result, err := readDramaRetryResult(rootDir, reportDir)
 	if err != nil {
 		return err
 	}
 	if len(result.PersistentFailures) == 0 {
 		logIfPresent(logMessage, "DRAMA_PROGRESS:99")
 		logIfPresent(logMessage, fmt.Sprintf("[Retry] %d 个case二次尝试已通过，判定为瞬时网络问题。", len(ids)))
-		return appendDramaRetrySection(rootDir, nil, fmt.Sprintf("%d 个720p网络失败case二次尝试已通过，判定为瞬时网络问题。", len(ids)))
+		return appendDramaRetrySection(rootDir, reportDir, nil, fmt.Sprintf("%d 个720p网络失败case二次尝试已通过，判定为瞬时网络问题。", len(ids)))
 	}
 
 	logIfPresent(logMessage, "DRAMA_PROGRESS:99")
 	logIfPresent(logMessage, fmt.Sprintf("[Retry] %d 个case二次尝试后仍失败，已追加到最终报告。", len(result.PersistentFailures)))
-	return appendDramaRetrySection(rootDir, result.PersistentFailures, "")
+	return appendDramaRetrySection(rootDir, reportDir, result.PersistentFailures, "")
 }
 
-func removeDramaRetryArtifacts(rootDir string) {
-	reportsDir := filepath.Join(rootDir, "k6-scripts", "reports")
+func removeDramaRetryArtifacts(rootDir string, reportDir string) {
+	reportsDir := filepath.Join(rootDir, reportDir)
 	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_candidates.json"))
 	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_result.json"))
 	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_report.html"))
 }
 
-func readDramaRetryCandidates(rootDir string) ([]dramaRetryCandidate, error) {
-	path := filepath.Join(rootDir, "k6-scripts", "reports", "drama_retry_candidates.json")
+func readDramaRetryCandidates(rootDir string, reportDir string) ([]dramaRetryCandidate, error) {
+	path := filepath.Join(rootDir, reportDir, "drama_retry_candidates.json")
 	content, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -787,8 +833,8 @@ func readDramaRetryCandidates(rootDir string) ([]dramaRetryCandidate, error) {
 	return payload.Candidates, nil
 }
 
-func readDramaRetryResult(rootDir string) (dramaRetryResultFile, error) {
-	path := filepath.Join(rootDir, "k6-scripts", "reports", "drama_retry_result.json")
+func readDramaRetryResult(rootDir string, reportDir string) (dramaRetryResultFile, error) {
+	path := filepath.Join(rootDir, reportDir, "drama_retry_result.json")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return dramaRetryResultFile{}, err
@@ -800,8 +846,8 @@ func readDramaRetryResult(rootDir string) (dramaRetryResultFile, error) {
 	return payload, nil
 }
 
-func appendDramaRetrySection(rootDir string, failures []dramaRetryFailure, note string) error {
-	reportPath := filepath.Join(rootDir, "k6-scripts", "reports", dramaReportBaseFile)
+func appendDramaRetrySection(rootDir string, reportDir string, failures []dramaRetryFailure, note string) error {
+	reportPath := filepath.Join(rootDir, reportDir, dramaReportBaseFile)
 	content, err := os.ReadFile(reportPath)
 	if err != nil {
 		return err
@@ -817,27 +863,22 @@ func appendDramaRetrySection(rootDir string, failures []dramaRetryFailure, note 
 	return os.WriteFile(reportPath, []byte(htmlContent), 0644)
 }
 
-func snapshotDramaReport(rootDir string, suffix string) (string, string, error) {
-	safeSuffix := sanitizeReportSuffix(suffix)
-	if safeSuffix == "" {
-		safeSuffix = fmt.Sprintf("%d", time.Now().UnixMilli())
-	}
-
-	reportsDir := filepath.Join(rootDir, "k6-scripts", "reports")
-	sourcePath := filepath.Join(reportsDir, dramaReportBaseFile)
-	content, err := os.ReadFile(sourcePath)
-	if err != nil {
+func snapshotDramaReport(rootDir string, reportDir string, suffix string) (string, string, error) {
+	_ = suffix
+	sourceRelPath := filepath.ToSlash(filepath.Join(reportDir, dramaReportBaseFile))
+	if _, err := os.Stat(filepath.Join(rootDir, sourceRelPath)); err != nil {
 		return "", "", err
 	}
 
-	fileName := fmt.Sprintf("drama_check_report_%s.html", safeSuffix)
-	targetPath := filepath.Join(reportsDir, fileName)
-	if err := os.WriteFile(targetPath, content, 0644); err != nil {
-		return "", "", err
-	}
+	return sourceRelPath, "", nil
+}
 
-	reportURL := PlatformBackendURL("/reports/" + fileName)
-	return fileName, reportURL, nil
+func dramaRuntimeReportDir(runID string) string {
+	safeRunID := sanitizeReportSuffix(runID)
+	if safeRunID == "" {
+		safeRunID = fmt.Sprintf("%d", time.Now().UnixMilli())
+	}
+	return filepath.ToSlash(filepath.Join("report", "api_report", ".runtime", safeRunID))
 }
 
 func sanitizeReportSuffix(value string) string {
