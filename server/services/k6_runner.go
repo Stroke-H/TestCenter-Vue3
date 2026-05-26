@@ -48,6 +48,7 @@ type StartDramaRunRequest struct {
 	DramaListURL string `json:"dramaListUrl"`
 	ToolName     string `json:"toolName"`
 	Author       string `json:"author"`
+	Environment  string `json:"environment"`
 }
 
 type dramaRunSnapshot struct {
@@ -70,6 +71,7 @@ type dramaRunJob struct {
 	errorText   string
 	toolName    string
 	author      string
+	environment string
 	startedAt   time.Time
 	finishedAt  time.Time
 	cancel      context.CancelFunc
@@ -115,6 +117,7 @@ func StartDramaRunHandler(c *gin.Context) {
 		logs:        []string{fmt.Sprintf("[%s] 后端任务已创建，准备执行剧集播放接口测试...", time.Now().Format("15:04:05"))},
 		toolName:    firstNonEmpty(req.ToolName, "剧集播放接口测试"),
 		author:      firstNonEmpty(req.Author, "tester"),
+		environment: normalizeReportEnvironment(req.Environment),
 		startedAt:   time.Now(),
 		cancel:      cancel,
 		subscribers: make(map[chan string]struct{}),
@@ -413,13 +416,14 @@ func (job *dramaRunJob) complete(reportFile string, reportURL string) {
 	job.publish("REPORT_READY_URL:" + reportURL)
 	job.publish("EXECUTION_STATUS:success")
 	if _, err := AddExecutionReport(ExecutionReport{
-		Name:      job.toolName,
-		Type:      "K6 压测",
-		Status:    "Passed",
-		Duration:  formatDuration(time.Since(job.startedAt)),
-		Author:    job.author,
-		ReportURL: reportURL,
-		RunID:     job.id,
+		Name:        job.toolName,
+		Type:        "K6 压测",
+		Status:      "Passed",
+		Duration:    formatDuration(time.Since(job.startedAt)),
+		Author:      job.author,
+		ReportURL:   reportURL,
+		RunID:       job.id,
+		Environment: job.environment,
 	}); err != nil {
 		log.Printf("[DramaRun] add report failed: %v", err)
 	}
@@ -438,12 +442,13 @@ func (job *dramaRunJob) fail(reason string) {
 	}
 	job.publish("EXECUTION_STATUS:failed:" + reason)
 	if _, err := AddExecutionReport(ExecutionReport{
-		Name:     job.toolName,
-		Type:     "K6 压测",
-		Status:   "Failed",
-		Duration: formatDuration(time.Since(job.startedAt)),
-		Author:   job.author,
-		RunID:    job.id,
+		Name:        job.toolName,
+		Type:        "K6 压测",
+		Status:      "Failed",
+		Duration:    formatDuration(time.Since(job.startedAt)),
+		Author:      job.author,
+		RunID:       job.id,
+		Environment: job.environment,
 	}); err != nil {
 		log.Printf("[DramaRun] add failed report failed: %v", err)
 	}

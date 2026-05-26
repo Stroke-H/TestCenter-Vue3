@@ -11,6 +11,7 @@ interface StartDramaRunOptions {
   dramaListUrl: string
   toolName: string
   author: string
+  environment: 'test' | 'prod' | string
 }
 
 interface DramaRunSnapshot {

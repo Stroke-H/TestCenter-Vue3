@@ -273,13 +273,14 @@ func executeScheduledTask(task ScheduledTask) {
 		}
 	}
 	if _, addErr := AddExecutionReport(ExecutionReport{
-		Name:      task.Name,
-		Type:      "K6 压测",
-		Status:    status,
-		Duration:  formatDuration(duration),
-		Author:    task.Creator,
-		ReportURL: reportURL,
-		RunID:     runID,
+		Name:        task.Name,
+		Type:        "K6 压测",
+		Status:      status,
+		Duration:    formatDuration(duration),
+		Author:      task.Creator,
+		ReportURL:   reportURL,
+		RunID:       runID,
+		Environment: normalizeReportEnvironment(task.TestEnv),
 	}); addErr != nil {
 		log.Printf("[ScheduledTask] add report failed: %v", addErr)
 	}

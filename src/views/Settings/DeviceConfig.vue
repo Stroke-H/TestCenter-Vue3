@@ -138,9 +138,9 @@ onMounted(() => {
           <div class="device-info-header">
             <span>设备信息</span>
             <el-radio-group v-model="osFilter" size="small" class="os-quick-filter">
-              <el-radio-button label="all">全部</el-radio-button>
-              <el-radio-button label="iOS">iOS</el-radio-button>
-              <el-radio-button label="Android">Android</el-radio-button>
+              <el-radio-button value="all">全部</el-radio-button>
+              <el-radio-button value="iOS">iOS</el-radio-button>
+              <el-radio-button value="Android">Android</el-radio-button>
             </el-radio-group>
           </div>
         </template>
@@ -188,8 +188,8 @@ onMounted(() => {
         </el-form-item>
         <el-form-item label="操作系统" required>
           <el-radio-group v-model="form.os">
-            <el-radio label="Android">Android</el-radio>
-            <el-radio label="iOS">iOS</el-radio>
+            <el-radio value="Android">Android</el-radio>
+            <el-radio value="iOS">iOS</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="型号/版本">

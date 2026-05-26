@@ -26,6 +26,7 @@ type ExecutionReport struct {
 	Author         string `json:"author,omitempty"`
 	ReportURL      string `json:"reportUrl,omitempty"`
 	AnalysisResult string `json:"analysisResult,omitempty"`
+	Environment    string `json:"environment,omitempty"`
 }
 
 var (
@@ -89,6 +90,18 @@ func AddExecutionReport(r ExecutionReport) (ExecutionReport, error) {
 		return r, err
 	}
 	return r, nil
+}
+
+func normalizeReportEnvironment(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "prod", "production", "正式服", "正式", "正服":
+		return "prod"
+	case "test", "testing", "测试服", "测试", "测服":
+		return "test"
+	default:
+		return value
+	}
 }
 
 func normalizeStoredReportURL(rawURL string) string {

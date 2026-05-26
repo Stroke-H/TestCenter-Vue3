@@ -14,6 +14,7 @@ export interface ReportItem {
   author: string
   reportUrl?: string
   analysisResult?: string
+  environment?: 'test' | 'prod' | string
 }
 
 export const useReportStore = defineStore('reports', () => {

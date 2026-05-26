@@ -5,6 +5,9 @@
 ### Added
 - **Device OS Quick Filter**: 测试设备列表的“设备信息”表头新增 iOS / Android 快捷筛选，可与搜索框叠加使用，方便快速区分不同系统设备。
 
+### Changed
+- **Element Plus Radio Compatibility**: 设备系统筛选与系统单选控件改用 `value` 绑定，消除 Element Plus 3.0 radio API 弃用警告。
+
 ## 2026-05-06
 
 ### Added

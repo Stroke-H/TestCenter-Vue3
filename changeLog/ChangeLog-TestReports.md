@@ -8,6 +8,8 @@
 - **K6 Report Filter Alignment**: 报告大厅顶部筛选去除“全部”，剧集播放 Failed Checks 趋势仅在 K6 压测页签展示，并将历史“业务自动化”报告归类到 K6 压测列表。
 - **K6 First Report View**: 进入测试报告页默认展示 K6 压测页签，报告信息表格改为随页面向下延伸，由整页滚动承载更多记录。
 - **Analytics Selection Label**: 将趋势模块中的“当前选中”调整为“桑基图选中报告”，明确它代表当前展开失败来源流向的报告点。
+- **Environment Badge**: 报告信息编号旁新增环境角标，K6 压测按执行环境显示橙色 `Test` 或绿色 `Prod`，缺少历史环境信息和非 K6 报告默认显示 `Prod`。
+- **Element Plus Radio Compatibility**: 报告类型切换组件改用 `value` 绑定，消除 Element Plus 3.0 radio API 弃用警告。
 
 ## 2026-05-21
 

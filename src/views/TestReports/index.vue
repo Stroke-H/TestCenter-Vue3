@@ -87,6 +87,24 @@ const normalizeReportType = (type: string) => {
   return type
 }
 
+const getReportEnvironment = (row: any) => {
+  const normalizedType = normalizeReportType(row.type)
+  if (normalizedType !== 'K6 压测') return 'prod'
+
+  const env = String(row.environment || '').toLowerCase()
+  if (['prod', 'production', '正式服', '正式', '正服'].includes(env)) return 'prod'
+  if (['test', 'testing', '测试服', '测试', '测服'].includes(env)) return 'test'
+  return 'prod'
+}
+
+const getReportEnvBadge = (row: any) => {
+  const env = getReportEnvironment(row)
+  return {
+    label: env === 'prod' ? 'Prod' : 'Test',
+    className: env === 'prod' ? 'env-badge env-badge--prod' : 'env-badge env-badge--test'
+  }
+}
+
 const showDramaAnalytics = computed(() => activeFilter.value === 'K6 压测')
 
 // 获取后端 report 目录下真正存在的性能报告文件列表
@@ -493,8 +511,10 @@ watch(activeFilter, async () => {
           <el-radio-button 
             v-for="opt in filterOptions" 
             :key="opt" 
-            :label="opt"
-          />
+            :value="opt"
+          >
+            {{ opt }}
+          </el-radio-button>
         </el-radio-group>
         
         <!-- 搜索框 -->
@@ -612,7 +632,10 @@ watch(activeFilter, async () => {
             <div class="report-info-col">
               <el-icon class="file-icon" color="#94a3b8"><DataAnalysis /></el-icon>
               <div class="info-texts">
-                <span class="report-id">{{ row.id }}</span>
+                <span class="report-id-line">
+                  <span class="report-id">{{ row.id }}</span>
+                  <span :class="getReportEnvBadge(row).className">{{ getReportEnvBadge(row).label }}</span>
+                </span>
                 <span class="report-name">{{ row.name }}</span>
               </div>
             </div>
@@ -838,12 +861,45 @@ watch(activeFilter, async () => {
 .info-texts {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+}
+
+.report-id-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .report-id {
   font-size: 12px;
   color: #94a3b8;
   font-family: monospace;
+}
+
+.env-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 18px;
+  letter-spacing: 0;
+}
+
+.env-badge--test {
+  color: #b45309;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+}
+
+.env-badge--prod {
+  color: #047857;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
 }
 
 .report-name {

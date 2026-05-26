@@ -347,7 +347,8 @@ const startExecution = async () => {
         loginUrl: profile.loginUrl,
         dramaListUrl: profile.dramaListUrl,
         toolName: toolName.value,
-        author: authStore.user?.username || 'tester'
+        author: authStore.user?.username || 'tester',
+        environment: testServer.value
       })
       return
     }
@@ -420,7 +421,8 @@ const startExecution = async () => {
             duration: formatTime(duration.value),
             author: authStore.user?.username || 'tester',
             reportUrl: '',
-            analysisResult: ''
+            analysisResult: '',
+            environment: isWebFrontendStressTest ? 'prod' : testServer.value
           })
           return
         }
@@ -439,7 +441,8 @@ const startExecution = async () => {
               duration: formatTime(duration.value),
               author: authStore.user?.username || 'tester',
               reportUrl: '',
-              analysisResult: ''
+              analysisResult: '',
+              environment: testServer.value
             })
             return
           }
@@ -484,7 +487,8 @@ const startExecution = async () => {
           duration: formatTime(duration.value),
           author: authStore.user?.username || 'tester',
           reportUrl: reportUrl.value || '',
-          analysisResult: analysisResult.value || ''
+          analysisResult: analysisResult.value || '',
+          environment: isWebFrontendStressTest ? 'prod' : testServer.value
         })
       }
     }
@@ -514,6 +518,7 @@ const stopExecution = async () => {
       status: 'Failed',
       duration: formatTime(duration.value),
       author: authStore.user?.username || 'tester',
+      environment: testServer.value,
     })
   }
 
