@@ -202,6 +202,15 @@ const perfTools = ref<ToolDef[]>([
     statusText: '性能就绪'
   },
   {
+    id: 'monkey-test',
+    name: 'Monkey测试',
+    description: '执行随机事件采样截图，并生成可点击的原子结构全息图谱。',
+    iconName: 'Aim',
+    iconColor: '#10b981',
+    iconBg: 'rgba(16, 185, 129, 0.1)',
+    statusText: 'Demo 就绪'
+  },
+  {
     id: 'latency-sim',
     name: '时延模拟器',
     description: '针对真实场景进行网络限速测试。',

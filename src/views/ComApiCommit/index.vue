@@ -5,6 +5,7 @@ import { useDramaRunStore, useReportStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { buildBackendUrl, buildBackendWsUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
+import MonkeyHologram3D from './components/MonkeyHologram3D.vue'
 import {
   Warning,
   CopyDocument,
@@ -35,6 +36,8 @@ if (toolName.value === 'Web前端压测') {
 const isDramaCheck = toolName.value.includes('播放')
 // 是否是Web前端压测
 const isWebFrontendStressTest = toolName.value === 'WebFrontend性能' || toolName.value === 'Web前端压测'
+// 是否是 Monkey 稳定性测试 demo
+const isMonkeyTest = toolName.value === 'Monkey测试'
 // 是否是删除账号工具
 const isDeleteAccount = toolName.value === '删除账号'
 const deleteAccountParam = ref('')
@@ -150,6 +153,23 @@ const scriptName = isDramaCheck ? 'drama_check_flow.js' : 'episode.js'
 
 // 执行状态
 type ExecStatus = 'Ready' | 'Executing' | 'Stopped' | 'Finished' | 'Failed'
+interface MonkeyGraphNode {
+  id: string
+  title: string
+  event: string
+  activity: string
+  risk: 'normal' | 'warning' | 'critical'
+  imageUrl: string
+  x: number
+  y: number
+}
+
+interface MonkeyGraphEdge {
+  source: string
+  target: string
+  event: string
+}
+
 const currentStatus = ref<ExecStatus>('Ready')
 
 // 运行时间控制
@@ -159,6 +179,7 @@ const tempLighthouseFile = ref('')
 const uptime = ref(0)
 const duration = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
+let monkeyTimer: ReturnType<typeof setInterval> | null = null
 
 // 日志及报告
 const logs = ref<string[]>(['准备就绪，点击 Execute 开始执行'])
@@ -177,6 +198,52 @@ const visibleStatus = computed<ExecStatus>(() => {
   if (dramaRunStore.status === 'failed') return 'Failed'
   if (dramaRunStore.status === 'stopped') return 'Stopped'
   return currentStatus.value
+})
+
+const monkeyTarget = ref('com.company.shortsdrama.wave')
+const monkeyDevice = ref('Pixel 7 / Android 14')
+const monkeyDurationSec = ref(3)
+const monkeyEventTotal = ref(1200)
+const monkeySeed = ref('TC-MONKEY-20260526')
+const monkeyStrategy = ref('balanced')
+const monkeyThrottleMs = ref(300)
+const monkeyScreenshotEvery = ref(120)
+const monkeyGraphNodes = ref<MonkeyGraphNode[]>([])
+const monkeyGraphEdges = ref<MonkeyGraphEdge[]>([])
+const selectedMonkeyNode = ref<MonkeyGraphNode | null>(null)
+
+const monkeyStrategyOptions = [
+  { label: '均衡探索', value: 'balanced' },
+  { label: '高频点击', value: 'tap-heavy' },
+  { label: '滑动优先', value: 'scroll-heavy' },
+  { label: '导航压力', value: 'navigation-heavy' }
+]
+
+const monkeyRiskLevel = computed(() => {
+  if (monkeyEventTotal.value >= 5000 || monkeyDurationSec.value >= 30) return '高压'
+  if (monkeyEventTotal.value >= 2000 || monkeyDurationSec.value >= 10) return '中压'
+  return 'Demo'
+})
+
+const monkeyGraphReady = computed(() => isMonkeyTest && monkeyGraphNodes.value.length > 0 && visibleStatus.value !== 'Executing')
+
+const monkeyCommandPreview = computed(() => {
+  const baseArgs = [
+    `adb -s ${monkeyDevice.value || '<deviceId>'} shell monkey`,
+    `  -p ${monkeyTarget.value || '<packageName>'}`,
+    `  --pct-touch ${monkeyStrategy.value === 'tap-heavy' ? 70 : 45}`,
+    `  --pct-motion ${monkeyStrategy.value === 'scroll-heavy' ? 40 : 20}`,
+    `  --pct-nav ${monkeyStrategy.value === 'navigation-heavy' ? 25 : 10}`,
+    `  --pct-majornav ${monkeyStrategy.value === 'navigation-heavy' ? 20 : 10}`,
+    `  --throttle ${monkeyThrottleMs.value}`,
+    `  -s ${monkeySeed.value}`,
+    `  -v -v -v ${monkeyEventTotal.value}`
+  ]
+  return baseArgs.join('\n')
+})
+
+const monkeyScreenshotCommand = computed(() => {
+  return `adb -s ${monkeyDevice.value || '<deviceId>'} exec-out screencap -p > screenshots/<eventIndex>.png`
 })
 
 const formatTime = (seconds: number) => {
@@ -207,8 +274,242 @@ const isValidUrl = (url: string) => {
   return pattern.test(url) || url.startsWith('http://') || url.startsWith('https://')
 }
 
+const createSeededRandom = (seed: string) => {
+  let hash = 2166136261
+  for (let i = 0; i < seed.length; i++) {
+    hash ^= seed.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return () => {
+    hash += 0x6D2B79F5
+    let t = hash
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+const createDemoScreenshot = (title: string, subtitle: string, risk: MonkeyGraphNode['risk']) => {
+  const accent = risk === 'critical' ? '#ef4444' : risk === 'warning' ? '#f59e0b' : '#10b981'
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="360" height="720" viewBox="0 0 360 720">
+      <rect width="360" height="720" rx="34" fill="#0f172a"/>
+      <rect x="18" y="28" width="324" height="664" rx="28" fill="#f8fafc"/>
+      <rect x="38" y="58" width="284" height="56" rx="16" fill="${accent}"/>
+      <text x="58" y="93" font-family="Arial" font-size="22" font-weight="700" fill="#ffffff">${title}</text>
+      <rect x="38" y="138" width="284" height="96" rx="18" fill="#e2e8f0"/>
+      <rect x="58" y="160" width="170" height="14" rx="7" fill="#94a3b8"/>
+      <rect x="58" y="188" width="224" height="12" rx="6" fill="#cbd5e1"/>
+      <rect x="58" y="210" width="130" height="12" rx="6" fill="#cbd5e1"/>
+      <rect x="38" y="258" width="132" height="132" rx="20" fill="#ffffff"/>
+      <rect x="190" y="258" width="132" height="132" rx="20" fill="#ffffff"/>
+      <rect x="38" y="414" width="284" height="82" rx="18" fill="#ffffff"/>
+      <rect x="38" y="520" width="284" height="82" rx="18" fill="#ffffff"/>
+      <circle cx="104" cy="324" r="30" fill="${accent}" opacity="0.78"/>
+      <circle cx="256" cy="324" r="30" fill="#3b82f6" opacity="0.72"/>
+      <text x="58" y="462" font-family="Arial" font-size="18" font-weight="700" fill="#0f172a">${subtitle}</text>
+      <text x="58" y="568" font-family="Arial" font-size="15" fill="#64748b">screencap sample</text>
+    </svg>
+  `
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+}
+
+const buildMonkeyGraph = (random: () => number, warningCount: number, crashCount: number, anrCount: number) => {
+  const nodeCount = 300
+  const activities = [
+    'SplashActivity', 'HomeActivity', 'FeedActivity', 'PlayerActivity', 
+    'DetailActivity', 'LoginDialog', 'PurchaseSheet', 'SettingsActivity', 
+    'WebViewActivity', 'ErrorBoundary', 'ProfileActivity', 'SearchActivity', 
+    'CommentSheet', 'ShareDialog', 'ThemeSelector', 'CacheManager'
+  ]
+  const events = ['tap', 'swipe', 'back', 'fling', 'input', 'appswitch', 'majornav', 'screencap', 'keyevent', 'pinch']
+  
+  const nodes: MonkeyGraphNode[] = []
+  for (let i = 0; i < nodeCount; i++) {
+    const x = 10 + random() * 80
+    const y = 10 + random() * 80
+    
+    let risk: MonkeyGraphNode['risk'] = 'normal'
+    if (i === nodeCount - 1 && (crashCount > 0 || anrCount > 0)) {
+      risk = 'critical'
+    } else if (random() > 0.97) {
+      risk = 'critical'
+    } else if (random() > (warningCount > 2 ? 0.88 : 0.93)) {
+      risk = 'warning'
+    }
+    
+    const activity = activities[Math.floor(random() * activities.length)] || 'UnknownActivity'
+    const eventName = events[Math.floor(random() * events.length)] || 'sample'
+    
+    nodes.push({
+      id: `screen-${String(i + 1).padStart(3, '0')}`,
+      title: `采样截图 ${i + 1}`,
+      event: `${eventName} #${Math.floor((i + 1) * monkeyScreenshotEvery.value + random() * 30)}`,
+      activity,
+      risk,
+      imageUrl: createDemoScreenshot(`Screen ${i + 1}`, activity, risk),
+      x,
+      y
+    })
+  }
+
+  const edges: MonkeyGraphEdge[] = []
+  for (let i = 1; i < nodeCount; i++) {
+    const parentIndex = Math.floor(random() * i)
+    const sourceNode = nodes[parentIndex]
+    const targetNode = nodes[i]
+    if (sourceNode && targetNode) {
+      edges.push({
+        source: sourceNode.id,
+        target: targetNode.id,
+        event: events[Math.floor(random() * events.length)] || 'tap'
+      })
+    }
+    
+    if (random() > 0.85 && i > 2) {
+      const randomTargetIndex = Math.floor(random() * i)
+      const targetCrossNode = nodes[randomTargetIndex]
+      if (randomTargetIndex !== parentIndex && targetCrossNode && targetNode) {
+        edges.push({
+          source: targetNode.id,
+          target: targetCrossNode.id,
+          event: 'crosspath'
+        })
+      }
+    }
+  }
+
+  monkeyGraphNodes.value = nodes
+  monkeyGraphEdges.value = edges
+  selectedMonkeyNode.value = nodes.find((node) => node.risk === 'critical') || nodes.find((node) => node.risk === 'warning') || nodes[0] || null
+}
+
+const startMonkeyDemo = async () => {
+  if (!monkeyTarget.value.trim()) {
+    ElMessage.warning('请先填写 Monkey 测试目标')
+    return
+  }
+
+  currentStatus.value = 'Executing'
+  executionSucceeded.value = false
+  executionFailed.value = false
+  reportUrl.value = ''
+  analysisResult.value = ''
+  monkeyGraphNodes.value = []
+  monkeyGraphEdges.value = []
+  selectedMonkeyNode.value = null
+  uptime.value = 0
+  duration.value = 0
+  logs.value = [
+    `[${new Date().toLocaleTimeString()}] Android Monkey 图谱 Demo 调度启动`,
+    `[ADB] ${monkeyCommandPreview.value.replace(/\n/g, ' ')}`,
+    `[ADB] ${monkeyScreenshotCommand.value}`,
+    `[CONFIG] 每 ${monkeyScreenshotEvery.value} 个事件采样一张截图，并写入本次 run 的截图节点。`,
+    `[INFO] 正在启动 monkey、logcat 与 screencap 采集管线...`
+  ]
+  scrollToBottom()
+
+  const random = createSeededRandom(monkeySeed.value)
+  const actionPools: Record<string, string[]> = {
+    balanced: ['tap', 'swipe', 'back', 'input', 'rotate', 'wait'],
+    'tap-heavy': ['tap', 'tap', 'tap', 'long_press', 'input', 'wait'],
+    'scroll-heavy': ['swipe', 'swipe', 'fling', 'tap', 'back', 'wait'],
+    'navigation-heavy': ['back', 'tap', 'home_resume', 'deep_link', 'swipe', 'wait']
+  }
+  const actions = actionPools[monkeyStrategy.value] ?? actionPools.balanced ?? ['tap', 'swipe', 'back', 'wait']
+  const checkpoints = [
+    'adb logcat -c && 开始采集 logcat',
+    'screencap 首页状态并生成 screen-01 节点',
+    '随机点击后采样详情页截图',
+    '滑动列表后采样滚动状态',
+    '返回键触发导航分支并采样',
+    '扫描 FATAL EXCEPTION / ANR / 白屏信号'
+  ]
+
+  timer = setInterval(() => {
+    uptime.value++
+    duration.value++
+  }, 1000)
+
+  let step = 0
+  let executedEvents = 0
+  let warningCount = 0
+  const totalSteps = 12
+  const batchSize = Math.max(20, Math.floor(monkeyEventTotal.value / totalSteps))
+  const demoTickMs = Math.max(180, Math.floor((monkeyDurationSec.value * 1000) / totalSteps))
+
+  monkeyTimer = setInterval(async () => {
+    step += 1
+    executedEvents = Math.min(monkeyEventTotal.value, executedEvents + batchSize)
+    const action = actions[Math.floor(random() * actions.length)]
+    const x = Math.floor(random() * 1080)
+    const y = Math.floor(random() * 2400)
+    const checkpoint = checkpoints[step % checkpoints.length]
+    const hasWarning = random() > 0.84
+
+    const shouldCapture = executedEvents % monkeyScreenshotEvery.value < batchSize
+    logs.value.push(`[MONKEY] event #${String(executedEvents).padStart(4, '0')} ${action} x=${x} y=${y}`)
+    logs.value.push(`[PIPELINE] ${checkpoint}${shouldCapture ? ' -> screencap 写入截图节点' : ''}`)
+    if (hasWarning) {
+      warningCount += 1
+      logs.value.push(`[LOGCAT][WARN] Choreographer skipped frames, 页面恢复时间 ${Math.floor(450 + random() * 900)}ms`)
+    }
+    scrollToBottom()
+
+    if (step >= totalSteps || executedEvents >= monkeyEventTotal.value) {
+      if (monkeyTimer) clearInterval(monkeyTimer)
+      monkeyTimer = null
+      if (timer) clearInterval(timer)
+      timer = null
+
+      const crashCount = random() > 0.92 ? 1 : 0
+      const anrCount = random() > 0.9 ? 1 : 0
+      const coverage = Math.min(96, Math.floor(62 + random() * 28 + warningCount))
+      const status = crashCount || anrCount ? 'Failed' : 'Passed'
+      buildMonkeyGraph(random, warningCount, crashCount, anrCount)
+
+      currentStatus.value = status === 'Passed' ? 'Finished' : 'Failed'
+      executionSucceeded.value = status === 'Passed'
+      executionFailed.value = status !== 'Passed'
+      analysisResult.value = [
+        `Monkey Hologram Demo Summary`,
+        `包名: ${monkeyTarget.value}`,
+        `设备: ${monkeyDevice.value}`,
+        `执行命令: ${monkeyCommandPreview.value.replace(/\n/g, ' ')}`,
+        `截图节点: ${monkeyGraphNodes.value.length}`,
+        `执行事件: ${executedEvents}/${monkeyEventTotal.value}`,
+        `覆盖估算: ${coverage}%`,
+        `慢响应告警: ${warningCount}`,
+        `Crash: ${crashCount}, ANR: ${anrCount}`,
+        `建议: ${warningCount > 2 ? '优先点击黄色/红色节点回看截图与 logcat 片段。' : '当前图谱未发现明显稳定性风险。'}`
+      ].join('\n')
+
+      logs.value.push(`[GRAPH] 已生成 ${monkeyGraphNodes.value.length} 个截图节点、${monkeyGraphEdges.value.length} 条事件路径连线。`)
+      logs.value.push(`[SUMMARY] events=${executedEvents}, coverage=${coverage}%, screenshots=${monkeyGraphNodes.value.length}, warnings=${warningCount}, crash=${crashCount}, anr=${anrCount}`)
+      logs.value.push(`[${new Date().toLocaleTimeString()}] Monkey 图谱 Demo 执行${status === 'Passed' ? '完成' : '失败'}。`)
+      scrollToBottom()
+
+      await reportStore.addReport({
+        name: toolName.value,
+        type: 'UI 自动化',
+        status,
+        duration: formatTime(duration.value),
+        author: authStore.user?.username || 'tester',
+        reportUrl: '',
+        analysisResult: analysisResult.value,
+        environment: testServer.value
+      })
+    }
+  }, demoTickMs)
+}
+
 const startExecution = async () => {
   if (currentStatus.value === 'Executing') return
+
+  if (isMonkeyTest) {
+    await startMonkeyDemo()
+    return
+  }
 
   // 针对 Web前端压测的链接校验
   if (isWebFrontendStressTest) {
@@ -510,8 +811,22 @@ const stopExecution = async () => {
     ws = null
   }
   if (timer) clearInterval(timer)
+  if (monkeyTimer) {
+    clearInterval(monkeyTimer)
+    monkeyTimer = null
+  }
 
-  if (!isDramaCheck) {
+  if (isMonkeyTest) {
+    await reportStore.addReport({
+      name: toolName.value,
+      type: 'UI 自动化',
+      status: 'Failed',
+      duration: formatTime(duration.value),
+      author: authStore.user?.username || 'tester',
+      analysisResult: 'Monkey Demo 被手动终止。',
+      environment: testServer.value,
+    })
+  } else if (!isDramaCheck) {
     await reportStore.addReport({
       name: toolName.value,
       type: 'K6 压测',
@@ -544,6 +859,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  if (monkeyTimer) clearInterval(monkeyTimer)
   if (isDramaCheck && visibleStatus.value === 'Executing') {
     dramaRunStore.markBackground()
     return
@@ -575,8 +891,92 @@ onUnmounted(() => {
             <el-input v-model="deleteAccountParam" placeholder="请输入参数" />
           </div>
 
+          <template v-if="isMonkeyTest">
+            <div class="param-group">
+              <label class="param-label">测试目标</label>
+              <el-input v-model="monkeyTarget" placeholder="请输入 App 包名、页面路径或测试入口" />
+            </div>
+            <div class="param-group">
+              <label class="param-label">测试设备</label>
+              <el-input v-model="monkeyDevice" placeholder="例如 Pixel 7 / Android 14" />
+            </div>
+            <div class="param-row">
+              <div class="param-group half">
+                <label class="param-label">事件数</label>
+                <el-input-number
+                  v-model="monkeyEventTotal"
+                  :min="100"
+                  :max="20000"
+                  :step="100"
+                  controls-position="right"
+                  class="param-number"
+                />
+              </div>
+              <div class="param-group half">
+                <label class="param-label">时长</label>
+                <el-input-number
+                  v-model="monkeyDurationSec"
+                  :min="1"
+                  :max="120"
+                  :step="1"
+                  controls-position="right"
+                  class="param-number"
+                />
+              </div>
+            </div>
+            <div class="param-row">
+              <div class="param-group half">
+                <label class="param-label">Throttle</label>
+                <el-input-number
+                  v-model="monkeyThrottleMs"
+                  :min="0"
+                  :max="3000"
+                  :step="100"
+                  controls-position="right"
+                  class="param-number"
+                />
+              </div>
+              <div class="param-group half">
+                <label class="param-label">截图间隔</label>
+                <el-input-number
+                  v-model="monkeyScreenshotEvery"
+                  :min="20"
+                  :max="2000"
+                  :step="20"
+                  controls-position="right"
+                  class="param-number"
+                />
+              </div>
+            </div>
+            <div class="param-group">
+              <label class="param-label">随机策略</label>
+              <el-select v-model="monkeyStrategy" class="param-select">
+                <el-option
+                  v-for="item in monkeyStrategyOptions"
+                  :key="item.value"
+                  :label="item.label"
+                  :value="item.value"
+                />
+              </el-select>
+            </div>
+            <div class="param-group">
+              <label class="param-label">随机种子</label>
+              <el-input v-model="monkeySeed" placeholder="相同 seed 可复现同一批随机事件" />
+            </div>
+            <div class="monkey-risk-card">
+              <span class="monkey-risk-card__label">运行级别</span>
+              <strong>{{ monkeyRiskLevel }}</strong>
+              <span>当前为图谱 demo：模拟 monkey、logcat 与 screencap 管线，执行后生成可点击截图节点。</span>
+            </div>
+            <div class="monkey-command-preview">
+              <span class="monkey-risk-card__label">ADB 命令预览</span>
+              <pre>{{ monkeyCommandPreview }}</pre>
+              <pre>{{ monkeyScreenshotCommand }}</pre>
+            </div>
+          </template>
+
           <!-- 针对业务自检工具，隐藏原本的链接输入框 -->
-          <div v-if="!isDramaCheck" class="param-group">
+          <div v-if="!isDramaCheck && !isMonkeyTest" class="param-group">
             <label class="param-label">
               <span class="link-icon">🔗</span> 测试链接
             </label>
@@ -587,7 +987,7 @@ onUnmounted(() => {
             />
           </div>
 
-          <div v-if="!isWebFrontendStressTest" class="param-row">
+          <div v-if="!isWebFrontendStressTest && !isMonkeyTest" class="param-row">
             <div class="param-group half">
               <label class="param-label">测试服务器</label>
               <!-- 改为下拉框切换 -->
@@ -628,7 +1028,35 @@ onUnmounted(() => {
         </div>
 
         <!-- 两种视图状态：日志 / HTML报告 -->
-        <div v-if="visibleReportUrl" class="report-container">
+        <div v-if="monkeyGraphReady" class="monkey-hologram">
+          <MonkeyHologram3D
+            :nodes="monkeyGraphNodes"
+            :edges="monkeyGraphEdges"
+            :selected-id="selectedMonkeyNode?.id"
+            :target-app="monkeyTarget"
+            @select="selectedMonkeyNode = $event"
+          />
+          <div class="monkey-preview-panel">
+            <div class="monkey-preview-panel__header">
+              <span>{{ selectedMonkeyNode?.title || '截图预览' }}</span>
+              <strong :class="`risk-text risk-text--${selectedMonkeyNode?.risk || 'normal'}`">
+                {{ selectedMonkeyNode?.risk || 'normal' }}
+              </strong>
+            </div>
+            <img
+              v-if="selectedMonkeyNode"
+              :src="selectedMonkeyNode.imageUrl"
+              :alt="selectedMonkeyNode.title"
+              class="monkey-preview-panel__image"
+            />
+            <div v-if="selectedMonkeyNode" class="monkey-preview-panel__meta">
+              <span>事件：{{ selectedMonkeyNode.event }}</span>
+              <span>页面：{{ selectedMonkeyNode.activity }}</span>
+              <span>来源：adb exec-out screencap -p</span>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="visibleReportUrl" class="report-container">
           <iframe :src="visibleReportUrl" class="report-iframe" frameborder="0"></iframe>
         </div>
         <div v-else class="log-content" ref="logContainer">
@@ -803,6 +1231,50 @@ onUnmounted(() => {
   width: 100%;
 }
 
+.param-number {
+  width: 100%;
+}
+
+.monkey-risk-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.monkey-risk-card__label {
+  color: #16a34a;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.monkey-command-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  color: #d1fae5;
+}
+
+.monkey-command-preview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+}
+
 /* ==================== 右侧日志面 ==================== */
 .log-panel {
   flex: 1;
@@ -895,6 +1367,279 @@ onUnmounted(() => {
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ==================== Monkey 截图全息图谱 ==================== */
+.monkey-hologram {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  padding: 16px;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(45, 212, 191, 0.24), transparent 32%),
+    radial-gradient(circle at 72% 18%, rgba(99, 102, 241, 0.2), transparent 28%),
+    radial-gradient(circle at 18% 80%, rgba(14, 165, 233, 0.18), transparent 30%),
+    linear-gradient(135deg, #020617 0%, #07111f 48%, #0f172a 100%);
+  overflow: hidden;
+}
+
+.monkey-hologram__stage-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  perspective: 1100px;
+  border-radius: 22px;
+}
+
+.monkey-hologram__stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 1px solid rgba(103, 232, 249, 0.22);
+  border-radius: 22px;
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(125, 211, 252, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(125, 211, 252, 0.055) 1px, transparent 1px),
+    radial-gradient(circle at 50% 50%, rgba(34, 211, 238, 0.1), transparent 42%);
+  background-size: 30px 30px, 30px 30px, 100% 100%;
+  transform: rotateX(8deg) rotateY(-8deg);
+  transform-style: preserve-3d;
+  box-shadow:
+    inset 0 0 62px rgba(34, 211, 238, 0.12),
+    inset 0 0 140px rgba(15, 23, 42, 0.62),
+    0 28px 70px rgba(0, 0, 0, 0.35);
+}
+
+.monkey-hologram__stage::before {
+  content: "";
+  position: absolute;
+  inset: 10%;
+  border-radius: 50%;
+  border: 1px solid rgba(125, 211, 252, 0.2);
+  transform: translateZ(-70px) rotateX(68deg);
+  box-shadow: 0 0 58px rgba(34, 211, 238, 0.18);
+}
+
+.monkey-hologram__stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(110deg, transparent 0%, rgba(255, 255, 255, 0.12) 44%, transparent 52%),
+    radial-gradient(circle at 50% 52%, transparent 0 36%, rgba(34, 211, 238, 0.08) 37%, transparent 48%);
+  mix-blend-mode: screen;
+}
+
+.monkey-hologram__aura {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) translateZ(-40px);
+  background: radial-gradient(circle, rgba(45, 212, 191, 0.34), rgba(14, 165, 233, 0.08) 46%, transparent 68%);
+  filter: blur(4px);
+}
+
+.monkey-orbit {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 62%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(125, 211, 252, 0.32);
+  transform-style: preserve-3d;
+  box-shadow: 0 0 24px rgba(34, 211, 238, 0.13);
+  pointer-events: none;
+}
+
+.monkey-orbit--one {
+  transform: translate(-50%, -50%) rotateX(66deg) rotateZ(12deg) translateZ(-26px);
+}
+
+.monkey-orbit--two {
+  width: 76%;
+  border-color: rgba(167, 139, 250, 0.28);
+  transform: translate(-50%, -50%) rotateX(58deg) rotateY(44deg) rotateZ(-20deg) translateZ(-44px);
+}
+
+.monkey-orbit--three {
+  width: 48%;
+  border-color: rgba(52, 211, 153, 0.3);
+  transform: translate(-50%, -50%) rotateX(72deg) rotateY(-42deg) rotateZ(48deg) translateZ(24px);
+}
+
+.monkey-hologram__edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.monkey-hologram__edge {
+  stroke: rgba(103, 232, 249, 0.5);
+  stroke-width: 0.28;
+  filter: drop-shadow(0 0 5px rgba(34, 211, 238, 0.72));
+}
+
+.monkey-node {
+  position: absolute;
+  width: auto;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: translate(-50%, -50%);
+  transform-style: preserve-3d;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: #c4f1ff;
+  animation: monkey-node-float 4.8s ease-in-out infinite;
+  animation-delay: var(--node-delay);
+}
+
+.monkey-node:hover {
+  transform: translate(-50%, -50%) translateZ(calc(var(--node-depth) + 30px)) scale(1.12);
+}
+
+.monkey-node__core {
+  position: relative;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 28%, #ffffff 0 8%, #86efac 18%, #22c55e 58%, #064e3b 100%);
+  box-shadow:
+    0 0 0 8px rgba(34, 197, 94, 0.12),
+    0 0 22px rgba(34, 197, 94, 0.9),
+    0 12px 26px rgba(0, 0, 0, 0.32);
+}
+
+.monkey-node__halo {
+  position: absolute;
+  top: 8px;
+  width: 46px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(187, 247, 208, 0.52);
+  transform: rotateX(72deg) translateZ(-10px);
+  filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.5));
+  pointer-events: none;
+}
+
+.monkey-node--warning .monkey-node__core {
+  background:
+    radial-gradient(circle at 32% 28%, #ffffff 0 8%, #fde68a 18%, #f59e0b 58%, #78350f 100%);
+  box-shadow: 0 0 0 8px rgba(245, 158, 11, 0.14), 0 0 32px rgba(245, 158, 11, 0.9), 0 12px 26px rgba(0, 0, 0, 0.32);
+}
+
+.monkey-node--warning .monkey-node__halo {
+  border-color: rgba(253, 230, 138, 0.58);
+  filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.62));
+}
+
+.monkey-node--critical .monkey-node__core {
+  background:
+    radial-gradient(circle at 32% 28%, #ffffff 0 8%, #fecaca 18%, #ef4444 58%, #7f1d1d 100%);
+  box-shadow: 0 0 0 9px rgba(239, 68, 68, 0.16), 0 0 38px rgba(239, 68, 68, 0.98), 0 12px 26px rgba(0, 0, 0, 0.34);
+}
+
+.monkey-node--critical .monkey-node__halo {
+  border-color: rgba(252, 165, 165, 0.62);
+  filter: drop-shadow(0 0 9px rgba(239, 68, 68, 0.68));
+}
+
+.monkey-node--active .monkey-node__core {
+  outline: 2px solid rgba(255, 255, 255, 0.86);
+  outline-offset: 5px;
+}
+
+.monkey-node__label {
+  position: relative;
+  z-index: 3;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(2, 6, 23, 0.62);
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  backdrop-filter: blur(10px);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+@keyframes monkey-node-float {
+  0%, 100% {
+    transform: translate(-50%, -50%) translateZ(var(--node-depth));
+  }
+  50% {
+    transform: translate(-50%, calc(-50% - 8px)) translateZ(calc(var(--node-depth) + 18px));
+  }
+}
+
+.monkey-preview-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.76), rgba(2, 6, 23, 0.7));
+  border: 1px solid rgba(125, 211, 252, 0.26);
+  color: #e2e8f0;
+  backdrop-filter: blur(18px);
+  box-shadow:
+    inset 0 0 22px rgba(14, 165, 233, 0.08),
+    0 24px 55px rgba(0, 0, 0, 0.28);
+}
+
+.monkey-preview-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.risk-text {
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.risk-text--normal { color: #86efac; }
+.risk-text--warning { color: #fcd34d; }
+.risk-text--critical { color: #fca5a5; }
+
+.monkey-preview-panel__image {
+  width: 100%;
+  min-height: 0;
+  border-radius: 18px;
+  object-fit: cover;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+}
+
+.monkey-preview-panel__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* ==================== 报告展现区 ==================== */

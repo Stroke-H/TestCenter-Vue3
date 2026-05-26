@@ -1,5 +1,13 @@
 # ChangeLog - Dashboard
 
+## 2026-05-26
+
+### Added
+- **Monkey Hologram Demo Entry**: 仪表盘“性能测试”分区新增“Monkey测试”入口，进入执行页后可配置包名、设备、事件数、throttle、截图间隔和 seed，模拟 `adb shell monkey`、`logcat` 与 `screencap` 管线，并在执行完成后生成可点击预览截图的原子结构全息图谱。
+
+### Changed
+- **Monkey 3D Space Model**: Monkey 图谱从 CSS 伪 3D 升级为 Three.js WebGL 空间模型，支持拖拽旋转、节点点击拾取、风险节点发光、中心 App 标识、球面节点分布、标签缩放与截图预览联动。
+
 ## 2026-04-28
 
 ### Changed

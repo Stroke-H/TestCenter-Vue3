@@ -15,6 +15,7 @@
     "echarts": "^6.1.0",
     "element-plus": "^2.13.5",
     "pinia": "^3.0.4",
+    "three": "^0.184.0",
     "uuid": "^13.0.0",
     "vue": "^3.5.25",
     "vue-router": "^4.6.4",
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@types/k6": "^1.6.0",
     "@types/node": "^24.10.1",
+    "@types/three": "^0.184.1",
     "@vitejs/plugin-vue": "^6.0.2",
     "@vue/tsconfig": "^0.8.1",
     "typescript": "~5.9.3",

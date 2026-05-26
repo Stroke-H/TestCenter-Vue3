@@ -128,6 +128,7 @@ const sessions = ref<SessionRecord[]>([
 
 const operationLogs = ref<OperationLog[]>([])
 const projects = ref<ProjectOption[]>([])
+const auditLogTableMaxHeight = 48 + 15 * 46
 
 // --- State ---
 const drawerVisible = ref(false)
@@ -585,8 +586,14 @@ const formatTime = (ts: string) => {
         </div>
       </div>
 
-      <div class="table-container">
-        <el-table :data="operationLogs" style="width: 100%" empty-text="暂无记录，执行 AI 操作后会展示在这里。">
+      <div class="table-container audit-log-table-container">
+        <el-table
+          :data="operationLogs"
+          :max-height="auditLogTableMaxHeight"
+          class="audit-log-table"
+          style="width: 100%"
+          empty-text="暂无记录，执行 AI 操作后会展示在这里。"
+        >
           <el-table-column prop="timestamp" label="时间" width="180">
             <template #default="scope">{{ formatTime(scope.row.timestamp) }}</template>
           </el-table-column>
@@ -896,6 +903,14 @@ const formatTime = (ts: string) => {
   border: 1px solid #f0f0f0;
   border-radius: 14px;
   overflow: hidden;
+}
+
+.audit-log-table-container {
+  max-height: 738px;
+}
+
+:deep(.audit-log-table .el-table__row) {
+  height: 46px;
 }
 
 .sender-info {
