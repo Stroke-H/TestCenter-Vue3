@@ -7,10 +7,10 @@ interface MonkeyGraphNode {
   title: string
   event: string
   activity: string
-  risk: 'normal' | 'warning' | 'critical'
-  imageUrl: string
-  x: number
-  y: number
+  risk: 'normal' | 'warning' | 'critical' | 'unknown'
+  imageUrl?: string
+  x?: number
+  y?: number
 }
 
 interface MonkeyGraphEdge {
@@ -48,7 +48,8 @@ let currentRotation = { x: -0.22, y: 0.34 }
 const riskColors: Record<MonkeyGraphNode['risk'], number> = {
   normal: 0x28f0a0,
   warning: 0xffb020,
-  critical: 0xff476f
+  critical: 0xff476f,
+  unknown: 0x64748b
 }
 
 // -------------------------------------------------------------

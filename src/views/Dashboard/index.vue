@@ -20,6 +20,7 @@ interface ToolDef {
   statusIndicator?: 'toggle-off' | 'toggle-on' | 'dots' | 'ready' | 'on-hold'
   statusText?: string
   extra?: string
+  permissionKey?: string
 }
 
 interface RecentTool {
@@ -199,7 +200,8 @@ const perfTools = ref<ToolDef[]>([
     iconName: 'Odometer',
     iconColor: '#f59e0b',
     iconBg: 'rgba(245, 158, 11, 0.1)',
-    statusText: '性能就绪'
+    statusText: '性能就绪',
+    permissionKey: 'dashboard.performance.visible'
   },
   {
     id: 'monkey-test',
@@ -208,7 +210,8 @@ const perfTools = ref<ToolDef[]>([
     iconName: 'Aim',
     iconColor: '#10b981',
     iconBg: 'rgba(16, 185, 129, 0.1)',
-    statusText: 'Demo 就绪'
+    statusText: 'Demo 就绪',
+    permissionKey: 'dashboard.monkey_test.visible'
   },
   {
     id: 'latency-sim',
@@ -237,6 +240,9 @@ const canShowUIAuto = computed(() => permissionStore.canAccess('dashboard.ui_aut
 const canShowTestCaseGen = computed(() => permissionStore.canAccess('dashboard.testcase_gen.visible'))
 const canShowSkillify = computed(() => permissionStore.canAccess('dashboard.skillify.visible'))
 const canShowPerformance = computed(() => permissionStore.canAccess('dashboard.performance.visible'))
+const canShowMonkeyTest = computed(() => permissionStore.canAccess('dashboard.monkey_test.visible'))
+const visiblePerfTools = computed(() => perfTools.value.filter((tool) => permissionStore.canAccess(tool.permissionKey)))
+const canShowPerformanceSection = computed(() => canShowPerformance.value || canShowMonkeyTest.value)
 const canShowJungle = computed(() => permissionStore.canAccess('dashboard.jungle.visible'))
 const canShowNovelReader = computed(() => permissionStore.canAccess('dashboard.novel_reader.visible'))
 const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.video_player.visible'))
@@ -379,6 +385,31 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           </div>
         </div>
 
+        <div v-if="canShowTestProcess" class="tool-card">
+          <div class="tool-card__top">
+            <div class="tool-card__icon" style="background: rgba(37, 99, 235, 0.1)">
+              <el-icon :size="20" color="#2563eb"><component :is="Icons.Share" /></el-icon>
+            </div>
+          </div>
+          <h3 class="tool-card__name">验收项目树</h3>
+          <p class="tool-card__desc">按项目代码和版本号整理验收报告，快速查看测试时间与需求点</p>
+          <div class="tool-card__footer">
+            <span class="ready-text">V0.1</span>
+            <a
+              href="#"
+              class="open-link"
+              @click.prevent="handleRouteLaunch('/test_process/project_tree', {
+                id: 'acceptance-project-tree',
+                name: '验收项目树',
+                description: '按项目代码和版本号整理验收报告，快速查看测试时间与需求点',
+                iconName: 'Share',
+                iconColor: '#2563eb',
+                iconBg: 'rgba(37, 99, 235, 0.1)'
+              })"
+            >打开</a>
+          </div>
+        </div>
+
         <div v-if="canShowSandboxAccounts" class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(16, 185, 129, 0.12)">
@@ -497,7 +528,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
     </div>
 
     <!-- ========== Performance ========== -->
-    <div v-if="canShowPerformance" class="section">
+    <div v-if="canShowPerformanceSection" class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--green">
@@ -509,7 +540,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
 
       <div class="card-grid card-grid--4">
         <div
-          v-for="tool in perfTools"
+          v-for="tool in visiblePerfTools"
           :key="tool.id"
           class="tool-card"
         >

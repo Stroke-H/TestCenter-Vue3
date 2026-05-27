@@ -39,7 +39,7 @@ let trendChart: ECharts | null = null
 let stackChart: ECharts | null = null
 let sankeyChart: ECharts | null = null
 
-const filterOptions = ['Web 性能分析', 'K6 压测', '接口验证', 'UI 自动化']
+const filterOptions = ['Web 性能分析', 'K6 压测', '接口验证', 'UI 自动化', 'Monkey 测试']
 
 // 挂载全局 Reports 仓库
 const reportStore = useReportStore()
@@ -84,6 +84,7 @@ const dramaAnalytics = ref<DramaFailedStat[]>([])
 
 const normalizeReportType = (type: string) => {
   if (type === '业务自动化') return 'K6 压测'
+  if (type === 'Monkey测试') return 'Monkey 测试'
   return type
 }
 
@@ -166,9 +167,22 @@ const getBreakdownTotal = (item: DramaFailedStat | null) => {
   return item.breakdown.reduce((sum, part) => sum + part.value, 0)
 }
 
+const estimateSankeyLabelWidth = (label: string) => {
+  return Array.from(label).reduce((width, char) => width + (char.charCodeAt(0) > 255 ? 13 : 7), 0)
+}
+
 const selectedSankeyItems = computed<FailureBreakdownItem[]>(() => {
   if (!selectedAnalytics.value) return []
   return selectedAnalytics.value.breakdown.filter(item => item.value > 0)
+})
+
+const sankeyLabelLayout = computed(() => {
+  const maxLabelWidth = Math.max(0, ...selectedSankeyItems.value.map(item => estimateSankeyLabelWidth(item.label)))
+  const labelWidth = Math.min(108, Math.max(48, Math.ceil(maxLabelWidth + 8)))
+  return {
+    labelWidth,
+    right: Math.min(124, Math.max(58, labelWidth + 24))
+  }
 })
 
 const disposeAnalyticsCharts = () => {
@@ -315,6 +329,7 @@ const getStackOption = (): EChartsOption => {
 
 const getSankeyOption = (): EChartsOption => {
   const sourceValue = getBreakdownTotal(selectedAnalytics.value)
+  const { labelWidth, right } = sankeyLabelLayout.value
   return {
     color: selectedSankeyItems.value.map(item => item.color),
     tooltip: {
@@ -328,7 +343,7 @@ const getSankeyOption = (): EChartsOption => {
       {
         type: 'sankey',
         left: 18,
-        right: 24,
+        right,
         top: 20,
         bottom: 20,
         nodeWidth: 18,
@@ -343,7 +358,9 @@ const getSankeyOption = (): EChartsOption => {
         label: {
           color: '#0f172a',
           fontWeight: 700,
-          fontSize: 12
+          fontSize: 12,
+          width: labelWidth,
+          overflow: 'truncate'
         },
         data: [
           { name: '异常分类合计', value: sourceValue, itemStyle: { color: '#0f172a' } },
@@ -427,6 +444,7 @@ const getStatusType = (status: string) => {
   switch (status) {
     case 'Passed': return 'success'
     case 'Failed': return 'danger'
+    case 'Warning': return 'warning'
     case 'Running': return 'primary'
     default: return 'info'
   }

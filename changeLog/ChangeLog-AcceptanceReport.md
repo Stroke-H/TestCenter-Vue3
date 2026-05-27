@@ -1,5 +1,10 @@
 # ChangeLog - Acceptance Report
 
+## 2026-05-27
+
+### Changed
+- **Deep Link Preview**: 验收报告页支持通过 `reportId` 查询参数自动打开对应报告详情，便于从项目树节点直接查看原始验收记录。
+
 ## 2026-05-19
 
 ### Changed

@@ -1,5 +1,14 @@
 # ChangeLog - Test Process
 
+## 2026-05-27
+
+### Added
+- **Acceptance Project Tree**: 新增“验收项目树”页面，可按项目代码聚合验收报告，并以版本号生成节点展示测试时间与测试需求点。
+
+### Changed
+- **Project Tree Scope**: 验收项目树新增项目单选筛选，默认展示最近有报告的项目，页面内不再一次性铺开所有项目记录。
+- **Project Tree Record Display**: 验收项目树节点记录改为纯信息展示，取消“查看”按钮和跳转行为。
+
 ## 2026-04-24
 
 ### Changed

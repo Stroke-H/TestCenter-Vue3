@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, watch, markRaw } from 'vue'
+import { useRoute } from 'vue-router'
 import { Plus, Search, Calendar, User, Money, Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -10,6 +11,7 @@ defineOptions({ name: 'AcceptanceReport' })
 // --- API Service ---
 const API_BASE = '/api'
 const authStore = useAuthStore()
+const route = useRoute()
 
 interface ProjectOption {
   id: string
@@ -189,6 +191,13 @@ const handleRowClick = (row: any) => {
   previewMode.value = 'view'
   currentPreview.value = row
   previewVisible.value = true
+}
+
+const openReportById = (reportId: string) => {
+  const matchedReport = recentReports.value.find((report) => report.id === reportId)
+  if (matchedReport) {
+    handleRowClick(matchedReport)
+  }
 }
 
 const canSendToFeishu = computed(() => {
@@ -574,6 +583,16 @@ watch(() => reportForm.value.project_code, () => {
 watch(
   () => [previewMode.value, reportForm.value.project_name, reportForm.value.project_code, reportForm.value.version],
   scheduleAutoFetchProjectItems
+)
+
+watch(
+  () => [route.query.reportId, recentReports.value.length],
+  ([reportId]) => {
+    if (typeof reportId === 'string' && reportId) {
+      openReportById(reportId)
+    }
+  },
+  { immediate: true }
 )
 
 onMounted(async () => {

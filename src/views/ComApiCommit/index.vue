@@ -158,16 +158,48 @@ interface MonkeyGraphNode {
   title: string
   event: string
   activity: string
-  risk: 'normal' | 'warning' | 'critical'
-  imageUrl: string
-  x: number
-  y: number
+  risk: 'normal' | 'warning' | 'critical' | 'unknown'
+  imageUrl?: string
+  summary?: string
+  evidence?: MonkeyRiskEvidence[]
+  x?: number
+  y?: number
 }
 
 interface MonkeyGraphEdge {
   source: string
   target: string
   event: string
+}
+
+interface MonkeyRiskEvidence {
+  level: 'warning' | 'critical'
+  source: string
+  message: string
+  timestamp?: string
+}
+
+interface MonkeyDevice {
+  id: string
+  status: string
+  model?: string
+  product?: string
+}
+
+interface MonkeyPackage {
+  name: string
+}
+
+interface MonkeyRunSummary {
+  runId: string
+  status: 'running' | 'passed' | 'warning' | 'failed' | 'stopped' | 'incomplete'
+  duration: string
+  screenshotCount: number
+  normalCount: number
+  warningCount: number
+  criticalCount: number
+  unknownCount: number
+  error?: string
 }
 
 const currentStatus = ref<ExecStatus>('Ready')
@@ -180,6 +212,7 @@ const uptime = ref(0)
 const duration = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
 let monkeyTimer: ReturnType<typeof setInterval> | null = null
+let monkeyPollTimer: ReturnType<typeof setInterval> | null = null
 
 // 日志及报告
 const logs = ref<string[]>(['准备就绪，点击 Execute 开始执行'])
@@ -201,13 +234,20 @@ const visibleStatus = computed<ExecStatus>(() => {
 })
 
 const monkeyTarget = ref('com.company.shortsdrama.wave')
-const monkeyDevice = ref('Pixel 7 / Android 14')
-const monkeyDurationSec = ref(3)
+const monkeyDevice = ref('')
+const monkeyDevices = ref<MonkeyDevice[]>([])
+const monkeyPackages = ref<MonkeyPackage[]>([])
+const monkeyPackagesLoading = ref(false)
+const monkeyAdbAvailable = ref(false)
+const monkeyAdbPath = ref('')
+const monkeyDurationSec = ref(3600)
 const monkeyEventTotal = ref(1200)
-const monkeySeed = ref('TC-MONKEY-20260526')
+const monkeySeed = ref('20260526')
 const monkeyStrategy = ref('balanced')
 const monkeyThrottleMs = ref(300)
-const monkeyScreenshotEvery = ref(120)
+const monkeyPrecisionMode = ref<'high' | 'low'>('low')
+const monkeyDenseSamplingEnabled = ref(true)
+const monkeyRunId = ref('')
 const monkeyGraphNodes = ref<MonkeyGraphNode[]>([])
 const monkeyGraphEdges = ref<MonkeyGraphEdge[]>([])
 const selectedMonkeyNode = ref<MonkeyGraphNode | null>(null)
@@ -222,10 +262,12 @@ const monkeyStrategyOptions = [
 const monkeyRiskLevel = computed(() => {
   if (monkeyEventTotal.value >= 5000 || monkeyDurationSec.value >= 30) return '高压'
   if (monkeyEventTotal.value >= 2000 || monkeyDurationSec.value >= 10) return '中压'
-  return 'Demo'
+  return '真机'
 })
 
 const monkeyGraphReady = computed(() => isMonkeyTest && monkeyGraphNodes.value.length > 0 && visibleStatus.value !== 'Executing')
+const monkeyScreenshotIntervalSec = computed(() => monkeyPrecisionMode.value === 'high' ? 10 : 30)
+const monkeyScreenshotEvery = computed(() => Math.max(1, Math.floor((monkeyScreenshotIntervalSec.value * 1000) / Math.max(1, monkeyThrottleMs.value))))
 
 const monkeyCommandPreview = computed(() => {
   const baseArgs = [
@@ -243,7 +285,7 @@ const monkeyCommandPreview = computed(() => {
 })
 
 const monkeyScreenshotCommand = computed(() => {
-  return `adb -s ${monkeyDevice.value || '<deviceId>'} exec-out screencap -p > screenshots/<eventIndex>.png`
+  return `adb -s ${monkeyDevice.value || '<deviceId>'} exec-out screencap -p > screenshots/screen-0001.png`
 })
 
 const formatTime = (seconds: number) => {
@@ -502,12 +544,218 @@ const startMonkeyDemo = async () => {
     }
   }, demoTickMs)
 }
+void startMonkeyDemo
+
+const monkeyAuthHeaders = () => ({
+  'Content-Type': 'application/json',
+  Authorization: authStore.token || ''
+})
+
+const fetchMonkeyDevices = async () => {
+  if (!isMonkeyTest) return
+  try {
+    const response = await fetch(buildBackendUrl('/api/monkey/devices'), {
+      headers: { Authorization: authStore.token || '' }
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || '设备读取失败')
+    monkeyAdbAvailable.value = Boolean(data.adbAvailable)
+    monkeyAdbPath.value = data.adbPath || ''
+    monkeyDevices.value = Array.isArray(data.devices) ? data.devices : []
+    const previousDevice = monkeyDevice.value
+    if (!monkeyDevice.value) {
+      const online = monkeyDevices.value.find(device => device.status === 'device')
+      monkeyDevice.value = online?.id || monkeyDevices.value[0]?.id || ''
+    }
+    if (monkeyDevice.value && monkeyDevice.value === previousDevice) {
+      await fetchMonkeyPackages()
+    }
+    if (!data.adbAvailable) {
+      logs.value = [`[ADB] ${data.message || '未找到 adb'}`]
+    }
+  } catch (error: any) {
+    ElMessage.error(error.message || '读取 Android 设备失败')
+  }
+}
+
+const fetchMonkeyPackages = async () => {
+  if (!isMonkeyTest || !monkeyDevice.value) {
+    monkeyPackages.value = []
+    return
+  }
+  monkeyPackagesLoading.value = true
+  try {
+    const response = await fetch(buildBackendUrl(`/api/monkey/devices/${encodeURIComponent(monkeyDevice.value)}/packages`), {
+      headers: { Authorization: authStore.token || '' }
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || 'App 包名读取失败')
+    monkeyPackages.value = Array.isArray(data.packages) ? data.packages : []
+    if (!monkeyPackages.value.some(item => item.name === monkeyTarget.value)) {
+      monkeyTarget.value = monkeyPackages.value[0]?.name || ''
+    }
+  } catch (error: any) {
+    monkeyPackages.value = []
+    ElMessage.error(error.message || '读取三方 App 包名失败')
+  } finally {
+    monkeyPackagesLoading.value = false
+  }
+}
+
+watch(monkeyDevice, (deviceId, previousDeviceId) => {
+  if (!isMonkeyTest || deviceId === previousDeviceId) return
+  fetchMonkeyPackages()
+})
+
+const mapMonkeyStatus = (status: MonkeyRunSummary['status']): ExecStatus => {
+  if (status === 'running') return 'Executing'
+  if (status === 'failed' || status === 'incomplete') return 'Failed'
+  if (status === 'stopped') return 'Stopped'
+  return 'Finished'
+}
+
+const loadMonkeyEvents = async (runId: string) => {
+  const response = await fetch(buildBackendUrl(`/api/monkey/runs/${runId}/events`), {
+    headers: { Authorization: authStore.token || '' }
+  })
+  if (!response.ok) return
+  const events = await response.json() as MonkeyGraphNode[]
+  monkeyGraphNodes.value = events.map((event, index) => ({
+    ...event,
+    x: 12 + (index % 12) * 7,
+    y: 12 + Math.floor(index / 12) * 8
+  }))
+  monkeyGraphEdges.value = monkeyGraphNodes.value.slice(1).map((node, index) => ({
+    source: monkeyGraphNodes.value[index]?.id || node.id,
+    target: node.id,
+    event: node.event || 'screencap'
+  }))
+  selectedMonkeyNode.value =
+    monkeyGraphNodes.value.find(node => node.risk === 'critical') ||
+    monkeyGraphNodes.value.find(node => node.risk === 'warning') ||
+    monkeyGraphNodes.value[0] ||
+    null
+}
+
+const refreshMonkeyRun = async (runId: string) => {
+  const response = await fetch(buildBackendUrl(`/api/monkey/runs/${runId}`), {
+    headers: { Authorization: authStore.token || '' }
+  })
+  const summary = await response.json() as MonkeyRunSummary
+  if (!response.ok) throw new Error((summary as any).error || '读取 Monkey 状态失败')
+  currentStatus.value = mapMonkeyStatus(summary.status)
+  duration.value = summary.duration ? summary.duration.split(':').reduce((acc, part) => acc * 60 + Number(part || 0), 0) : duration.value
+  const runtimeLogs = await fetchMonkeyRuntimeLogs(runId)
+  logs.value = [
+    `[RUN] ${summary.runId} ${summary.status}`,
+    `[SCREENSHOT] ${summary.screenshotCount} 张，normal=${summary.normalCount}, warning=${summary.warningCount}, critical=${summary.criticalCount}, unknown=${summary.unknownCount}`,
+    summary.error ? `[ERROR] ${summary.error}` : '[INFO] Monkey 真机测试采集中...',
+    ...runtimeLogs
+  ]
+  if (summary.status !== 'running') {
+    if (monkeyPollTimer) clearInterval(monkeyPollTimer)
+    monkeyPollTimer = null
+    if (timer) clearInterval(timer)
+    timer = null
+    executionSucceeded.value = summary.status === 'passed'
+    executionFailed.value = ['failed', 'incomplete', 'stopped'].includes(summary.status)
+    await loadMonkeyEvents(runId)
+    reportStore.fetchReports()
+  }
+}
+
+const fetchMonkeyRuntimeLogs = async (runId: string) => {
+  const readLog = async (kind: 'monkey' | 'logcat') => {
+    try {
+      const response = await fetch(buildBackendUrl(`/api/monkey/runs/${runId}/logs?kind=${kind}`), {
+        headers: { Authorization: authStore.token || '' }
+      })
+      if (!response.ok) return []
+      const text = await response.text()
+      return text
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean)
+        .slice(-40)
+        .map(line => `[${kind.toUpperCase()}] ${line}`)
+    } catch {
+      return []
+    }
+  }
+  const [monkeyLines, logcatLines] = await Promise.all([readLog('monkey'), readLog('logcat')])
+  return [...monkeyLines, ...logcatLines].slice(-80)
+}
+
+const startMonkeyRun = async () => {
+  if (!monkeyTarget.value.trim()) {
+    ElMessage.warning('请先填写 Android App 包名')
+    return
+  }
+  if (!monkeyDevice.value) {
+    ElMessage.warning('请先选择已授权的 Android 设备')
+    await fetchMonkeyDevices()
+    return
+  }
+
+  currentStatus.value = 'Executing'
+  executionSucceeded.value = false
+  executionFailed.value = false
+  monkeyGraphNodes.value = []
+  monkeyGraphEdges.value = []
+  selectedMonkeyNode.value = null
+  logs.value = [
+    `[${new Date().toLocaleTimeString()}] Android Monkey 真机测试启动`,
+    `[ADB] ${monkeyCommandPreview.value.replace(/\n/g, ' ')}`,
+    `[SCREENSHOT] ${monkeyPrecisionMode.value === 'high' ? '高精度' : '低精度'}模式，每 ${monkeyScreenshotIntervalSec.value}s 截图一次`,
+    `[DENSE] 异常加密采样${monkeyDenseSamplingEnabled.value ? '开启：warning 5s/张 60s，critical 2s/张 120s' : '关闭'}`
+  ]
+  uptime.value = 0
+  duration.value = 0
+  timer = setInterval(() => {
+    uptime.value++
+    duration.value++
+  }, 1000)
+
+  try {
+    const response = await fetch(buildBackendUrl('/api/monkey/runs'), {
+      method: 'POST',
+      headers: monkeyAuthHeaders(),
+      body: JSON.stringify({
+        packageName: monkeyTarget.value,
+        deviceId: monkeyDevice.value,
+        precisionMode: monkeyPrecisionMode.value,
+        durationSec: monkeyDurationSec.value,
+        eventTotal: monkeyEventTotal.value,
+        throttleMs: monkeyThrottleMs.value,
+        seed: monkeySeed.value,
+        strategy: monkeyStrategy.value,
+        denseSamplingEnabled: monkeyDenseSamplingEnabled.value,
+        author: authStore.user?.username || 'tester',
+        environment: testServer.value
+      })
+    })
+    const summary = await response.json() as MonkeyRunSummary
+    if (!response.ok) throw new Error((summary as any).error || 'Monkey 启动失败')
+    monkeyRunId.value = summary.runId
+    logs.value.push(`[RUN] ${summary.runId} 已创建，开始采集 monkey/logcat/screencap`)
+    monkeyPollTimer = setInterval(() => {
+      refreshMonkeyRun(summary.runId).catch(error => logs.value.push(`[POLL][ERROR] ${error.message}`))
+    }, 3000)
+  } catch (error: any) {
+    currentStatus.value = 'Failed'
+    executionFailed.value = true
+    if (timer) clearInterval(timer)
+    timer = null
+    logs.value.push(`[ERROR] ${error.message}`)
+    ElMessage.error(error.message || 'Monkey 启动失败')
+  }
+}
 
 const startExecution = async () => {
   if (currentStatus.value === 'Executing') return
 
   if (isMonkeyTest) {
-    await startMonkeyDemo()
+    await startMonkeyRun()
     return
   }
 
@@ -815,17 +1063,18 @@ const stopExecution = async () => {
     clearInterval(monkeyTimer)
     monkeyTimer = null
   }
+  if (monkeyPollTimer) {
+    clearInterval(monkeyPollTimer)
+    monkeyPollTimer = null
+  }
 
   if (isMonkeyTest) {
-    await reportStore.addReport({
-      name: toolName.value,
-      type: 'UI 自动化',
-      status: 'Failed',
-      duration: formatTime(duration.value),
-      author: authStore.user?.username || 'tester',
-      analysisResult: 'Monkey Demo 被手动终止。',
-      environment: testServer.value,
-    })
+    if (monkeyRunId.value) {
+      await fetch(buildBackendUrl(`/api/monkey/runs/${monkeyRunId.value}/stop`), {
+        method: 'POST',
+        headers: { Authorization: authStore.token || '' }
+      })
+    }
   } else if (!isDramaCheck) {
     await reportStore.addReport({
       name: toolName.value,
@@ -855,11 +1104,13 @@ const closePage = () => {
 
 onMounted(() => {
   reportStore.fetchReports()
+  fetchMonkeyDevices()
 })
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
   if (monkeyTimer) clearInterval(monkeyTimer)
+  if (monkeyPollTimer) clearInterval(monkeyPollTimer)
   if (isDramaCheck && visibleStatus.value === 'Executing') {
     dramaRunStore.markBackground()
     return
@@ -894,11 +1145,36 @@ onUnmounted(() => {
           <template v-if="isMonkeyTest">
             <div class="param-group">
               <label class="param-label">测试目标</label>
-              <el-input v-model="monkeyTarget" placeholder="请输入 App 包名、页面路径或测试入口" />
+              <el-select
+                v-model="monkeyTarget"
+                class="param-select"
+                filterable
+                clearable
+                :loading="monkeyPackagesLoading"
+                placeholder="选择已连接设备上的三方 App 包名"
+              >
+                <el-option
+                  v-for="app in monkeyPackages"
+                  :key="app.name"
+                  :label="app.name"
+                  :value="app.name"
+                />
+              </el-select>
             </div>
             <div class="param-group">
               <label class="param-label">测试设备</label>
-              <el-input v-model="monkeyDevice" placeholder="例如 Pixel 7 / Android 14" />
+              <div class="monkey-device-row">
+                <el-select v-model="monkeyDevice" class="param-select" placeholder="选择已授权 Android 设备">
+                  <el-option
+                    v-for="device in monkeyDevices"
+                    :key="device.id"
+                    :label="`${device.model || device.id} (${device.status})`"
+                    :value="device.id"
+                    :disabled="device.status !== 'device'"
+                  />
+                </el-select>
+                <el-button size="small" @click="fetchMonkeyDevices">刷新设备</el-button>
+              </div>
             </div>
             <div class="param-row">
               <div class="param-group half">
@@ -913,12 +1189,12 @@ onUnmounted(() => {
                 />
               </div>
               <div class="param-group half">
-                <label class="param-label">时长</label>
+                <label class="param-label">时长（秒）</label>
                 <el-input-number
                   v-model="monkeyDurationSec"
-                  :min="1"
-                  :max="120"
-                  :step="1"
+                  :min="60"
+                  :max="21600"
+                  :step="300"
                   controls-position="right"
                   class="param-number"
                 />
@@ -937,14 +1213,14 @@ onUnmounted(() => {
                 />
               </div>
               <div class="param-group half">
-                <label class="param-label">截图间隔</label>
-                <el-input-number
-                  v-model="monkeyScreenshotEvery"
-                  :min="20"
-                  :max="2000"
-                  :step="20"
-                  controls-position="right"
-                  class="param-number"
+                <label class="param-label">测试精度</label>
+                <el-segmented
+                  v-model="monkeyPrecisionMode"
+                  :options="[
+                    { label: '高精度 10s/张', value: 'high' },
+                    { label: '低精度 30s/张', value: 'low' }
+                  ]"
+                  class="monkey-mode-switch"
                 />
               </div>
             </div>
@@ -961,12 +1237,20 @@ onUnmounted(() => {
             </div>
             <div class="param-group">
               <label class="param-label">随机种子</label>
-              <el-input v-model="monkeySeed" placeholder="相同 seed 可复现同一批随机事件" />
+              <el-input v-model="monkeySeed" placeholder="数字 seed；非数字会由后端稳定转换" />
+            </div>
+            <div class="param-group">
+              <el-checkbox v-model="monkeyDenseSamplingEnabled">
+                异常加密采样（warning 5s/张持续60s，critical 2s/张持续120s）
+              </el-checkbox>
             </div>
             <div class="monkey-risk-card">
               <span class="monkey-risk-card__label">运行级别</span>
               <strong>{{ monkeyRiskLevel }}</strong>
-              <span>当前为图谱 demo：模拟 monkey、logcat 与 screencap 管线，执行后生成可点击截图节点。</span>
+              <span>
+                ADB {{ monkeyAdbAvailable ? `已就绪：${monkeyAdbPath}` : '未就绪：请确认 Android Studio SDK Platform-Tools 已安装' }}。
+                当前每 {{ monkeyScreenshotIntervalSec }} 秒截图一次，执行后生成真实截图节点。
+              </span>
             </div>
             <div class="monkey-command-preview">
               <span class="monkey-risk-card__label">ADB 命令预览</span>
@@ -1044,15 +1328,20 @@ onUnmounted(() => {
               </strong>
             </div>
             <img
-              v-if="selectedMonkeyNode"
+              v-if="selectedMonkeyNode?.imageUrl"
               :src="selectedMonkeyNode.imageUrl"
               :alt="selectedMonkeyNode.title"
               class="monkey-preview-panel__image"
             />
+            <div v-else class="monkey-preview-panel__empty">图片已清理或暂不可用</div>
             <div v-if="selectedMonkeyNode" class="monkey-preview-panel__meta">
               <span>事件：{{ selectedMonkeyNode.event }}</span>
               <span>页面：{{ selectedMonkeyNode.activity }}</span>
               <span>来源：adb exec-out screencap -p</span>
+              <span v-if="selectedMonkeyNode.summary">摘要：{{ selectedMonkeyNode.summary }}</span>
+              <span v-for="item in selectedMonkeyNode.evidence || []" :key="`${item.source}-${item.message}`">
+                证据：{{ item.source }} / {{ item.message }}
+              </span>
             </div>
           </div>
         </div>
@@ -1232,6 +1521,17 @@ onUnmounted(() => {
 }
 
 .param-number {
+  width: 100%;
+}
+
+.monkey-device-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.monkey-mode-switch {
   width: 100%;
 }
 
@@ -1623,6 +1923,7 @@ onUnmounted(() => {
 .risk-text--normal { color: #86efac; }
 .risk-text--warning { color: #fcd34d; }
 .risk-text--critical { color: #fca5a5; }
+.risk-text--unknown { color: #cbd5e1; }
 
 .monkey-preview-panel__image {
   width: 100%;
@@ -1631,6 +1932,16 @@ onUnmounted(() => {
   object-fit: cover;
   border: 1px solid rgba(148, 163, 184, 0.2);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
+}
+
+.monkey-preview-panel__empty {
+  display: grid;
+  min-height: 180px;
+  place-items: center;
+  border: 1px dashed rgba(148, 163, 184, 0.32);
+  border-radius: 18px;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.42);
 }
 
 .monkey-preview-panel__meta {

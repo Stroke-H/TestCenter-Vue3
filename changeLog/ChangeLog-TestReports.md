@@ -10,6 +10,8 @@
 - **Analytics Selection Label**: 将趋势模块中的“当前选中”调整为“桑基图选中报告”，明确它代表当前展开失败来源流向的报告点。
 - **Environment Badge**: 报告信息编号旁新增环境角标，K6 压测按执行环境显示橙色 `Test` 或绿色 `Prod`，缺少历史环境信息和非 K6 报告默认显示 `Prod`。
 - **Element Plus Radio Compatibility**: 报告类型切换组件改用 `value` 绑定，消除 Element Plus 3.0 radio API 弃用警告。
+- **Sankey Label Padding**: 优化失败来源流向桑基图右侧自适应留白与标签宽度，避免右侧节点文案被卡片边框裁切且减少无效空白。
+- **Monkey Report Filter**: 报告大厅新增 Monkey 测试筛选栏，真实 Monkey 执行完成后的报告记录会集中展示在该分类下。
 
 ## 2026-05-21
 

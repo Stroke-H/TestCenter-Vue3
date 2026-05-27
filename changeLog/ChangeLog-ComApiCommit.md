@@ -1,5 +1,16 @@
 # ChangeLog - ComApiCommit
 
+## 2026-05-27
+
+### Added
+- **Real Android Monkey Runs**: Monkey 测试从前端 Demo 升级为真实 Android 设备执行链路，支持 ADB 自动探测、设备刷新、真机 `adb shell monkey` 执行、logcat/monkey 日志采集、截图归档和真实截图 3D 节点渲染。
+- **Monkey Target Package Selector**: Monkey 测试目标改为可搜索下拉栏，会读取当前连接 Android 设备上的三方 App 包名，避免手动输入包名出错。
+- **Monkey Package Lookup Performance**: 三方 App 包名查询新增 5 分钟设备级缓存、8 秒超时和前端去重调用，降低重复 ADB 查询导致的等待时间。
+- **Monkey Runtime Logs**: Monkey 执行期间前端会轮询展示 monkey/logcat 最新日志，不再只显示后端 GIN 请求记录。
+- **Precision And Dense Sampling**: Monkey 测试新增高精度/低精度模式，高精度每 10 秒截图一次，低精度每 30 秒截图一次；异常加密采样默认开启，warning 按 5 秒/张持续 60 秒，critical 按 2 秒/张持续 120 秒。
+- **Monkey Seed Compatibility**: Monkey 随机种子默认改为数字；非数字 seed 会在后端稳定转换为数字，避免 Android 原生 monkey 因 `Seed is not a number` 直接退出。
+- **Monkey Screenshot Retention**: Monkey 截图归档新增保留策略，7 天后压缩截图，30 天后清理 normal 节点图片，仅保留异常节点图片和全部节点元数据。
+
 ## 2026-03-30
 
 ### Added

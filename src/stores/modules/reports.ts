@@ -8,7 +8,7 @@ export interface ReportItem {
   runId?: string
   name: string
   type: string
-  status: 'Passed' | 'Failed' | 'Running'
+  status: 'Passed' | 'Failed' | 'Running' | 'Warning' | 'Stopped' | 'Incomplete'
   duration: string
   createdAt: string
   author: string

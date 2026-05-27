@@ -55,6 +55,12 @@ const routes: RouteRecordRaw[] = [
         props: true
       },
       {
+        path: 'test_process/project_tree',
+        name: 'AcceptanceProjectTree',
+        component: () => import('@/views/TestProcess/ProjectTree/index.vue'),
+        meta: { title: '验收项目树', hidden: true, permissionKey: 'dashboard.test_process.visible' }
+      },
+      {
         path: 'feishu_assistant',
         name: 'FeishuAssistant',
         component: () => import('@/views/FeishuAssistant/index.vue'),

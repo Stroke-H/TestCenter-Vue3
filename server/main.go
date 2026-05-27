@@ -144,6 +144,20 @@ func main() {
 			testRuns.GET("/:runId/artifacts/:artifact", services.GetTestRunArtifactHandler)
 		}
 
+		// Android Monkey real-device runs
+		monkey := api.Group("/monkey")
+		{
+			monkey.GET("/devices", services.ListMonkeyDevicesHandler)
+			monkey.GET("/devices/:deviceId/packages", services.ListMonkeyPackagesHandler)
+			monkey.GET("/runs", services.ListMonkeyRunsHandler)
+			monkey.POST("/runs", services.StartMonkeyRunHandler)
+			monkey.GET("/runs/:runId", services.GetMonkeyRunHandler)
+			monkey.GET("/runs/:runId/events", services.GetMonkeyRunEventsHandler)
+			monkey.GET("/runs/:runId/logs", services.GetMonkeyRunLogsHandler)
+			monkey.GET("/runs/:runId/screenshots/:fileName", services.GetMonkeyRunScreenshotHandler)
+			monkey.POST("/runs/:runId/stop", services.StopMonkeyRunHandler)
+		}
+
 		// Scheduled Tasks
 		scheduledTasks := api.Group("/scheduled-tasks")
 		{
@@ -207,6 +221,7 @@ func main() {
 	// Initialize Feishu Bot Bridge
 	feishu.InitFeishuBridge(r)
 	services.InitScheduledTaskService()
+	services.InitMonkeyRetentionService()
 
 	host := os.Getenv("TESTCENTER_BACKEND_HOST")
 	if host == "" {

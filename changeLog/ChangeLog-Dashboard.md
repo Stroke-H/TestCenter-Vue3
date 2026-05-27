@@ -1,5 +1,10 @@
 # ChangeLog - Dashboard
 
+## 2026-05-27
+
+### Added
+- **Acceptance Project Tree Entry**: 仪表盘“测试流程工具”分区新增“验收项目树”入口，用于快速进入验收报告项目树视图。
+
 ## 2026-05-26
 
 ### Added

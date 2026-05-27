@@ -3,6 +3,8 @@
 ## 2026-05-21
 
 ### Added
+- **Monkey Test Permission**: 权限管理新增“Monkey 测试”独立权限项，可单独控制仪表盘性能测试分区中的 Monkey 测试入口显示。
+- **Monkey Run Permissions**: 权限管理新增 Monkey 查看、启动、停止权限，真实设备执行接口会同步校验后端权限。
 - **Device OS Quick Filter**: 测试设备列表的“设备信息”表头新增 iOS / Android 快捷筛选，可与搜索框叠加使用，方便快速区分不同系统设备。
 
 ### Changed
