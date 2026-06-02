@@ -1,5 +1,17 @@
 # ChangeLog - Test Process
 
+## 2026-05-28
+
+### Changed
+- **Project Tree Rename**: “验收项目树”统一更名为“项目树”。
+- **Project Tree Live Refresh**: 项目树会在验收报告保存、跨页签报告变更、窗口重新聚焦或页面重新可见时自动刷新，确保新验收报告能及时出现在版本节点中。
+- **Project Tree Timeline Layout**: 项目树版本节点改为左右交叉时间线展示，桌面端一左一右分布，移动端自动收敛为单列。
+- **Project Tree Header Cleanup**: 项目树页面移除标题说明和项目/版本节点/验收记录统计卡片，仅保留返回、筛选、搜索和刷新操作。
+- **Project Tree Version Sorting**: 项目树版本节点改为优先按版本号倒序排列，时间字段仅取测试时间范围的结束时间作为提审/报告时间兜底排序。
+- **Project Tree Record Expansion**: 项目树记录行只显示测试结束时间，需求点内容默认折叠为两行，并支持通过上下角标展开查看完整内容。
+- **Project Tree Smart Expansion**: 项目树需求点折叠按钮改为仅在内容超过两行时显示，并优化上下角标在按钮内的居中显示。
+- **Project Tree Memo Bookmark**: 项目树新增按项目保存的“项目配置记录”备忘录，可记录项目回溯信息、环境注意事项和书签链接。
+
 ## 2026-05-27
 
 ### Added

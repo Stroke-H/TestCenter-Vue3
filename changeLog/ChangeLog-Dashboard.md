@@ -1,5 +1,11 @@
 # ChangeLog - Dashboard
 
+## 2026-05-28
+
+### Changed
+- **Project Tree Entry Rename**: 仪表盘“测试流程工具”分区中的“验收项目树”入口更名为“项目树”。
+- **Project Tree Card Copy**: 项目树卡片文案调整为“项目记录，快速查看测试时间与需求点”，并自动迁移最近使用里的旧名称缓存。
+
 ## 2026-05-27
 
 ### Added

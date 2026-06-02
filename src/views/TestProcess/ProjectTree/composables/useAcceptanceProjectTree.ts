@@ -3,16 +3,36 @@ import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { buildBackendUrl } from '@/utils/runtimeUrl'
 import { retryFetch } from '@/utils/retryFetch'
-import type { AcceptanceReportRecord, ProjectTreeNode, ProjectVersionNode } from '../types'
+import type {
+  AcceptanceReportRecord,
+  ProjectMemoRecord,
+  ProjectTreeNode,
+  ProjectVersionNode
+} from '../types'
 
 const EMPTY_PROJECT_CODE = '未填写项目代码'
 const EMPTY_PROJECT_NAME = '未命名项目'
 const EMPTY_VERSION = '未填写版本'
+const PROJECT_MEMOS_STORAGE_KEY = 'testcenter.projectTree.projectMemos'
 
 const normalizeText = (value?: string) => (value || '').trim()
 
+const normalizeDateText = (value: string) => value.replace(/\./g, '-').replace(/\//g, '-')
+
+const getTestEndTime = (value?: string) => {
+  const text = normalizeText(value)
+  if (!text) return ''
+
+  const parts = text
+    .split(/(?:～|~|至|到|—|–| - )/)
+    .map((item) => normalizeText(item))
+    .filter(Boolean)
+
+  return normalizeDateText(parts[parts.length - 1] || text)
+}
+
 const getReportTime = (report: Partial<AcceptanceReportRecord>) => (
-  normalizeText(report.test_time) ||
+  getTestEndTime(report.test_time) ||
   normalizeText(report.updated_at) ||
   normalizeText(report.created_at) ||
   '-'
@@ -26,6 +46,34 @@ const compareByTimeDesc = (a: string, b: string) => {
   if (Number.isNaN(left)) return 1
   if (Number.isNaN(right)) return -1
   return right - left
+}
+
+const parseVersionParts = (version: string) => {
+  const normalized = normalizeText(version)
+  const numericParts = normalized.match(/\d+/g)?.map((item) => Number(item)) || []
+  return {
+    normalized,
+    numericParts
+  }
+}
+
+const compareVersionDesc = (a: string, b: string) => {
+  const left = parseVersionParts(a)
+  const right = parseVersionParts(b)
+  const maxLength = Math.max(left.numericParts.length, right.numericParts.length)
+
+  for (let index = 0; index < maxLength; index += 1) {
+    const leftPart = left.numericParts[index] ?? 0
+    const rightPart = right.numericParts[index] ?? 0
+    if (leftPart !== rightPart) {
+      return rightPart - leftPart
+    }
+  }
+
+  return right.normalized.localeCompare(left.normalized, undefined, {
+    numeric: true,
+    sensitivity: 'base'
+  })
 }
 
 const buildProjectTree = (reports: AcceptanceReportRecord[]) => {
@@ -57,7 +105,10 @@ const buildProjectTree = (reports: AcceptanceReportRecord[]) => {
         latestTestTime: getReportTime(sortedReports[0] || {}),
         reports: sortedReports
       }
-    }).sort((a, b) => compareByTimeDesc(a.latestTestTime, b.latestTestTime))
+    }).sort((a, b) => {
+      const versionOrder = compareVersionDesc(a.version, b.version)
+      return versionOrder || compareByTimeDesc(a.latestTestTime, b.latestTestTime)
+    })
 
     const allReports = versions.flatMap((version) => version.reports)
     const firstNamedReport = allReports.find((report) => normalizeText(report.project_name))
@@ -73,9 +124,24 @@ const buildProjectTree = (reports: AcceptanceReportRecord[]) => {
   }).sort((a, b) => compareByTimeDesc(a.latestTestTime, b.latestTestTime))
 }
 
+const loadProjectMemos = (): Record<string, ProjectMemoRecord> => {
+  try {
+    const raw = window.localStorage.getItem(PROJECT_MEMOS_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+const saveProjectMemos = (memos: Record<string, ProjectMemoRecord>) => {
+  window.localStorage.setItem(PROJECT_MEMOS_STORAGE_KEY, JSON.stringify(memos))
+}
+
 export function useAcceptanceProjectTree() {
   const authStore = useAuthStore()
   const reports = shallowRef<AcceptanceReportRecord[]>([])
+  const projectMemos = shallowRef<Record<string, ProjectMemoRecord>>(loadProjectMemos())
   const loading = shallowRef(false)
   const keyword = shallowRef('')
   const selectedProjectCode = shallowRef('')
@@ -142,7 +208,36 @@ export function useAcceptanceProjectTree() {
     reportCount: filteredProjectTree.value.reduce((total, project) => total + project.reportCount, 0)
   }))
 
+  const selectedProject = computed(() => {
+    if (!selectedProjectCode.value) return null
+    return projectTree.value.find((project) => project.projectCode === selectedProjectCode.value) || null
+  })
+
+  const selectedProjectMemo = computed(() => {
+    if (!selectedProjectCode.value) return null
+    return projectMemos.value[selectedProjectCode.value] || null
+  })
+
+  const updateSelectedProjectMemo = (content: string) => {
+    if (!selectedProjectCode.value) return
+
+    const next = { ...projectMemos.value }
+    const trimmedContent = content.trim()
+    if (trimmedContent) {
+      next[selectedProjectCode.value] = {
+        content,
+        updatedAt: new Date().toISOString()
+      }
+    } else {
+      delete next[selectedProjectCode.value]
+    }
+
+    projectMemos.value = next
+    saveProjectMemos(next)
+  }
+
   const fetchReports = async () => {
+    if (loading.value) return
     loading.value = true
     try {
       const response = await retryFetch(buildBackendUrl('/api/acceptance-reports/list'), {
@@ -176,9 +271,13 @@ export function useAcceptanceProjectTree() {
     selectedProjectCode,
     loading,
     reports,
+    projectMemos,
     projectOptions,
     projectTree: filteredProjectTree,
+    selectedProject,
+    selectedProjectMemo,
     stats,
+    updateSelectedProjectMemo,
     fetchReports
   }
 }

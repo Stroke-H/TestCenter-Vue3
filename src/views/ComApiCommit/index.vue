@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { buildBackendUrl, buildBackendWsUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
 import MonkeyHologram3D from './components/MonkeyHologram3D.vue'
+import { useMonkeyRunStream } from './composables/useMonkeyRunStream'
 import {
   Warning,
   CopyDocument,
@@ -199,6 +200,9 @@ interface MonkeyRunSummary {
   warningCount: number
   criticalCount: number
   unknownCount: number
+  appCrashDetected: boolean
+  terminationReason?: string
+  ignoredSystemLogCount: number
   error?: string
 }
 
@@ -212,7 +216,7 @@ const uptime = ref(0)
 const duration = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
 let monkeyTimer: ReturnType<typeof setInterval> | null = null
-let monkeyPollTimer: ReturnType<typeof setInterval> | null = null
+let monkeyReconcileTimer: ReturnType<typeof setInterval> | null = null
 
 // 日志及报告
 const logs = ref<string[]>(['准备就绪，点击 Execute 开始执行'])
@@ -247,6 +251,7 @@ const monkeyStrategy = ref('balanced')
 const monkeyThrottleMs = ref(300)
 const monkeyPrecisionMode = ref<'high' | 'low'>('low')
 const monkeyDenseSamplingEnabled = ref(true)
+const monkeyContinueAfterCrash = ref(false)
 const monkeyRunId = ref('')
 const monkeyGraphNodes = ref<MonkeyGraphNode[]>([])
 const monkeyGraphEdges = ref<MonkeyGraphEdge[]>([])
@@ -278,6 +283,7 @@ const monkeyCommandPreview = computed(() => {
     `  --pct-nav ${monkeyStrategy.value === 'navigation-heavy' ? 25 : 10}`,
     `  --pct-majornav ${monkeyStrategy.value === 'navigation-heavy' ? 20 : 10}`,
     `  --throttle ${monkeyThrottleMs.value}`,
+    ...(monkeyContinueAfterCrash.value ? ['  --ignore-crashes'] : []),
     `  -s ${monkeySeed.value}`,
     `  -v -v -v ${monkeyEventTotal.value}`
   ]
@@ -637,31 +643,80 @@ const loadMonkeyEvents = async (runId: string) => {
     null
 }
 
+const appendMonkeyLiveLog = (line: string) => {
+  logs.value = [...logs.value, line].slice(-240)
+  scrollToBottom()
+}
+
+const upsertMonkeyGraphNode = (event: MonkeyGraphNode) => {
+  const existingIndex = monkeyGraphNodes.value.findIndex(node => node.id === event.id)
+  const nextNode = {
+    ...event,
+    x: 12 + ((existingIndex >= 0 ? existingIndex : monkeyGraphNodes.value.length) % 12) * 7,
+    y: 12 + Math.floor((existingIndex >= 0 ? existingIndex : monkeyGraphNodes.value.length) / 12) * 8
+  }
+  if (existingIndex >= 0) {
+    monkeyGraphNodes.value = monkeyGraphNodes.value.map((node, index) => index === existingIndex ? nextNode : node)
+  } else {
+    monkeyGraphNodes.value = [...monkeyGraphNodes.value, nextNode]
+    const previousNode = monkeyGraphNodes.value[monkeyGraphNodes.value.length - 2]
+    if (previousNode) {
+      monkeyGraphEdges.value = [...monkeyGraphEdges.value, {
+        source: previousNode.id,
+        target: nextNode.id,
+        event: nextNode.event || 'screencap'
+      }]
+    }
+  }
+  if (!selectedMonkeyNode.value || event.risk === 'critical') selectedMonkeyNode.value = nextNode
+}
+
+let finalizedMonkeyRunId = ''
+
+const finalizeMonkeyRun = async (summary: MonkeyRunSummary) => {
+  if (finalizedMonkeyRunId === summary.runId) return
+  finalizedMonkeyRunId = summary.runId
+  monkeyRunStream.disconnect()
+  if (monkeyReconcileTimer) clearInterval(monkeyReconcileTimer)
+  monkeyReconcileTimer = null
+  if (timer) clearInterval(timer)
+  timer = null
+  executionSucceeded.value = summary.status === 'passed'
+  executionFailed.value = ['failed', 'incomplete', 'stopped'].includes(summary.status)
+  await loadMonkeyEvents(summary.runId)
+  const runtimeLogs = await fetchMonkeyRuntimeLogs(summary.runId)
+  logs.value = [...logs.value, ...runtimeLogs].slice(-240)
+  reportStore.fetchReports()
+}
+
+const applyMonkeySummary = (summary: MonkeyRunSummary) => {
+  currentStatus.value = mapMonkeyStatus(summary.status)
+  duration.value = summary.duration ? summary.duration.split(':').reduce((acc, part) => acc * 60 + Number(part || 0), 0) : duration.value
+  if (summary.status === 'running' && summary.screenshotCount > monkeyGraphNodes.value.length) {
+    void loadMonkeyEvents(summary.runId)
+  }
+  const summaryLines = [
+    `[SSE][RUN] ${summary.runId} ${summary.status}`,
+    `[SCREENSHOT] ${summary.screenshotCount} 张，normal=${summary.normalCount}, warning=${summary.warningCount}, critical=${summary.criticalCount}, unknown=${summary.unknownCount}`,
+    `[EVIDENCE] 真实 App Crash=${summary.appCrashDetected ? '是' : '否'}，结束原因=${summary.terminationReason || '运行中'}，已过滤系统噪声=${summary.ignoredSystemLogCount || 0}`,
+    summary.error ? `[ERROR] ${summary.error}` : '[INFO] Monkey 真机测试采集中...'
+  ]
+  logs.value = [
+    ...summaryLines,
+    ...logs.value.filter(line => !line.startsWith('[SSE][RUN]') && !line.startsWith('[SCREENSHOT]') && !line.startsWith('[EVIDENCE]') && line !== '[INFO] Monkey 真机测试采集中...')
+  ].slice(-240)
+  if (summary.status !== 'running') {
+    void finalizeMonkeyRun(summary)
+  }
+}
+
 const refreshMonkeyRun = async (runId: string) => {
   const response = await fetch(buildBackendUrl(`/api/monkey/runs/${runId}`), {
     headers: { Authorization: authStore.token || '' }
   })
   const summary = await response.json() as MonkeyRunSummary
   if (!response.ok) throw new Error((summary as any).error || '读取 Monkey 状态失败')
-  currentStatus.value = mapMonkeyStatus(summary.status)
-  duration.value = summary.duration ? summary.duration.split(':').reduce((acc, part) => acc * 60 + Number(part || 0), 0) : duration.value
-  const runtimeLogs = await fetchMonkeyRuntimeLogs(runId)
-  logs.value = [
-    `[RUN] ${summary.runId} ${summary.status}`,
-    `[SCREENSHOT] ${summary.screenshotCount} 张，normal=${summary.normalCount}, warning=${summary.warningCount}, critical=${summary.criticalCount}, unknown=${summary.unknownCount}`,
-    summary.error ? `[ERROR] ${summary.error}` : '[INFO] Monkey 真机测试采集中...',
-    ...runtimeLogs
-  ]
-  if (summary.status !== 'running') {
-    if (monkeyPollTimer) clearInterval(monkeyPollTimer)
-    monkeyPollTimer = null
-    if (timer) clearInterval(timer)
-    timer = null
-    executionSucceeded.value = summary.status === 'passed'
-    executionFailed.value = ['failed', 'incomplete', 'stopped'].includes(summary.status)
-    await loadMonkeyEvents(runId)
-    reportStore.fetchReports()
-  }
+  applyMonkeySummary(summary)
 }
 
 const fetchMonkeyRuntimeLogs = async (runId: string) => {
@@ -686,6 +741,27 @@ const fetchMonkeyRuntimeLogs = async (runId: string) => {
   return [...monkeyLines, ...logcatLines].slice(-80)
 }
 
+const monkeyRunStream = useMonkeyRunStream({
+  getToken: () => authStore.token || '',
+  onConnected: () => appendMonkeyLiveLog('[SSE] Monkey 实时通道已连接'),
+  onDisconnected: () => appendMonkeyLiveLog('[SSE] Monkey 实时通道断开，正在自动重连'),
+  onError: error => appendMonkeyLiveLog(`[SSE][ERROR] ${error.message}`),
+  onMessage: message => {
+    if (message.type === 'summary' || message.type === 'complete') {
+      applyMonkeySummary(message.data as MonkeyRunSummary)
+      return
+    }
+    if (message.type === 'graph-event') {
+      upsertMonkeyGraphNode(message.data as MonkeyGraphNode)
+      return
+    }
+    if (message.type === 'risk-evidence') {
+      const evidence = message.data as MonkeyRiskEvidence
+      appendMonkeyLiveLog(`[SSE][${evidence.source.toUpperCase()}][${evidence.level.toUpperCase()}] ${evidence.message}`)
+    }
+  }
+})
+
 const startMonkeyRun = async () => {
   if (!monkeyTarget.value.trim()) {
     ElMessage.warning('请先填写 Android App 包名')
@@ -707,7 +783,8 @@ const startMonkeyRun = async () => {
     `[${new Date().toLocaleTimeString()}] Android Monkey 真机测试启动`,
     `[ADB] ${monkeyCommandPreview.value.replace(/\n/g, ' ')}`,
     `[SCREENSHOT] ${monkeyPrecisionMode.value === 'high' ? '高精度' : '低精度'}模式，每 ${monkeyScreenshotIntervalSec.value}s 截图一次`,
-    `[DENSE] 异常加密采样${monkeyDenseSamplingEnabled.value ? '开启：warning 5s/张 60s，critical 2s/张 120s' : '关闭'}`
+    `[DENSE] 异常加密采样${monkeyDenseSamplingEnabled.value ? '开启：warning 5s/张 60s，critical 2s/张 120s' : '关闭'}`,
+    `[CRASH] ${monkeyContinueAfterCrash.value ? '发现 Crash 后继续执行并持续留证' : '发现 Crash 后立即停止并留证'}`
   ]
   uptime.value = 0
   duration.value = 0
@@ -730,6 +807,7 @@ const startMonkeyRun = async () => {
         seed: monkeySeed.value,
         strategy: monkeyStrategy.value,
         denseSamplingEnabled: monkeyDenseSamplingEnabled.value,
+        continueAfterCrash: monkeyContinueAfterCrash.value,
         author: authStore.user?.username || 'tester',
         environment: testServer.value
       })
@@ -737,10 +815,13 @@ const startMonkeyRun = async () => {
     const summary = await response.json() as MonkeyRunSummary
     if (!response.ok) throw new Error((summary as any).error || 'Monkey 启动失败')
     monkeyRunId.value = summary.runId
+    finalizedMonkeyRunId = ''
     logs.value.push(`[RUN] ${summary.runId} 已创建，开始采集 monkey/logcat/screencap`)
-    monkeyPollTimer = setInterval(() => {
-      refreshMonkeyRun(summary.runId).catch(error => logs.value.push(`[POLL][ERROR] ${error.message}`))
-    }, 3000)
+    monkeyRunStream.connect(summary.runId)
+    await loadMonkeyEvents(summary.runId)
+    monkeyReconcileTimer = setInterval(() => {
+      refreshMonkeyRun(summary.runId).catch(error => appendMonkeyLiveLog(`[RECONCILE][ERROR] ${error.message}`))
+    }, 30000)
   } catch (error: any) {
     currentStatus.value = 'Failed'
     executionFailed.value = true
@@ -1063,10 +1144,11 @@ const stopExecution = async () => {
     clearInterval(monkeyTimer)
     monkeyTimer = null
   }
-  if (monkeyPollTimer) {
-    clearInterval(monkeyPollTimer)
-    monkeyPollTimer = null
+  if (monkeyReconcileTimer) {
+    clearInterval(monkeyReconcileTimer)
+    monkeyReconcileTimer = null
   }
+  monkeyRunStream.disconnect()
 
   if (isMonkeyTest) {
     if (monkeyRunId.value) {
@@ -1110,7 +1192,8 @@ onMounted(() => {
 onUnmounted(() => {
   if (timer) clearInterval(timer)
   if (monkeyTimer) clearInterval(monkeyTimer)
-  if (monkeyPollTimer) clearInterval(monkeyPollTimer)
+  if (monkeyReconcileTimer) clearInterval(monkeyReconcileTimer)
+  monkeyRunStream.disconnect()
   if (isDramaCheck && visibleStatus.value === 'Executing') {
     dramaRunStore.markBackground()
     return
@@ -1242,6 +1325,11 @@ onUnmounted(() => {
             <div class="param-group">
               <el-checkbox v-model="monkeyDenseSamplingEnabled">
                 异常加密采样（warning 5s/张持续60s，critical 2s/张持续120s）
+              </el-checkbox>
+            </div>
+            <div class="param-group">
+              <el-checkbox v-model="monkeyContinueAfterCrash">
+                Crash 后继续执行（持续采样并记录后续问题）
               </el-checkbox>
             </div>
             <div class="monkey-risk-card">

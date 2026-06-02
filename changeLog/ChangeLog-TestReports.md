@@ -1,5 +1,17 @@
 # ChangeLog - Test Reports
 
+## 2026-06-02
+
+### Added
+- **Monkey Continue After Crash**: 新增可选“Crash 后继续执行”模式，默认仍为遇到真实 Crash 立即停止并留证；报告会标记真实 App Crash、结束原因和过滤掉的系统噪声数量。
+- **Monkey SSE Live Stream**: Monkey 真机测试改为通过 SSE 实时推送运行摘要、截图节点和风险证据，支持心跳、断线重连与最近事件续传；HTTP 保留为启动、停止、历史资源读取和低频状态校准通道。
+
+### Fixed
+- **Monkey Runtime Checkpoint Status**: 修复 Monkey 每次截图后提前将运行状态结算为完成，导致前端在首张截图后停止轮询的问题。
+- **Monkey Evidence Noise Filter**: Monkey 风险节点仅收录目标 App 相关日志，系统背景噪声继续保留在完整日志中但不再触发异常加密采样。
+- **Monkey Activity Detection**: Activity 识别兼容新版 Android `dumpsys activity activities` 输出，减少截图节点显示 `UnknownActivity`。
+- **Monkey Stop Status Consistency**: 手动停止或超时退出会直接结算为 `stopped`，避免 SSE 实时通道先收到错误的失败终态。
+
 ## 2026-05-22
 
 ### Changed
@@ -12,6 +24,8 @@
 - **Element Plus Radio Compatibility**: 报告类型切换组件改用 `value` 绑定，消除 Element Plus 3.0 radio API 弃用警告。
 - **Sankey Label Padding**: 优化失败来源流向桑基图右侧自适应留白与标签宽度，避免右侧节点文案被卡片边框裁切且减少无效空白。
 - **Monkey Report Filter**: 报告大厅新增 Monkey 测试筛选栏，真实 Monkey 执行完成后的报告记录会集中展示在该分类下。
+- **Monkey Atomic Demo Report**: Monkey 测试列表新增 600 节点验收报告原子图 Demo，点击后直接打开 Three.js 空间模型并支持节点截图预览。
+- **Monkey Demo Dialog Fit**: 优化 Monkey 原子图 Demo 弹窗高度自适应与右侧信息面板滚动，避免告警、严重等统计卡片在小视口下被截断。
 
 ## 2026-05-21
 

@@ -36,12 +36,27 @@ interface RecentTool {
 
 // ===== 最近使用缓存逻辑 =====
 const recentTools = ref<RecentTool[]>([])
+const projectTreeDescription = '项目记录，快速查看测试时间与需求点'
+
+const normalizeRecentTool = (tool: RecentTool): RecentTool => {
+  if (tool.id !== 'acceptance-project-tree' && tool.name !== '验收项目树') {
+    return tool
+  }
+
+  return {
+    ...tool,
+    id: 'acceptance-project-tree',
+    name: '项目树',
+    description: projectTreeDescription
+  }
+}
 
 onMounted(() => {
   const cached = localStorage.getItem('recent_tools_cache')
   if (cached) {
     try {
-      recentTools.value = JSON.parse(cached)
+      recentTools.value = JSON.parse(cached).map(normalizeRecentTool)
+      localStorage.setItem('recent_tools_cache', JSON.stringify(recentTools.value))
     } catch (e) {}
   }
 })
@@ -391,8 +406,8 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
               <el-icon :size="20" color="#2563eb"><component :is="Icons.Share" /></el-icon>
             </div>
           </div>
-          <h3 class="tool-card__name">验收项目树</h3>
-          <p class="tool-card__desc">按项目代码和版本号整理验收报告，快速查看测试时间与需求点</p>
+          <h3 class="tool-card__name">项目树</h3>
+          <p class="tool-card__desc">{{ projectTreeDescription }}</p>
           <div class="tool-card__footer">
             <span class="ready-text">V0.1</span>
             <a
@@ -400,8 +415,8 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
               class="open-link"
               @click.prevent="handleRouteLaunch('/test_process/project_tree', {
                 id: 'acceptance-project-tree',
-                name: '验收项目树',
-                description: '按项目代码和版本号整理验收报告，快速查看测试时间与需求点',
+                name: '项目树',
+                description: projectTreeDescription,
                 iconName: 'Share',
                 iconColor: '#2563eb',
                 iconBg: 'rgba(37, 99, 235, 0.1)'

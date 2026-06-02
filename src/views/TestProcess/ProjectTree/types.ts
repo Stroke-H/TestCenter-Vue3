@@ -27,3 +27,8 @@ export interface ProjectTreeNode {
   latestTestTime: string
   versions: ProjectVersionNode[]
 }
+
+export interface ProjectMemoRecord {
+  content: string
+  updatedAt: string
+}

@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, Refresh, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, CollectionTag, Refresh, Search } from '@element-plus/icons-vue'
 import ProjectTreeBoard from './components/ProjectTreeBoard.vue'
 import { useAcceptanceProjectTree } from './composables/useAcceptanceProjectTree'
+import {
+  ACCEPTANCE_REPORTS_CHANGED_EVENT,
+  isAcceptanceReportsChangedStorageKey
+} from '@/utils/acceptanceReportEvents'
 
-defineOptions({ name: 'AcceptanceProjectTree' })
+defineOptions({ name: 'ProjectTree' })
 
 const router = useRouter()
 const {
@@ -14,27 +18,76 @@ const {
   loading,
   projectOptions,
   projectTree,
-  stats,
+  selectedProject,
+  selectedProjectMemo,
+  updateSelectedProjectMemo,
   fetchReports
 } = useAcceptanceProjectTree()
 
+let lastAutoRefreshAt = 0
+
+const refreshProjectTree = () => {
+  const now = Date.now()
+  if (now - lastAutoRefreshAt < 1000) return
+  lastAutoRefreshAt = now
+  fetchReports()
+}
+
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    refreshProjectTree()
+  }
+}
+
+const handleStorageChange = (event: StorageEvent) => {
+  if (isAcceptanceReportsChangedStorageKey(event.key)) {
+    refreshProjectTree()
+  }
+}
+
+const projectMemoContent = computed({
+  get: () => selectedProjectMemo.value?.content || '',
+  set: (value: string) => updateSelectedProjectMemo(value)
+})
+
+const projectMemoUpdatedAt = computed(() => {
+  const updatedAt = selectedProjectMemo.value?.updatedAt
+  if (!updatedAt) return '未记录'
+
+  const date = new Date(updatedAt)
+  if (Number.isNaN(date.getTime())) return '未记录'
+
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+})
+
 onMounted(() => {
   fetchReports()
+  window.addEventListener(ACCEPTANCE_REPORTS_CHANGED_EVENT, refreshProjectTree)
+  window.addEventListener('storage', handleStorageChange)
+  window.addEventListener('focus', refreshProjectTree)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener(ACCEPTANCE_REPORTS_CHANGED_EVENT, refreshProjectTree)
+  window.removeEventListener('storage', handleStorageChange)
+  window.removeEventListener('focus', refreshProjectTree)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 </script>
 
 <template>
   <div class="project-tree-page">
     <div class="project-tree-page__header">
-      <div>
-        <el-button text :icon="ArrowLeft" @click="router.push('/dashboard')">
-          返回仪表盘
-        </el-button>
-        <h1 class="project-tree-page__title">验收项目树</h1>
-        <p class="project-tree-page__desc">
-          根据验收报告记录，按项目代码聚合项目，以版本号生成节点，并展示测试时间与测试需求点。
-        </p>
-      </div>
+      <el-button text :icon="ArrowLeft" @click="router.push('/dashboard')">
+        返回仪表盘
+      </el-button>
 
       <div class="project-tree-page__actions">
         <el-select
@@ -62,20 +115,27 @@ onMounted(() => {
       </div>
     </div>
 
-    <div class="project-tree-page__stats">
-      <div class="stat-tile">
-        <span class="stat-tile__label">项目</span>
-        <strong>{{ stats.projectCount }}</strong>
+    <section
+      v-if="selectedProjectCode"
+      class="project-memo-card"
+    >
+      <div class="project-memo-card__header">
+        <div class="project-memo-card__title">
+          <el-icon><CollectionTag /></el-icon>
+          <span>项目配置记录</span>
+        </div>
+        <span class="project-memo-card__meta">
+          {{ selectedProject?.projectCode }}｜{{ selectedProject?.projectName || '未命名项目' }} · {{ projectMemoUpdatedAt }}
+        </span>
       </div>
-      <div class="stat-tile">
-        <span class="stat-tile__label">版本节点</span>
-        <strong>{{ stats.versionCount }}</strong>
-      </div>
-      <div class="stat-tile">
-        <span class="stat-tile__label">验收记录</span>
-        <strong>{{ stats.reportCount }}</strong>
-      </div>
-    </div>
+      <el-input
+        v-model="projectMemoContent"
+        type="textarea"
+        :autosize="{ minRows: 2, maxRows: 6 }"
+        resize="none"
+        placeholder="记录这个项目的回溯信息、特殊配置、环境注意事项、书签链接等"
+      />
+    </section>
 
     <ProjectTreeBoard
       :projects="projectTree"
@@ -93,61 +153,52 @@ onMounted(() => {
 
 .project-tree-page__header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
   margin-bottom: 20px;
-}
-
-.project-tree-page__title {
-  margin: 8px 0 8px;
-  color: #0f172a;
-  font-size: 30px;
-  line-height: 1.2;
-}
-
-.project-tree-page__desc {
-  max-width: 760px;
-  margin: 0;
-  color: #64748b;
-  font-size: 14px;
-  line-height: 1.7;
 }
 
 .project-tree-page__actions {
   display: grid;
   grid-template-columns: minmax(260px, 360px) minmax(260px, 360px) auto;
   gap: 10px;
-  margin-top: 32px;
 }
 
-.project-tree-page__stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin-bottom: 20px;
-}
-
-.stat-tile {
-  min-height: 92px;
-  padding: 18px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #ffffff;
+.project-memo-card {
+  margin-bottom: 18px;
+  padding: 16px 18px;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
-.stat-tile__label {
-  display: block;
-  margin-bottom: 8px;
-  color: #64748b;
-  font-size: 13px;
+.project-memo-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
 }
 
-.stat-tile strong {
+.project-memo-card__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   color: #0f172a;
-  font-size: 28px;
-  line-height: 1;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.project-memo-card__meta {
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 13px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {
@@ -165,8 +216,14 @@ onMounted(() => {
     margin-top: 0;
   }
 
-  .project-tree-page__stats {
-    grid-template-columns: 1fr;
+  .project-memo-card__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .project-memo-card__meta {
+    width: 100%;
+    text-align: left;
   }
 }
 </style>

@@ -5,6 +5,7 @@ import { Plus, Search, Calendar, User, Money, Loading } from '@element-plus/icon
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { retryFetch } from '@/utils/retryFetch'
+import { notifyAcceptanceReportsChanged } from '@/utils/acceptanceReportEvents'
 
 defineOptions({ name: 'AcceptanceReport' })
 
@@ -450,6 +451,7 @@ const saveReport = async () => {
     }
 
     ElMessage.success(isEditMode ? '验收报告修改成功' : '验收报告创建成功')
+    notifyAcceptanceReportsChanged()
     previewVisible.value = false
     previewMode.value = 'view'
     fetchReports()

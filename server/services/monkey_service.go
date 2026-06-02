@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +47,7 @@ type MonkeyRunRequest struct {
 	Seed                 string `json:"seed"`
 	Strategy             string `json:"strategy"`
 	DenseSamplingEnabled bool   `json:"denseSamplingEnabled"`
+	ContinueAfterCrash   bool   `json:"continueAfterCrash"`
 	Author               string `json:"author"`
 	Environment          string `json:"environment"`
 }
@@ -68,6 +70,9 @@ type MonkeyRunSummary struct {
 	CriticalCount             int    `json:"criticalCount"`
 	UnknownCount              int    `json:"unknownCount"`
 	FirstCriticalNodeID       string `json:"firstCriticalNodeId,omitempty"`
+	AppCrashDetected          bool   `json:"appCrashDetected"`
+	TerminationReason         string `json:"terminationReason,omitempty"`
+	IgnoredSystemLogCount     int    `json:"ignoredSystemLogCount"`
 	Error                     string `json:"error,omitempty"`
 }
 
@@ -96,10 +101,20 @@ type MonkeyGraphEvent struct {
 	Evidence           []MonkeyRiskEvidence `json:"evidence"`
 }
 
+type MonkeyStreamEvent struct {
+	ID        int64  `json:"id"`
+	Type      string `json:"type"`
+	Data      any    `json:"data"`
+	Timestamp string `json:"timestamp"`
+}
+
 type monkeyRunState struct {
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	summary MonkeyRunSummary
+	mu                sync.Mutex
+	cancel            context.CancelFunc
+	summary           MonkeyRunSummary
+	streamSubscribers map[chan MonkeyStreamEvent]struct{}
+	streamHistory     []MonkeyStreamEvent
+	nextStreamEventID int64
 }
 
 var (
@@ -109,6 +124,8 @@ var (
 	monkeyPackagesTTL  = 5 * time.Minute
 	monkeyPackages     = map[string]monkeyPackageCache{}
 	packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
+	logcatPIDPattern   = regexp.MustCompile(`\(\s*(\d+)\)`)
+	activityPattern    = regexp.MustCompile(`([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)`)
 )
 
 type monkeyPackageCache struct {
@@ -253,6 +270,66 @@ func GetMonkeyRunLogsHandler(c *gin.Context) {
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", content)
 }
 
+func SubscribeMonkeyRunHandler(c *gin.Context) {
+	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+		return
+	}
+	runID := c.Param("runId")
+	summary, err := loadMonkeySummary(runID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Monkey run not found"})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache, no-transform")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	lastEventID := parseMonkeyStreamEventID(c.GetHeader("Last-Event-ID"))
+	monkeyRunsMu.Lock()
+	run := monkeyRuns[runID]
+	monkeyRunsMu.Unlock()
+	if run == nil {
+		writeMonkeySSE(c.Writer, MonkeyStreamEvent{
+			Type: "summary", Data: summary, Timestamp: time.Now().Format(time.RFC3339),
+		})
+		writeMonkeySSE(c.Writer, MonkeyStreamEvent{
+			Type: "complete", Data: summary, Timestamp: time.Now().Format(time.RFC3339),
+		})
+		c.Writer.Flush()
+		return
+	}
+
+	subscriber, replay := subscribeMonkeyStream(run, lastEventID)
+	defer unsubscribeMonkeyStream(run, subscriber)
+	writeMonkeySSE(c.Writer, MonkeyStreamEvent{
+		Type: "summary", Data: summary, Timestamp: time.Now().Format(time.RFC3339),
+	})
+	for _, event := range replay {
+		writeMonkeySSE(c.Writer, event)
+	}
+	c.Writer.Flush()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			return
+		case event, ok := <-subscriber:
+			if !ok {
+				return
+			}
+			writeMonkeySSE(c.Writer, event)
+			c.Writer.Flush()
+		case <-heartbeat.C:
+			_, _ = fmt.Fprint(c.Writer, ": heartbeat\n\n")
+			c.Writer.Flush()
+		}
+	}
+}
+
 func GetMonkeyRunScreenshotHandler(c *gin.Context) {
 	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
 		return
@@ -277,6 +354,76 @@ func StopMonkeyRunHandler(c *gin.Context) {
 	}
 	run.cancel()
 	c.JSON(http.StatusOK, gin.H{"message": "stop requested"})
+}
+
+func subscribeMonkeyStream(run *monkeyRunState, lastEventID int64) (chan MonkeyStreamEvent, []MonkeyStreamEvent) {
+	subscriber := make(chan MonkeyStreamEvent, 64)
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	if run.streamSubscribers == nil {
+		run.streamSubscribers = map[chan MonkeyStreamEvent]struct{}{}
+	}
+	run.streamSubscribers[subscriber] = struct{}{}
+	replay := []MonkeyStreamEvent{}
+	for _, event := range run.streamHistory {
+		if event.ID > lastEventID {
+			replay = append(replay, event)
+		}
+	}
+	return subscriber, replay
+}
+
+func unsubscribeMonkeyStream(run *monkeyRunState, subscriber chan MonkeyStreamEvent) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	delete(run.streamSubscribers, subscriber)
+}
+
+func publishMonkeyStreamEvent(run *monkeyRunState, eventType string, data any) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	run.nextStreamEventID++
+	event := MonkeyStreamEvent{
+		ID: run.nextStreamEventID, Type: eventType, Data: data, Timestamp: time.Now().Format(time.RFC3339),
+	}
+	run.streamHistory = append(run.streamHistory, event)
+	if len(run.streamHistory) > 256 {
+		run.streamHistory = append([]MonkeyStreamEvent(nil), run.streamHistory[len(run.streamHistory)-256:]...)
+	}
+	for subscriber := range run.streamSubscribers {
+		select {
+		case subscriber <- event:
+		default:
+		}
+	}
+}
+
+func closeMonkeyStreamSubscribers(run *monkeyRunState) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	for subscriber := range run.streamSubscribers {
+		close(subscriber)
+		delete(run.streamSubscribers, subscriber)
+	}
+}
+
+func parseMonkeyStreamEventID(value string) int64 {
+	id, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	return id
+}
+
+func writeMonkeySSE(writer io.Writer, event MonkeyStreamEvent) {
+	if event.ID > 0 {
+		_, _ = fmt.Fprintf(writer, "id: %d\n", event.ID)
+	}
+	if event.Type != "" {
+		_, _ = fmt.Fprintf(writer, "event: %s\n", event.Type)
+	}
+	payload, err := json.Marshal(event.Data)
+	if err != nil {
+		payload = []byte(`{"error":"failed to encode SSE payload"}`)
+	}
+	_, _ = fmt.Fprintf(writer, "data: %s\n\n", payload)
 }
 
 func requireMonkeyPermission(c *gin.Context, key string) (*User, bool) {
@@ -460,6 +607,7 @@ func startMonkeyRun(parent context.Context, req MonkeyRunRequest) (*monkeyRunSta
 			PrecisionMode: req.PrecisionMode, BaseScreenshotIntervalSec: baseInterval,
 			DenseSamplingEnabled: req.DenseSamplingEnabled, StartedAt: time.Now().Format(time.RFC3339),
 		},
+		streamSubscribers: map[chan MonkeyStreamEvent]struct{}{},
 	}
 
 	if err := os.MkdirAll(filepath.Join(monkeyRunDir(runID), "screenshots"), 0755); err != nil {
@@ -493,6 +641,7 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 		monkeyRunsMu.Lock()
 		delete(monkeyRuns, runID)
 		monkeyRunsMu.Unlock()
+		closeMonkeyStreamSubscribers(run)
 	}()
 
 	var evidenceMu sync.Mutex
@@ -502,18 +651,18 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 	recordEvidence := func(e MonkeyRiskEvidence) {
 		e.Timestamp = time.Now().Format(time.RFC3339)
 		evidenceMu.Lock()
-		defer evidenceMu.Unlock()
 		pendingEvidence = append(pendingEvidence, e)
-		if !req.DenseSamplingEnabled {
-			return
+		if req.DenseSamplingEnabled {
+			if e.Level == "critical" {
+				denseLevel = "critical"
+				denseUntil = time.Now().Add(120 * time.Second)
+			} else if e.Level == "warning" && denseLevel != "critical" {
+				denseLevel = "warning"
+				denseUntil = time.Now().Add(60 * time.Second)
+			}
 		}
-		if e.Level == "critical" {
-			denseLevel = "critical"
-			denseUntil = time.Now().Add(120 * time.Second)
-		} else if e.Level == "warning" && denseLevel != "critical" {
-			denseLevel = "warning"
-			denseUntil = time.Now().Add(60 * time.Second)
-		}
+		evidenceMu.Unlock()
+		publishMonkeyStreamEvent(run, "risk-evidence", e)
 	}
 	consumeEvidence := func() ([]MonkeyRiskEvidence, bool) {
 		evidenceMu.Lock()
@@ -538,11 +687,17 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 		return 5 * time.Second
 	}
 
+	recordIgnoredSystemLog := func() {
+		run.mu.Lock()
+		run.summary.IgnoredSystemLogCount++
+		run.mu.Unlock()
+	}
+
 	_ = exec.CommandContext(ctx, adbPath, "-s", req.DeviceID, "logcat", "-c").Run()
 	logcatCmd := exec.CommandContext(ctx, adbPath, "-s", req.DeviceID, "logcat", "-v", "time")
 	if logcatPipe, err := logcatCmd.StdoutPipe(); err == nil {
 		_ = logcatCmd.Start()
-		go scanMonkeyOutput(logcatPipe, logcatLog, "logcat", req.PackageName, recordEvidence)
+		go scanMonkeyOutput(logcatPipe, logcatLog, "logcat", req.PackageName, recordEvidence, recordIgnoredSystemLog)
 		defer func() {
 			_ = logcatCmd.Process.Kill()
 			_ = logcatCmd.Wait()
@@ -553,9 +708,13 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 	monkeyCmd := exec.CommandContext(ctx, adbPath, monkeyArgs...)
 	stdout, _ := monkeyCmd.StdoutPipe()
 	stderr, _ := monkeyCmd.StderrPipe()
-	_ = monkeyCmd.Start()
-	go scanMonkeyOutput(stdout, monkeyLog, "monkey", req.PackageName, recordEvidence)
-	go scanMonkeyOutput(stderr, monkeyLog, "monkey", req.PackageName, recordEvidence)
+	if err := monkeyCmd.Start(); err != nil {
+		updateMonkeySummaryFromEvents(run, nil, fmt.Sprintf("启动 Monkey 失败: %v", err), true)
+		saveMonkeyExecutionReport(req, run.summary)
+		return
+	}
+	go scanMonkeyOutput(stdout, monkeyLog, "monkey", req.PackageName, recordEvidence, recordIgnoredSystemLog)
+	go scanMonkeyOutput(stderr, monkeyLog, "monkey", req.PackageName, recordEvidence, recordIgnoredSystemLog)
 
 	events := []MonkeyGraphEvent{}
 	done := make(chan error, 1)
@@ -577,7 +736,8 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 		}
 		events = append(events, event)
 		_ = writeJSON(filepath.Join(runDir, "events.json"), events)
-		updateMonkeySummaryFromEvents(run, events, "")
+		publishMonkeyStreamEvent(run, "graph-event", event)
+		updateMonkeySummaryFromEvents(run, events, "", false)
 	}
 	capture()
 	for {
@@ -591,17 +751,12 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 			if err != nil && ctx.Err() == nil {
 				finalErr = err.Error()
 			}
-			updateMonkeySummaryFromEvents(run, events, finalErr)
+			updateMonkeySummaryFromEvents(run, events, finalErr, true)
 			saveMonkeyExecutionReport(req, run.summary)
 			return
 		case <-ctx.Done():
 			capture()
-			updateMonkeySummaryFromEvents(run, events, ctx.Err().Error())
-			run.mu.Lock()
-			if run.summary.Status == "running" {
-				run.summary.Status = "stopped"
-			}
-			run.mu.Unlock()
+			updateMonkeySummaryFromEvents(run, events, ctx.Err().Error(), true)
 			saveMonkeyExecutionReport(req, run.summary)
 			return
 		case <-time.After(currentDenseInterval()):
@@ -620,7 +775,7 @@ func buildMonkeyArgs(req MonkeyRunRequest) []string {
 	case "navigation-heavy":
 		touch, motion, nav, majorNav, appSwitch = "45", "25", "15", "10", "5"
 	}
-	return []string{
+	args := []string{
 		"-s", req.DeviceID, "shell", "monkey",
 		"-p", req.PackageName,
 		"--pct-touch", touch,
@@ -632,9 +787,14 @@ func buildMonkeyArgs(req MonkeyRunRequest) []string {
 		"--pct-appswitch", appSwitch,
 		"--pct-anyevent", "0",
 		"--throttle", fmt.Sprintf("%d", req.ThrottleMs),
+	}
+	if req.ContinueAfterCrash {
+		args = append(args, "--ignore-crashes")
+	}
+	return append(args,
 		"-s", req.Seed,
 		"-v", "-v", "-v", fmt.Sprintf("%d", req.EventTotal),
-	}
+	)
 }
 
 func normalizeMonkeySeed(seed string) string {
@@ -680,9 +840,12 @@ func captureMonkeyScreenshot(ctx context.Context, adbPath string, req MonkeyRunR
 	}, nil
 }
 
-func scanMonkeyOutput(reader io.Reader, writer io.Writer, source string, packageName string, record func(MonkeyRiskEvidence)) {
+func scanMonkeyOutput(reader io.Reader, writer io.Writer, source string, packageName string, record func(MonkeyRiskEvidence), recordIgnoredSystemLog func()) {
 	if reader == nil {
 		return
+	}
+	classifier := monkeyLogClassifier{
+		targetPackage: strings.ToLower(strings.TrimSpace(packageName)),
 	}
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
@@ -690,27 +853,74 @@ func scanMonkeyOutput(reader io.Reader, writer io.Writer, source string, package
 		if writer != nil {
 			_, _ = fmt.Fprintln(writer, line)
 		}
-		if evidence, ok := classifyMonkeyLine(line, source, packageName); ok {
+		if evidence, ok, ignored := classifier.classify(line, source); ok {
 			record(evidence)
+		} else if ignored && recordIgnoredSystemLog != nil {
+			recordIgnoredSystemLog()
 		}
 	}
 }
 
-func classifyMonkeyLine(line string, source string, packageName string) (MonkeyRiskEvidence, bool) {
+type monkeyLogClassifier struct {
+	targetPackage string
+	targetPID     string
+}
+
+func (classifier *monkeyLogClassifier) classify(line string, source string) (MonkeyRiskEvidence, bool, bool) {
 	lower := strings.ToLower(line)
 	criticalTokens := []string{"fatal exception", "crash:", "anr in", "application not responding", "force finishing activity", "has died", "outofmemoryerror", "native crash", "sigsegv", "sigabrt", "monkey aborted"}
 	warningTokens := []string{"exception", "securityexception", "activitynotfoundexception", "illegalstateexception", "illegalargumentexception", "permission denied", "unable to start activity", "window leaked", "skipped frames", "slow operation", "failed to inflate", "rejecting start of intent", "activity not started"}
+	isTargetAppLine := true
+	if source == "logcat" {
+		isTargetAppLine = classifier.isTargetAppLine(line, lower)
+	}
+
+	level := ""
 	for _, token := range criticalTokens {
 		if strings.Contains(lower, token) {
-			return MonkeyRiskEvidence{Level: "critical", Source: source, Message: strings.TrimSpace(line)}, true
+			level = "critical"
+			break
 		}
 	}
-	for _, token := range warningTokens {
-		if strings.Contains(lower, token) {
-			return MonkeyRiskEvidence{Level: "warning", Source: source, Message: strings.TrimSpace(line)}, true
+	if level == "" {
+		for _, token := range warningTokens {
+			if strings.Contains(lower, token) {
+				level = "warning"
+				break
+			}
 		}
 	}
-	return MonkeyRiskEvidence{}, false
+	if level == "" {
+		return MonkeyRiskEvidence{}, false, false
+	}
+
+	if source == "logcat" && !isTargetAppLine {
+		return MonkeyRiskEvidence{}, false, true
+	}
+
+	return MonkeyRiskEvidence{Level: level, Source: source, Message: strings.TrimSpace(line)}, true, false
+}
+
+func (classifier *monkeyLogClassifier) isTargetAppLine(line string, lower string) bool {
+	linePID := extractLogcatPID(line)
+	if classifier.targetPackage != "" && strings.Contains(lower, classifier.targetPackage) {
+		if linePID != "" {
+			classifier.targetPID = linePID
+		}
+		return true
+	}
+	if linePID != "" && classifier.targetPID != "" && linePID == classifier.targetPID {
+		return true
+	}
+	return false
+}
+
+func extractLogcatPID(line string) string {
+	match := logcatPIDPattern.FindStringSubmatch(line)
+	if len(match) < 2 {
+		return ""
+	}
+	return match[1]
 }
 
 func resolveRisk(evidence []MonkeyRiskEvidence) string {
@@ -736,25 +946,46 @@ func buildEvidenceSummary(risk string, evidence []MonkeyRiskEvidence) string {
 func resolveCurrentActivity(ctx context.Context, adbPath string, deviceID string) string {
 	dumpsysCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(dumpsysCtx, adbPath, "-s", deviceID, "shell", "dumpsys", "window", "windows").CombinedOutput()
-	if err != nil {
-		return "UnknownActivity"
-	}
-	for _, line := range strings.Split(string(output), "\n") {
-		if strings.Contains(line, "mCurrentFocus") || strings.Contains(line, "mFocusedApp") {
-			return strings.TrimSpace(line)
+	for _, args := range [][]string{
+		{"-s", deviceID, "shell", "dumpsys", "activity", "activities"},
+		{"-s", deviceID, "shell", "dumpsys", "window", "windows"},
+	} {
+		output, err := exec.CommandContext(dumpsysCtx, adbPath, args...).CombinedOutput()
+		if err != nil {
+			continue
+		}
+		if activity := parseCurrentActivity(string(output)); activity != "" {
+			return activity
 		}
 	}
 	return "UnknownActivity"
 }
 
-func updateMonkeySummaryFromEvents(run *monkeyRunState, events []MonkeyGraphEvent, errText string) {
+func parseCurrentActivity(output string) string {
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.Contains(line, "mResumedActivity") ||
+			strings.Contains(line, "topResumedActivity") ||
+			strings.Contains(line, "ResumedActivity") ||
+			strings.Contains(line, "mCurrentFocus") ||
+			strings.Contains(line, "mFocusedApp") {
+			if activity := activityPattern.FindString(line); activity != "" {
+				return activity
+			}
+		}
+	}
+	return ""
+}
+
+func updateMonkeySummaryFromEvents(run *monkeyRunState, events []MonkeyGraphEvent, errText string, finished bool) {
 	run.mu.Lock()
-	defer run.mu.Unlock()
 	run.summary.ScreenshotCount = len(events)
 	run.summary.NormalCount, run.summary.WarningCount, run.summary.CriticalCount, run.summary.UnknownCount = 0, 0, 0, 0
 	run.summary.FirstCriticalNodeID = ""
+	run.summary.AppCrashDetected = false
 	for _, event := range events {
+		if eventContainsAppCrash(event) {
+			run.summary.AppCrashDetected = true
+		}
 		switch event.Risk {
 		case "critical":
 			run.summary.CriticalCount++
@@ -769,24 +1000,65 @@ func updateMonkeySummaryFromEvents(run *monkeyRunState, events []MonkeyGraphEven
 			run.summary.NormalCount++
 		}
 	}
-	run.summary.Status = "passed"
-	if run.summary.WarningCount > 0 {
-		run.summary.Status = "warning"
-	}
-	if run.summary.CriticalCount > 0 || errText != "" {
-		run.summary.Status = "failed"
-	}
-	if len(events) == 0 {
-		run.summary.Status = "incomplete"
-	}
 	if errText != "" {
 		run.summary.Error = errText
 	}
-	run.summary.FinishedAt = time.Now().Format(time.RFC3339)
+	if finished {
+		run.summary.Status = "passed"
+		if run.summary.WarningCount > 0 {
+			run.summary.Status = "warning"
+		}
+		if run.summary.CriticalCount > 0 || errText != "" {
+			run.summary.Status = "failed"
+		}
+		if errText == context.Canceled.Error() || errText == context.DeadlineExceeded.Error() {
+			run.summary.Status = "stopped"
+		}
+		if len(events) == 0 {
+			run.summary.Status = "incomplete"
+		}
+		run.summary.TerminationReason = resolveMonkeyTerminationReason(run.summary, errText)
+		run.summary.FinishedAt = time.Now().Format(time.RFC3339)
+	}
 	if started, err := time.Parse(time.RFC3339, run.summary.StartedAt); err == nil {
 		run.summary.Duration = formatDurationHMS(int(time.Since(started).Seconds()))
 	}
 	_ = writeJSON(filepath.Join(monkeyRunDir(run.summary.RunID), "summary.json"), run.summary)
+	summary := run.summary
+	run.mu.Unlock()
+	publishMonkeyStreamEvent(run, "summary", summary)
+	if finished {
+		publishMonkeyStreamEvent(run, "complete", summary)
+	}
+}
+
+func eventContainsAppCrash(event MonkeyGraphEvent) bool {
+	for _, evidence := range event.Evidence {
+		lower := strings.ToLower(evidence.Message)
+		if strings.Contains(lower, "crash:") ||
+			strings.Contains(lower, "fatal exception") ||
+			strings.Contains(lower, "force finishing activity") ||
+			strings.Contains(lower, "monkey aborted") {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveMonkeyTerminationReason(summary MonkeyRunSummary, errText string) string {
+	if summary.AppCrashDetected {
+		return "target_app_crash"
+	}
+	if errText == context.Canceled.Error() || errText == context.DeadlineExceeded.Error() {
+		return "stopped_or_duration_reached"
+	}
+	if errText != "" {
+		return "monkey_process_error"
+	}
+	if summary.WarningCount > 0 || summary.CriticalCount > 0 {
+		return "completed_with_risk"
+	}
+	return "completed"
 }
 
 func saveMonkeyExecutionReport(req MonkeyRunRequest, summary MonkeyRunSummary) {
@@ -800,8 +1072,9 @@ func saveMonkeyExecutionReport(req MonkeyRunRequest, summary MonkeyRunSummary) {
 	if summary.Status == "stopped" {
 		status = "Failed"
 	}
-	analysis := fmt.Sprintf("Monkey 真机测试\n包名: %s\n设备: %s\n模式: %s\n截图: %d\nNormal: %d, Warning: %d, Critical: %d, Unknown: %d",
-		summary.PackageName, summary.DeviceID, summary.PrecisionMode, summary.ScreenshotCount, summary.NormalCount, summary.WarningCount, summary.CriticalCount, summary.UnknownCount)
+	analysis := fmt.Sprintf("Monkey 真机测试\n包名: %s\n设备: %s\n模式: %s\n截图: %d\nNormal: %d, Warning: %d, Critical: %d, Unknown: %d\n真实 App Crash: %t\n结束原因: %s\n已过滤系统噪声: %d",
+		summary.PackageName, summary.DeviceID, summary.PrecisionMode, summary.ScreenshotCount, summary.NormalCount, summary.WarningCount, summary.CriticalCount, summary.UnknownCount,
+		summary.AppCrashDetected, summary.TerminationReason, summary.IgnoredSystemLogCount)
 	_, _ = AddExecutionReport(ExecutionReport{
 		ID: "MONKEY-" + time.Now().Format("20060102150405"), RunID: summary.RunID,
 		Name: "Monkey测试", Type: "Monkey 测试", Status: status, Duration: summary.Duration,

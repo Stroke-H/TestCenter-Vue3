@@ -19,6 +19,13 @@ import { storeToRefs } from 'pinia'
 import { useReportStore } from '@/stores'
 import { retryFetch } from '@/utils/retryFetch'
 import { buildBackendUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
+import MonkeyHologram3D from '@/views/ComApiCommit/components/MonkeyHologram3D.vue'
+import {
+  MONKEY_ATOMIC_DEMO_REPORT_ID,
+  createMonkeyAtomicDemoGraph,
+  monkeyAtomicDemoReport,
+  type MonkeyAtomicNode
+} from './composables/useMonkeyAtomicDemo'
 
 use([LineChart, BarChart, SankeyChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
@@ -26,10 +33,14 @@ use([LineChart, BarChart, SankeyChart, GridComponent, LegendComponent, TooltipCo
 const activeFilter = ref('K6 压测')
 const searchQuery = ref('')
 const dialogVisible = ref(false)
+const monkeyDemoVisible = ref(false)
 const analyticsLoading = ref(false)
 const analyticsError = ref('')
 const iframeUrl = ref('')
 const selectedReport = ref<any>(null)
+const monkeyDemoNodes = ref<MonkeyAtomicNode[]>([])
+const monkeyDemoEdges = ref<Array<{ source: string; target: string; event: string }>>([])
+const selectedMonkeyDemoNode = ref<MonkeyAtomicNode | null>(null)
 const selectedAnalyticsId = ref('')
 const trendChartRef = ref<HTMLElement>()
 const stackChartRef = ref<HTMLElement>()
@@ -88,6 +99,20 @@ const normalizeReportType = (type: string) => {
   return type
 }
 
+const isMonkeyAtomicDemoReport = (row: any) => row?.id === MONKEY_ATOMIC_DEMO_REPORT_ID
+
+const allReportsForDisplay = computed(() => {
+  const hasDemoReport = reports.value.some(item => item.id === MONKEY_ATOMIC_DEMO_REPORT_ID)
+  return hasDemoReport ? reports.value : [monkeyAtomicDemoReport, ...reports.value]
+})
+
+const monkeyDemoStats = computed(() => ({
+  nodes: monkeyDemoNodes.value.length,
+  edges: monkeyDemoEdges.value.length,
+  warning: monkeyDemoNodes.value.filter(node => node.risk === 'warning').length,
+  critical: monkeyDemoNodes.value.filter(node => node.risk === 'critical').length
+}))
+
 const getReportEnvironment = (row: any) => {
   const normalizedType = normalizeReportType(row.type)
   if (normalizedType !== 'K6 压测') return 'prod'
@@ -122,7 +147,7 @@ const fetchAvailableReports = async () => {
 
 // 根据顶栏的 Filter 与搜索框双重过滤列表
 const filteredReports = computed(() => {
-  return reports.value.filter(item => {
+  return allReportsForDisplay.value.filter(item => {
     // 1. 基础过滤：匹配侧边栏分类和搜索框
     const displayType = normalizeReportType(item.type)
     const matchesFilter = displayType === activeFilter.value
@@ -452,6 +477,20 @@ const getStatusType = (status: string) => {
 
 // 打开弹窗查看报告 (只针对压测)
 const viewReport = (row: any) => {
+  if (isMonkeyAtomicDemoReport(row)) {
+    selectedReport.value = row
+    const graph = createMonkeyAtomicDemoGraph()
+    monkeyDemoNodes.value = graph.nodes
+    monkeyDemoEdges.value = graph.edges
+    selectedMonkeyDemoNode.value =
+      graph.nodes.find(node => node.risk === 'critical') ||
+      graph.nodes.find(node => node.risk === 'warning') ||
+      graph.nodes[0] ||
+      null
+    monkeyDemoVisible.value = true
+    return
+  }
+
   if (row.reportUrl) {
     selectedReport.value = row
     const normalizedUrl = normalizeBackendUrl(row.reportUrl)
@@ -748,6 +787,74 @@ watch(activeFilter, async () => {
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="monkeyDemoVisible"
+      title="Monkey 600 节点验收报告原子图 Demo"
+      width="92%"
+      top="4vh"
+      custom-class="monkey-demo-dialog"
+      :destroy-on-close="true"
+    >
+      <div class="monkey-demo-viewer">
+        <div class="monkey-demo-stage">
+          <MonkeyHologram3D
+            :nodes="monkeyDemoNodes"
+            :edges="monkeyDemoEdges"
+            :selected-id="selectedMonkeyDemoNode?.id"
+            target-app="com.company.shortsdrama.wave"
+            @select="selectedMonkeyDemoNode = $event"
+          />
+        </div>
+
+        <aside class="monkey-demo-panel">
+          <div class="monkey-demo-panel__header">
+            <span>{{ selectedMonkeyDemoNode?.title || '节点预览' }}</span>
+            <strong :class="`monkey-risk monkey-risk--${selectedMonkeyDemoNode?.risk || 'normal'}`">
+              {{ selectedMonkeyDemoNode?.risk || 'normal' }}
+            </strong>
+          </div>
+
+          <img
+            v-if="selectedMonkeyDemoNode?.imageUrl"
+            :src="selectedMonkeyDemoNode.imageUrl"
+            :alt="selectedMonkeyDemoNode.title"
+            class="monkey-demo-panel__image"
+          />
+          <div v-else class="monkey-demo-panel__empty">暂无截图</div>
+
+          <div v-if="selectedMonkeyDemoNode" class="monkey-demo-panel__meta">
+            <span>事件：{{ selectedMonkeyDemoNode.event }}</span>
+            <span>页面：{{ selectedMonkeyDemoNode.activity }}</span>
+            <span>摘要：{{ selectedMonkeyDemoNode.summary }}</span>
+          </div>
+
+          <div class="monkey-demo-stats">
+            <div>
+              <span>节点</span>
+              <strong>{{ monkeyDemoStats.nodes }}</strong>
+            </div>
+            <div>
+              <span>路径</span>
+              <strong>{{ monkeyDemoStats.edges }}</strong>
+            </div>
+            <div>
+              <span>告警</span>
+              <strong>{{ monkeyDemoStats.warning }}</strong>
+            </div>
+            <div>
+              <span>严重</span>
+              <strong>{{ monkeyDemoStats.critical }}</strong>
+            </div>
+          </div>
+        </aside>
+      </div>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="monkeyDemoVisible = false">关闭</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
   </div>
 </template>
 
@@ -950,6 +1057,154 @@ watch(activeFilter, async () => {
   height: 100%;
   border: none;
 }
+
+:deep(.monkey-demo-dialog .el-dialog__body) {
+  height: min(76vh, calc(100vh - 150px));
+  padding: 0;
+  overflow: hidden;
+  background: #020617;
+}
+
+:deep(.monkey-demo-dialog) {
+  display: flex;
+  max-height: 92vh;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:deep(.monkey-demo-dialog .el-dialog__header),
+:deep(.monkey-demo-dialog .el-dialog__footer) {
+  flex-shrink: 0;
+}
+
+.monkey-demo-viewer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 35% 40%, rgba(8, 145, 178, 0.28), transparent 38%),
+    linear-gradient(135deg, #020617 0%, #07111f 58%, #0f172a 100%);
+}
+
+.monkey-demo-stage {
+  min-width: 0;
+  min-height: 0;
+  padding: 14px;
+}
+
+.monkey-demo-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 18px;
+  padding-bottom: 26px;
+  overflow-y: auto;
+  border-left: 1px solid rgba(34, 211, 238, 0.24);
+  background: rgba(2, 6, 23, 0.74);
+  backdrop-filter: blur(18px);
+}
+
+.monkey-demo-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #e0f2fe;
+  font-weight: 800;
+}
+
+.monkey-risk {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.monkey-risk--normal {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(134, 239, 172, 0.32);
+}
+
+.monkey-risk--warning {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(253, 230, 138, 0.35);
+}
+
+.monkey-risk--critical {
+  color: #fecdd3;
+  background: rgba(239, 68, 68, 0.16);
+  border: 1px solid rgba(254, 205, 211, 0.36);
+}
+
+.monkey-risk--unknown {
+  color: #cbd5e1;
+  background: rgba(100, 116, 139, 0.18);
+  border: 1px solid rgba(203, 213, 225, 0.3);
+}
+
+.monkey-demo-panel__image {
+  width: 100%;
+  max-height: clamp(220px, 36vh, 350px);
+  object-fit: contain;
+  border: 1px solid rgba(34, 211, 238, 0.18);
+  border-radius: 14px;
+  background: #020617;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.36);
+}
+
+.monkey-demo-panel__empty {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  border: 1px dashed rgba(148, 163, 184, 0.32);
+  border-radius: 14px;
+  color: #94a3b8;
+}
+
+.monkey-demo-panel__meta {
+  display: grid;
+  gap: 8px;
+  color: #bae6fd;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.monkey-demo-stats {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: auto;
+  padding-bottom: 2px;
+}
+
+.monkey-demo-stats div {
+  padding: 12px;
+  border: 1px solid rgba(34, 211, 238, 0.16);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.monkey-demo-stats span {
+  display: block;
+  margin-bottom: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.monkey-demo-stats strong {
+  color: #e0f2fe;
+  font-size: 20px;
+}
 /* ==================== AI 总结面板 ==================== */
 .ai-analysis-panel {
   margin-top: 24px;
@@ -1127,6 +1382,22 @@ watch(activeFilter, async () => {
   .analytics-layout,
   .analytics-summary {
     grid-template-columns: 1fr;
+  }
+
+  .monkey-demo-viewer {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .monkey-demo-stage {
+    min-height: 520px;
+    height: 520px;
+  }
+
+  .monkey-demo-panel {
+    overflow: visible;
+    border-top: 1px solid rgba(34, 211, 238, 0.24);
+    border-left: 0;
   }
 }
 </style>

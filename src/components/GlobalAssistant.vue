@@ -3,6 +3,7 @@ import { computed, ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { notifyAcceptanceReportsChanged } from '@/utils/acceptanceReportEvents'
 import { useDramaRunStore, useTestcaseGenerationRunStore } from '@/stores'
 import { useRouter } from 'vue-router'
 
@@ -252,6 +253,7 @@ const saveReport = async () => {
     })
     if (res.ok) {
       ElMessage.success('验收报告已成功入库！')
+      notifyAcceptanceReportsChanged()
       showReportDialog.value = false
     } else {
       ElMessage.error('保存失败，请检查后端连接。')

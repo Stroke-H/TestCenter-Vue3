@@ -21,7 +21,7 @@ func main() {
 	config := cors.DefaultConfig()
 	config.AllowOriginFunc = func(origin string) bool { return true }
 	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
-	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization", "Accept"}
+	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization", "Accept", "Last-Event-ID"}
 	config.AllowCredentials = true
 	r.Use(cors.New(config))
 
@@ -152,6 +152,7 @@ func main() {
 			monkey.GET("/runs", services.ListMonkeyRunsHandler)
 			monkey.POST("/runs", services.StartMonkeyRunHandler)
 			monkey.GET("/runs/:runId", services.GetMonkeyRunHandler)
+			monkey.GET("/runs/:runId/stream", services.SubscribeMonkeyRunHandler)
 			monkey.GET("/runs/:runId/events", services.GetMonkeyRunEventsHandler)
 			monkey.GET("/runs/:runId/logs", services.GetMonkeyRunLogsHandler)
 			monkey.GET("/runs/:runId/screenshots/:fileName", services.GetMonkeyRunScreenshotHandler)

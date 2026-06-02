@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 
 interface MonkeyGraphNode {
@@ -84,6 +84,7 @@ let selectedRing: THREE.LineLoop | null = null
 let orbitsGroup: THREE.Group | null = null
 let centerRings: THREE.LineLoop[] = []
 let globeShell: THREE.Mesh | null = null
+let resizeObserver: ResizeObserver | null = null
 
 const disposeObject = (object: THREE.Object3D) => {
   object.traverse((child) => {
@@ -581,6 +582,7 @@ const updateSelectedState = () => {
 const resizeRenderer = () => {
   if (!canvasHost.value || !renderer || !camera) return
   const { clientWidth, clientHeight } = canvasHost.value
+  if (clientWidth <= 0 || clientHeight <= 0) return
   renderer.setSize(clientWidth, clientHeight)
   camera.aspect = clientWidth / Math.max(clientHeight, 1)
   camera.updateProjectionMatrix()
@@ -726,7 +728,7 @@ const handleClick = (event: MouseEvent) => {
 }
 
 const initScene = () => {
-  if (!canvasHost.value) return
+  if (!canvasHost.value || renderer) return
   scene = new THREE.Scene()
   scene.fog = new THREE.FogExp2(0x020617, 0.035)
 
@@ -800,6 +802,10 @@ const initScene = () => {
   pointer = new THREE.Vector2()
   
   canvasHost.value.addEventListener('wheel', handleWheel, { passive: false })
+  resizeObserver = new ResizeObserver(() => {
+    resizeRenderer()
+  })
+  resizeObserver.observe(canvasHost.value)
   
   resizeRenderer()
   rebuildGraph()
@@ -808,13 +814,20 @@ const initScene = () => {
 }
 
 onMounted(() => {
-  initScene()
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      initScene()
+      requestAnimationFrame(resizeRenderer)
+    })
+  })
   window.addEventListener('resize', resizeRenderer)
 })
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(animationId)
   window.removeEventListener('resize', resizeRenderer)
+  resizeObserver?.disconnect()
+  resizeObserver = null
   if (canvasHost.value) {
     canvasHost.value.removeEventListener('wheel', handleWheel)
   }
