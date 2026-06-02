@@ -18,6 +18,8 @@
 - **Monkey Screenshot Preview Recovery**: Monkey 截图资源纳入统一后端地址归一化，并通过当前登录态鉴权读取，修复不同访问入口下执行结果和历史报告无法加载采样图片的问题。
 - **Monkey Atomic Result Retry**: 执行完成页仅在截图节点成功读取后结束状态校准，节点归档稍有延迟时会自动重试，避免完成态原子图偶发空白。
 - **Monkey Readable Evidence Summary**: 异常节点摘要改为面向用户的中文解释，原始日志收纳到摘要末尾的 `Detail` 悬浮入口中，兼顾可读性和排障信息完整度。
+- **Monkey Duration-First Execution**: Monkey 真机测试改为以用户配置时长为准；设备端 Monkey 批次提前正常结束时会自动递增 seed 并续跑下一批，直到达到规定时间，避免事件数提前耗尽导致测试过早结算。
+- **Monkey Fullscreen Report Viewer**: Monkey 原子图报告取消普通弹窗的白色 frame、外边距和底部操作栏，改为无边框全屏展示，保留右上角悬浮关闭按钮并让原子图舞台铺满浏览器可用区域。
 
 ## 2026-05-22
 

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMonkeyLogClassifierFiltersSystemNoise(t *testing.T) {
@@ -170,6 +171,35 @@ func TestBuildMonkeyArgsAddsIgnoreCrashesOnlyWhenEnabled(t *testing.T) {
 	})
 	if slices.Contains(args, "--ignore-crashes") {
 		t.Fatal("did not expect --ignore-crashes by default")
+	}
+}
+
+func TestShouldContinueMonkeyBatchOnlyForEarlyCleanExit(t *testing.T) {
+	deadline := time.Now().Add(time.Minute)
+	if !shouldContinueMonkeyBatch(nil, nil, time.Now(), deadline, true) {
+		t.Fatal("expected clean early exit to continue with another batch")
+	}
+	if shouldContinueMonkeyBatch(context.Canceled, nil, time.Now(), deadline, true) {
+		t.Fatal("did not expect failed batch to continue")
+	}
+	if shouldContinueMonkeyBatch(nil, context.Canceled, time.Now(), deadline, true) {
+		t.Fatal("did not expect canceled run to continue")
+	}
+	if shouldContinueMonkeyBatch(nil, nil, deadline, deadline, true) {
+		t.Fatal("did not expect run at deadline to continue")
+	}
+	if shouldContinueMonkeyBatch(nil, nil, time.Now(), deadline, false) {
+		t.Fatal("did not expect critical evidence to continue when crash continuation is disabled")
+	}
+}
+
+func TestMonkeyBatchRequestChangesSeedForFollowUpBatch(t *testing.T) {
+	req := MonkeyRunRequest{Seed: "20260526"}
+	if seed := monkeyBatchRequest(req, 1).Seed; seed != "20260526" {
+		t.Fatalf("expected first batch seed to remain stable, got %s", seed)
+	}
+	if seed := monkeyBatchRequest(req, 3).Seed; seed != "20260528" {
+		t.Fatalf("expected follow-up seed offset, got %s", seed)
 	}
 }
 

@@ -850,9 +850,8 @@ watch(activeFilter, async () => {
     <el-dialog
       v-model="monkeyDemoVisible"
       :title="selectedReport?.name || 'Monkey 原子图报告'"
-      width="92%"
-      top="4vh"
-      custom-class="monkey-demo-dialog"
+      fullscreen
+      modal-class="monkey-demo-overlay"
       :destroy-on-close="true"
     >
       <div v-loading="monkeyViewerLoading" class="monkey-demo-viewer">
@@ -910,11 +909,6 @@ watch(activeFilter, async () => {
           </div>
         </aside>
       </div>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="monkeyDemoVisible = false">关闭</el-button>
-        </span>
-      </template>
     </el-dialog>
 
   </div>
@@ -1120,23 +1114,61 @@ watch(activeFilter, async () => {
   border: none;
 }
 
-:deep(.monkey-demo-dialog .el-dialog__body) {
-  height: min(76vh, calc(100vh - 150px));
+:global(.monkey-demo-overlay) {
+  overflow: hidden;
+}
+
+:global(.monkey-demo-overlay .el-dialog__body) {
+  flex: 1;
+  min-height: 0;
   padding: 0;
   overflow: hidden;
   background: #020617;
 }
 
-:deep(.monkey-demo-dialog) {
+:global(.monkey-demo-overlay .el-dialog) {
+  position: relative;
   display: flex;
-  max-height: 92vh;
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  margin: 0;
   flex-direction: column;
   overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #020617;
+  box-shadow: none;
 }
 
-:deep(.monkey-demo-dialog .el-dialog__header),
-:deep(.monkey-demo-dialog .el-dialog__footer) {
-  flex-shrink: 0;
+:global(.monkey-demo-overlay .el-dialog__header) {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 12;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid rgba(125, 211, 252, 0.28);
+  border-radius: 50%;
+  background: rgba(2, 6, 23, 0.74);
+  backdrop-filter: blur(14px);
+}
+
+:global(.monkey-demo-overlay .el-dialog__title) {
+  display: none;
+}
+
+:global(.monkey-demo-overlay .el-dialog__headerbtn) {
+  top: 0;
+  right: 0;
+  width: 36px;
+  height: 36px;
+}
+
+:global(.monkey-demo-overlay .el-dialog__close) {
+  color: #bae6fd;
+  font-size: 18px;
 }
 
 .monkey-demo-viewer {
@@ -1154,7 +1186,7 @@ watch(activeFilter, async () => {
 .monkey-demo-stage {
   min-width: 0;
   min-height: 0;
-  padding: 14px;
+  padding: 0;
   overflow: hidden;
 }
 

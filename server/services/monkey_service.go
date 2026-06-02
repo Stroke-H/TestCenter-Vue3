@@ -61,6 +61,7 @@ type MonkeyRunSummary struct {
 	BaseScreenshotIntervalSec int    `json:"baseScreenshotIntervalSec"`
 	DenseSamplingEnabled      bool   `json:"denseSamplingEnabled"`
 	DenseSamplingTriggered    bool   `json:"denseSamplingTriggered"`
+	BatchCount                int    `json:"batchCount"`
 	StartedAt                 string `json:"startedAt"`
 	FinishedAt                string `json:"finishedAt,omitempty"`
 	Duration                  string `json:"duration"`
@@ -701,12 +702,14 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 	pendingEvidence := []MonkeyRiskEvidence{}
 	denseUntil := time.Time{}
 	denseLevel := ""
+	criticalEvidenceDetected := false
 	recordEvidence := func(e MonkeyRiskEvidence) {
 		e.Timestamp = time.Now().Format(time.RFC3339)
 		evidenceMu.Lock()
 		pendingEvidence = append(pendingEvidence, e)
 		if req.DenseSamplingEnabled {
 			if e.Level == "critical" {
+				criticalEvidenceDetected = true
 				denseLevel = "critical"
 				denseUntil = time.Now().Add(120 * time.Second)
 			} else if e.Level == "warning" && denseLevel != "critical" {
@@ -757,24 +760,47 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 		}()
 	}
 
-	monkeyArgs := buildMonkeyArgs(req)
-	monkeyCmd := exec.CommandContext(ctx, adbPath, monkeyArgs...)
-	stdout, _ := monkeyCmd.StdoutPipe()
-	stderr, _ := monkeyCmd.StderrPipe()
-	if err := monkeyCmd.Start(); err != nil {
+	var monkeyCmd *exec.Cmd
+	var done chan error
+	startNextBatch := func() error {
+		run.mu.Lock()
+		nextBatch := run.summary.BatchCount + 1
+		run.mu.Unlock()
+		batchReq := monkeyBatchRequest(req, nextBatch)
+		command := exec.CommandContext(ctx, adbPath, buildMonkeyArgs(batchReq)...)
+		stdout, _ := command.StdoutPipe()
+		stderr, _ := command.StderrPipe()
+		if err := command.Start(); err != nil {
+			return err
+		}
+		go scanMonkeyOutput(stdout, monkeyLog, "monkey", req.PackageName, recordEvidence, recordIgnoredSystemLog)
+		go scanMonkeyOutput(stderr, monkeyLog, "monkey", req.PackageName, recordEvidence, recordIgnoredSystemLog)
+		monkeyCmd = command
+		done = make(chan error, 1)
+		go func() { done <- command.Wait() }()
+		run.mu.Lock()
+		run.summary.BatchCount = nextBatch
+		_ = writeJSON(filepath.Join(runDir, "summary.json"), run.summary)
+		summary := run.summary
+		run.mu.Unlock()
+		if monkeyLog != nil {
+			_, _ = fmt.Fprintf(monkeyLog, "[BATCH] started #%d seed=%s targetDurationSec=%d\n", nextBatch, batchReq.Seed, req.DurationSec)
+		}
+		publishMonkeyStreamEvent(run, "summary", summary)
+		return nil
+	}
+	if err := startNextBatch(); err != nil {
 		updateMonkeySummaryFromEvents(run, nil, fmt.Sprintf("启动 Monkey 失败: %v", err), true)
 		saveMonkeyExecutionReport(req, monkeyRunSummarySnapshot(run))
 		return
 	}
-	go scanMonkeyOutput(stdout, monkeyLog, "monkey", req.PackageName, recordEvidence, recordIgnoredSystemLog)
-	go scanMonkeyOutput(stderr, monkeyLog, "monkey", req.PackageName, recordEvidence, recordIgnoredSystemLog)
 	guardCtx, guardCancel := context.WithCancel(ctx)
 	defer guardCancel()
 	go monitorMonkeyForegroundApp(guardCtx, adbPath, req, run, recordEvidence)
 
 	events := []MonkeyGraphEvent{}
-	done := make(chan error, 1)
-	go func() { done <- monkeyCmd.Wait() }()
+	durationTimer := time.NewTimer(time.Until(startedAt.Add(time.Duration(req.DurationSec) * time.Second)))
+	defer durationTimer.Stop()
 
 	capture := func(captureCtx context.Context) {
 		evidence, dense := consumeEvidence()
@@ -799,6 +825,20 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 	for {
 		select {
 		case err := <-done:
+			evidenceMu.Lock()
+			canContinueAfterEvidence := req.ContinueAfterCrash || !criticalEvidenceDetected
+			evidenceMu.Unlock()
+			if shouldContinueMonkeyBatch(err, ctx.Err(), time.Now(), startedAt.Add(time.Duration(req.DurationSec)*time.Second), canContinueAfterEvidence) {
+				if monkeyLog != nil {
+					_, _ = fmt.Fprintf(monkeyLog, "[BATCH] completed early; continuing until configured duration=%ds\n", req.DurationSec)
+				}
+				if nextErr := startNextBatch(); nextErr == nil {
+					continue
+				} else {
+					err = fmt.Errorf("续跑 Monkey 批次失败: %w", nextErr)
+					recordEvidence(MonkeyRiskEvidence{Level: "critical", Source: "monkey", Message: err.Error()})
+				}
+			}
 			if err != nil && ctx.Err() == nil {
 				recordEvidence(MonkeyRiskEvidence{Level: "critical", Source: "monkey", Message: err.Error()})
 			}
@@ -812,6 +852,17 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 			updateMonkeySummaryFromEvents(run, events, finalErr, true)
 			saveMonkeyExecutionReport(req, monkeyRunSummarySnapshot(run))
 			return
+		case <-durationTimer.C:
+			if monkeyCmd != nil && monkeyCmd.Process != nil {
+				_ = monkeyCmd.Process.Kill()
+			}
+			stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = stopADBMonkeyProcess(stopCtx, adbPath, req.DeviceID)
+			cancel()
+			capture(context.Background())
+			updateMonkeySummaryFromEvents(run, events, "", true)
+			saveMonkeyExecutionReport(req, monkeyRunSummarySnapshot(run))
+			return
 		case <-ctx.Done():
 			capture(finalCaptureContext(ctx))
 			updateMonkeySummaryFromEvents(run, events, ctx.Err().Error(), true)
@@ -821,6 +872,22 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 			capture(ctx)
 		}
 	}
+}
+
+func shouldContinueMonkeyBatch(batchErr error, runErr error, now time.Time, deadline time.Time, canContinueAfterEvidence bool) bool {
+	return batchErr == nil && runErr == nil && now.Before(deadline) && canContinueAfterEvidence
+}
+
+func monkeyBatchRequest(req MonkeyRunRequest, batch int) MonkeyRunRequest {
+	if batch <= 1 {
+		return req
+	}
+	seed, err := strconv.ParseInt(req.Seed, 10, 64)
+	if err != nil {
+		return req
+	}
+	req.Seed = strconv.FormatInt(seed+int64(batch-1), 10)
+	return req
 }
 
 func finalCaptureContext(runCtx context.Context) context.Context {
@@ -1275,8 +1342,8 @@ func resolveMonkeyTerminationReason(summary MonkeyRunSummary, errText string) st
 
 func saveMonkeyExecutionReport(req MonkeyRunRequest, summary MonkeyRunSummary) {
 	status := monkeyExecutionReportStatus(summary.Status)
-	analysis := fmt.Sprintf("Monkey 真机测试\n包名: %s\n设备: %s\n模式: %s\n截图: %d\nNormal: %d, Warning: %d, Critical: %d, Unknown: %d\n真实 App Crash: %t\n结束原因: %s\n已过滤系统噪声: %d\n前台守护重启: %d\n最近偏离包名: %s",
-		summary.PackageName, summary.DeviceID, summary.PrecisionMode, summary.ScreenshotCount, summary.NormalCount, summary.WarningCount, summary.CriticalCount, summary.UnknownCount,
+	analysis := fmt.Sprintf("Monkey 真机测试\n包名: %s\n设备: %s\n模式: %s\n执行批次: %d\n截图: %d\nNormal: %d, Warning: %d, Critical: %d, Unknown: %d\n真实 App Crash: %t\n结束原因: %s\n已过滤系统噪声: %d\n前台守护重启: %d\n最近偏离包名: %s",
+		summary.PackageName, summary.DeviceID, summary.PrecisionMode, summary.BatchCount, summary.ScreenshotCount, summary.NormalCount, summary.WarningCount, summary.CriticalCount, summary.UnknownCount,
 		summary.AppCrashDetected, summary.TerminationReason, summary.IgnoredSystemLogCount, summary.ForegroundRestartCount, summary.LastForeignPackage)
 	_, _ = AddExecutionReport(ExecutionReport{
 		ID: "MONKEY-" + time.Now().Format("20060102150405"), RunID: summary.RunID,

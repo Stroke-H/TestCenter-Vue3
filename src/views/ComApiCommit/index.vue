@@ -198,6 +198,7 @@ interface MonkeyRunSummary {
   status: 'running' | 'passed' | 'warning' | 'failed' | 'stopped' | 'incomplete'
   duration: string
   screenshotCount: number
+  batchCount: number
   normalCount: number
   warningCount: number
   criticalCount: number
@@ -724,13 +725,14 @@ const applyMonkeySummary = (summary: MonkeyRunSummary) => {
   const summaryLines = [
     `[SSE][RUN] ${summary.runId} ${summary.status}`,
     `[SCREENSHOT] ${summary.screenshotCount} 张，normal=${summary.normalCount}, warning=${summary.warningCount}, critical=${summary.criticalCount}, unknown=${summary.unknownCount}`,
+    `[BATCH] 已执行 ${summary.batchCount || 1} 个 Monkey 批次，平台将持续续跑至设定时长`,
     `[EVIDENCE] 真实 App Crash=${summary.appCrashDetected ? '是' : '否'}，结束原因=${summary.terminationReason || '运行中'}，已过滤系统噪声=${summary.ignoredSystemLogCount || 0}`,
     `[GUARD] 前台守护=${summary.foregroundGuardEnabled ? '开启' : '关闭'}，自动重启=${summary.foregroundRestartCount || 0} 次${summary.lastForeignPackage ? `，最近偏离=${summary.lastForeignPackage}` : ''}`,
     summary.error ? `[ERROR] ${summary.error}` : '[INFO] Monkey 真机测试采集中...'
   ]
   logs.value = [
     ...summaryLines,
-    ...logs.value.filter(line => !line.startsWith('[SSE][RUN]') && !line.startsWith('[SCREENSHOT]') && !line.startsWith('[EVIDENCE]') && !line.startsWith('[GUARD]') && line !== '[INFO] Monkey 真机测试采集中...')
+    ...logs.value.filter(line => !line.startsWith('[SSE][RUN]') && !line.startsWith('[SCREENSHOT]') && !line.startsWith('[BATCH]') && !line.startsWith('[EVIDENCE]') && !line.startsWith('[GUARD]') && line !== '[INFO] Monkey 真机测试采集中...')
   ].slice(-240)
   if (summary.status !== 'running') {
     void finalizeMonkeyRun(summary)
