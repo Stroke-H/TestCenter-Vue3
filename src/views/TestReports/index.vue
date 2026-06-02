@@ -1194,12 +1194,15 @@ watch(activeFilter, async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  box-sizing: border-box;
   width: 100%;
   height: 100%;
   min-height: 0;
   padding: 18px;
   padding-bottom: 26px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-left: 1px solid rgba(34, 211, 238, 0.24);
   background: rgba(2, 6, 23, 0.74);
   backdrop-filter: blur(18px);
@@ -1505,7 +1508,8 @@ watch(activeFilter, async () => {
   }
 
   .monkey-demo-panel {
-    overflow: visible;
+    height: auto;
+    overflow-y: auto;
     border-top: 1px solid rgba(34, 211, 238, 0.24);
     border-left: 0;
   }

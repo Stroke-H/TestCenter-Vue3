@@ -77,6 +77,15 @@ func TestDetectMonkeySystemOverlayFromFocusedNotificationShade(t *testing.T) {
 	}
 }
 
+func TestStatusBarProtectionCommandsUseAvailableADBCommand(t *testing.T) {
+	if err := setMonkeyStatusBarExpansionProtected(context.Background(), "/usr/bin/true", "device-1", true); err != nil {
+		t.Fatalf("expected status bar protection command to succeed, got %v", err)
+	}
+	if err := collapseMonkeyStatusBar(context.Background(), "/usr/bin/true", "device-1"); err != nil {
+		t.Fatalf("expected status bar collapse command to succeed, got %v", err)
+	}
+}
+
 func TestParseMonkeyAdInspectionFindsCloseButton(t *testing.T) {
 	output := `UI hierarchy dumped to: /dev/tty
 <hierarchy rotation="0">

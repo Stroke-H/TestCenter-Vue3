@@ -2034,10 +2034,16 @@ onUnmounted(() => {
 
 .monkey-preview-panel {
   min-width: 0;
+  min-height: 0;
+  max-height: 100%;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-sizing: border-box;
   padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border-radius: 22px;
   background:
     linear-gradient(180deg, rgba(15, 23, 42, 0.76), rgba(2, 6, 23, 0.7));
@@ -2071,8 +2077,10 @@ onUnmounted(() => {
 .monkey-preview-panel__image {
   width: 100%;
   min-height: 0;
+  flex-shrink: 0;
+  max-height: 48vh;
   border-radius: 18px;
-  object-fit: cover;
+  object-fit: contain;
   border: 1px solid rgba(148, 163, 184, 0.2);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.42);
 }

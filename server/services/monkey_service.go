@@ -776,6 +776,14 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 		run.mu.Unlock()
 	}
 
+	statusBarExpansionProtected := setMonkeyStatusBarExpansionProtected(ctx, adbPath, req.DeviceID, true) == nil
+	_ = collapseMonkeyStatusBar(ctx, adbPath, req.DeviceID)
+	defer func() {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		_ = setMonkeyStatusBarExpansionProtected(releaseCtx, adbPath, req.DeviceID, false)
+	}()
+
 	_ = exec.CommandContext(ctx, adbPath, "-s", req.DeviceID, "logcat", "-c").Run()
 	logcatCmd := exec.CommandContext(ctx, adbPath, "-s", req.DeviceID, "logcat", "-v", "time")
 	if logcatPipe, err := logcatCmd.StdoutPipe(); err == nil {
@@ -823,6 +831,9 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 	}
 	guardCtx, guardCancel := context.WithCancel(ctx)
 	defer guardCancel()
+	if !statusBarExpansionProtected {
+		go keepMonkeyStatusBarCollapsed(guardCtx, adbPath, req.DeviceID)
+	}
 	go monitorMonkeyForegroundApp(guardCtx, adbPath, req, run, recordEvidence)
 
 	events := []MonkeyGraphEvent{}
@@ -1342,12 +1353,59 @@ func detectMonkeySystemOverlay(output string) string {
 	return ""
 }
 
+func keepMonkeyStatusBarCollapsed(ctx context.Context, adbPath string, deviceID string) {
+	ticker := time.NewTicker(750 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = collapseMonkeyStatusBar(ctx, adbPath, deviceID)
+		}
+	}
+}
+
+func setMonkeyStatusBarExpansionProtected(ctx context.Context, adbPath string, deviceID string, protected bool) error {
+	commands := [][]string{
+		{"shell", "cmd", "statusbar", "send-disable-flag", "none"},
+		{"shell", "cmd", "statusbar", "disable", "0"},
+	}
+	if protected {
+		commands = [][]string{
+			{"shell", "cmd", "statusbar", "send-disable-flag", "statusbar-expansion", "quick-settings"},
+			{"shell", "cmd", "statusbar", "disable", "0x00010000"},
+		}
+	}
+	statusBarCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var lastErr error
+	for _, command := range commands {
+		args := append([]string{"-s", deviceID}, command...)
+		output, err := exec.CommandContext(statusBarCtx, adbPath, args...).CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		lastErr = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return lastErr
+}
+
+func collapseMonkeyStatusBar(ctx context.Context, adbPath string, deviceID string) error {
+	collapseCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(collapseCtx, adbPath, "-s", deviceID, "shell", "cmd", "statusbar", "collapse").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func dismissMonkeySystemOverlay(ctx context.Context, adbPath string, deviceID string) error {
 	dismissCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(dismissCtx, adbPath, "-s", deviceID, "shell", "cmd", "statusbar", "collapse").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	if err := collapseMonkeyStatusBar(dismissCtx, adbPath, deviceID); err != nil {
+		return err
 	}
 	_ = exec.CommandContext(dismissCtx, adbPath, "-s", deviceID, "shell", "input", "keyevent", "KEYCODE_BACK").Run()
 	return nil

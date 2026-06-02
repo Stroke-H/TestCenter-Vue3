@@ -21,6 +21,8 @@
 - **Monkey Readable Evidence Summary**: 异常节点摘要改为面向用户的中文解释，原始日志收纳到摘要末尾的 `Detail` 悬浮入口中，兼顾可读性和排障信息完整度。
 - **Monkey Duration-First Execution**: Monkey 真机测试改为以用户配置时长为准；设备端 Monkey 批次提前正常结束时会自动递增 seed 并续跑下一批，直到达到规定时间，避免事件数提前耗尽导致测试过早结算。
 - **Monkey Fullscreen Report Viewer**: Monkey 原子图报告取消普通弹窗的白色 frame、外边距和底部操作栏，改为无边框全屏展示，保留右上角悬浮关闭按钮并让原子图舞台铺满浏览器可用区域。
+- **Monkey Pixel Status Bar Guard**: Monkey 真机测试期间优先禁用 Android 通知栏下拉展开，并通过高频主动收起命令兼容 Pixel 7 等焦点不切换到 `SystemUI` 的机型；测试结束后自动恢复通知栏状态，避免随机事件持续点击快捷设置。
+- **Monkey Detail Panel Scroll**: Monkey 执行结果和历史原子图报告的右侧详情面板支持内部上下滚动，并修复面板 padding 导致的横向裁切，保证截图、日志摘要和统计信息可完整查看。
 
 ## 2026-05-22
 
