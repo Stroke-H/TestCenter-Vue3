@@ -73,6 +73,9 @@ type MonkeyRunSummary struct {
 	AppCrashDetected          bool   `json:"appCrashDetected"`
 	TerminationReason         string `json:"terminationReason,omitempty"`
 	IgnoredSystemLogCount     int    `json:"ignoredSystemLogCount"`
+	ForegroundGuardEnabled    bool   `json:"foregroundGuardEnabled"`
+	ForegroundRestartCount    int    `json:"foregroundRestartCount"`
+	LastForeignPackage        string `json:"lastForeignPackage,omitempty"`
 	Error                     string `json:"error,omitempty"`
 }
 
@@ -108,9 +111,22 @@ type MonkeyStreamEvent struct {
 	Timestamp string `json:"timestamp"`
 }
 
+type MonkeyForegroundGuardEvent struct {
+	Action            string `json:"action"`
+	ForegroundPackage string `json:"foregroundPackage,omitempty"`
+	TargetPackage     string `json:"targetPackage"`
+	RestartCount      int    `json:"restartCount"`
+	Message           string `json:"message"`
+	Timestamp         string `json:"timestamp"`
+}
+
 type monkeyRunState struct {
 	mu                sync.Mutex
 	cancel            context.CancelFunc
+	stopOnce          sync.Once
+	stopped           chan struct{}
+	adbPath           string
+	deviceID          string
 	summary           MonkeyRunSummary
 	streamSubscribers map[chan MonkeyStreamEvent]struct{}
 	streamHistory     []MonkeyStreamEvent
@@ -352,8 +368,40 @@ func StopMonkeyRunHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "running Monkey task not found"})
 		return
 	}
-	run.cancel()
-	c.JSON(http.StatusOK, gin.H{"message": "stop requested"})
+	requestMonkeyStop(run)
+	select {
+	case <-run.stopped:
+		run.mu.Lock()
+		summary := run.summary
+		run.mu.Unlock()
+		c.JSON(http.StatusOK, summary)
+	case <-time.After(15 * time.Second):
+		c.JSON(http.StatusAccepted, gin.H{"message": "stop requested, report finalization is still running"})
+	}
+}
+
+func requestMonkeyStop(run *monkeyRunState) {
+	run.stopOnce.Do(func() {
+		run.cancel()
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = stopADBMonkeyProcess(stopCtx, run.adbPath, run.deviceID)
+	})
+}
+
+func stopADBMonkeyProcess(ctx context.Context, adbPath string, deviceID string) error {
+	var lastErr error
+	for _, args := range [][]string{
+		{"-s", deviceID, "shell", "pkill", "-f", "com.android.commands.monkey"},
+		{"-s", deviceID, "shell", "killall", "com.android.commands.monkey"},
+	} {
+		output, err := exec.CommandContext(ctx, adbPath, args...).CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		lastErr = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return lastErr
 }
 
 func subscribeMonkeyStream(run *monkeyRunState, lastEventID int64) (chan MonkeyStreamEvent, []MonkeyStreamEvent) {
@@ -601,11 +649,15 @@ func startMonkeyRun(parent context.Context, req MonkeyRunRequest) (*monkeyRunSta
 	runID := "MONKEY-" + time.Now().Format("20060102150405")
 	ctx, cancel := context.WithTimeout(parent, time.Duration(req.DurationSec+30)*time.Second)
 	run := &monkeyRunState{
-		cancel: cancel,
+		cancel:   cancel,
+		stopped:  make(chan struct{}),
+		adbPath:  adbPath,
+		deviceID: req.DeviceID,
 		summary: MonkeyRunSummary{
 			RunID: runID, Status: "running", PackageName: req.PackageName, DeviceID: req.DeviceID,
 			PrecisionMode: req.PrecisionMode, BaseScreenshotIntervalSec: baseInterval,
-			DenseSamplingEnabled: req.DenseSamplingEnabled, StartedAt: time.Now().Format(time.RFC3339),
+			DenseSamplingEnabled: req.DenseSamplingEnabled, ForegroundGuardEnabled: true,
+			StartedAt: time.Now().Format(time.RFC3339),
 		},
 		streamSubscribers: map[chan MonkeyStreamEvent]struct{}{},
 	}
@@ -642,6 +694,7 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 		delete(monkeyRuns, runID)
 		monkeyRunsMu.Unlock()
 		closeMonkeyStreamSubscribers(run)
+		close(run.stopped)
 	}()
 
 	var evidenceMu sync.Mutex
@@ -710,19 +763,22 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 	stderr, _ := monkeyCmd.StderrPipe()
 	if err := monkeyCmd.Start(); err != nil {
 		updateMonkeySummaryFromEvents(run, nil, fmt.Sprintf("启动 Monkey 失败: %v", err), true)
-		saveMonkeyExecutionReport(req, run.summary)
+		saveMonkeyExecutionReport(req, monkeyRunSummarySnapshot(run))
 		return
 	}
 	go scanMonkeyOutput(stdout, monkeyLog, "monkey", req.PackageName, recordEvidence, recordIgnoredSystemLog)
 	go scanMonkeyOutput(stderr, monkeyLog, "monkey", req.PackageName, recordEvidence, recordIgnoredSystemLog)
+	guardCtx, guardCancel := context.WithCancel(ctx)
+	defer guardCancel()
+	go monitorMonkeyForegroundApp(guardCtx, adbPath, req, run, recordEvidence)
 
 	events := []MonkeyGraphEvent{}
 	done := make(chan error, 1)
 	go func() { done <- monkeyCmd.Wait() }()
 
-	capture := func() {
+	capture := func(captureCtx context.Context) {
 		evidence, dense := consumeEvidence()
-		event, err := captureMonkeyScreenshot(ctx, adbPath, req, runID, len(events)+1, startedAt, evidence, dense)
+		event, err := captureMonkeyScreenshot(captureCtx, adbPath, req, runID, len(events)+1, startedAt, evidence, dense)
 		if err != nil {
 			if monkeyLog != nil {
 				_, _ = fmt.Fprintf(monkeyLog, "[SCREENSHOT][ERROR] %s\n", err.Error())
@@ -739,30 +795,45 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 		publishMonkeyStreamEvent(run, "graph-event", event)
 		updateMonkeySummaryFromEvents(run, events, "", false)
 	}
-	capture()
+	capture(ctx)
 	for {
 		select {
 		case err := <-done:
 			if err != nil && ctx.Err() == nil {
 				recordEvidence(MonkeyRiskEvidence{Level: "critical", Source: "monkey", Message: err.Error()})
 			}
-			capture()
+			capture(finalCaptureContext(ctx))
 			finalErr := ""
-			if err != nil && ctx.Err() == nil {
+			if ctx.Err() != nil {
+				finalErr = ctx.Err().Error()
+			} else if err != nil {
 				finalErr = err.Error()
 			}
 			updateMonkeySummaryFromEvents(run, events, finalErr, true)
-			saveMonkeyExecutionReport(req, run.summary)
+			saveMonkeyExecutionReport(req, monkeyRunSummarySnapshot(run))
 			return
 		case <-ctx.Done():
-			capture()
+			capture(finalCaptureContext(ctx))
 			updateMonkeySummaryFromEvents(run, events, ctx.Err().Error(), true)
-			saveMonkeyExecutionReport(req, run.summary)
+			saveMonkeyExecutionReport(req, monkeyRunSummarySnapshot(run))
 			return
 		case <-time.After(currentDenseInterval()):
-			capture()
+			capture(ctx)
 		}
 	}
+}
+
+func finalCaptureContext(runCtx context.Context) context.Context {
+	if runCtx.Err() == nil {
+		return runCtx
+	}
+	return context.Background()
+}
+
+func monkeyRunSummarySnapshot(run *monkeyRunState) MonkeyRunSummary {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return run.summary
 }
 
 func buildMonkeyArgs(req MonkeyRunRequest) []string {
@@ -976,6 +1047,123 @@ func parseCurrentActivity(output string) string {
 	return ""
 }
 
+func monitorMonkeyForegroundApp(ctx context.Context, adbPath string, req MonkeyRunRequest, run *monkeyRunState, recordEvidence func(MonkeyRiskEvidence)) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	lastForeignPackage := ""
+	consecutiveForeignChecks := 0
+	restoreCooldownUntil := time.Time{}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if time.Now().Before(restoreCooldownUntil) {
+				continue
+			}
+			activity := resolveCurrentActivity(ctx, adbPath, req.DeviceID)
+			foregroundPackage := foregroundPackageFromActivity(activity)
+			if foregroundPackage == "" || foregroundPackage == req.PackageName {
+				lastForeignPackage = ""
+				consecutiveForeignChecks = 0
+				continue
+			}
+			if foregroundPackage != lastForeignPackage {
+				lastForeignPackage = foregroundPackage
+				consecutiveForeignChecks = 1
+				continue
+			}
+			consecutiveForeignChecks++
+			if consecutiveForeignChecks < 2 {
+				continue
+			}
+			consecutiveForeignChecks = 0
+
+			err := restoreMonkeyTargetApp(ctx, adbPath, req.DeviceID, foregroundPackage, req.PackageName)
+			run.mu.Lock()
+			run.summary.LastForeignPackage = foregroundPackage
+			if err == nil {
+				run.summary.ForegroundRestartCount++
+			}
+			restartCount := run.summary.ForegroundRestartCount
+			_ = writeJSON(filepath.Join(monkeyRunDir(run.summary.RunID), "summary.json"), run.summary)
+			summary := run.summary
+			run.mu.Unlock()
+
+			action := "restored"
+			message := fmt.Sprintf("检测到前台偏离 %s，已重新拉起目标 App %s", foregroundPackage, req.PackageName)
+			if err != nil {
+				action = "restore-failed"
+				message = fmt.Sprintf("检测到前台偏离 %s，但重新拉起目标 App 失败: %v", foregroundPackage, err)
+				recordEvidence(MonkeyRiskEvidence{Level: "warning", Source: "foreground-guard", Message: message})
+				restoreCooldownUntil = time.Now().Add(4 * time.Second)
+			} else {
+				restoreCooldownUntil = time.Now().Add(8 * time.Second)
+			}
+			publishMonkeyStreamEvent(run, "foreground-guard", MonkeyForegroundGuardEvent{
+				Action: action, ForegroundPackage: foregroundPackage, TargetPackage: req.PackageName,
+				RestartCount: restartCount, Message: message, Timestamp: time.Now().Format(time.RFC3339),
+			})
+			publishMonkeyStreamEvent(run, "summary", summary)
+		}
+	}
+}
+
+func foregroundPackageFromActivity(activity string) string {
+	if activity == "" || activity == "UnknownActivity" {
+		return ""
+	}
+	packageName, _, ok := strings.Cut(activity, "/")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(packageName)
+}
+
+func restoreMonkeyTargetApp(ctx context.Context, adbPath string, deviceID string, foreignPackage string, targetPackage string) error {
+	restoreCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if shouldForceStopForegroundPackage(foreignPackage, targetPackage) {
+		_ = exec.CommandContext(restoreCtx, adbPath, "-s", deviceID, "shell", "am", "force-stop", foreignPackage).Run()
+	}
+	_ = exec.CommandContext(restoreCtx, adbPath, "-s", deviceID, "shell", "am", "force-stop", targetPackage).Run()
+	output, err := exec.CommandContext(
+		restoreCtx, adbPath, "-s", deviceID, "shell", "monkey",
+		"-p", targetPackage, "-c", "android.intent.category.LAUNCHER", "1",
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := validateMonkeyLaunchOutput(string(output)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateMonkeyLaunchOutput(output string) error {
+	lower := strings.ToLower(output)
+	for _, failure := range []string{"no activities found", "monkey aborted", "error:"} {
+		if strings.Contains(lower, failure) {
+			return fmt.Errorf("目标 App 拉起失败: %s", strings.TrimSpace(output))
+		}
+	}
+	return nil
+}
+
+func shouldForceStopForegroundPackage(foregroundPackage string, targetPackage string) bool {
+	packageName := strings.ToLower(strings.TrimSpace(foregroundPackage))
+	if packageName == "" || packageName == strings.ToLower(strings.TrimSpace(targetPackage)) {
+		return false
+	}
+	for _, prefix := range []string{"android", "com.android.", "com.google.android.permissioncontroller", "com.google.android.apps.nexuslauncher"} {
+		if packageName == prefix || strings.HasPrefix(packageName, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
 func updateMonkeySummaryFromEvents(run *monkeyRunState, events []MonkeyGraphEvent, errText string, finished bool) {
 	run.mu.Lock()
 	run.summary.ScreenshotCount = len(events)
@@ -1062,25 +1250,29 @@ func resolveMonkeyTerminationReason(summary MonkeyRunSummary, errText string) st
 }
 
 func saveMonkeyExecutionReport(req MonkeyRunRequest, summary MonkeyRunSummary) {
-	status := "Passed"
-	if summary.Status == "warning" {
-		status = "Warning"
-	}
-	if summary.Status == "failed" || summary.Status == "incomplete" {
-		status = "Failed"
-	}
-	if summary.Status == "stopped" {
-		status = "Failed"
-	}
-	analysis := fmt.Sprintf("Monkey 真机测试\n包名: %s\n设备: %s\n模式: %s\n截图: %d\nNormal: %d, Warning: %d, Critical: %d, Unknown: %d\n真实 App Crash: %t\n结束原因: %s\n已过滤系统噪声: %d",
+	status := monkeyExecutionReportStatus(summary.Status)
+	analysis := fmt.Sprintf("Monkey 真机测试\n包名: %s\n设备: %s\n模式: %s\n截图: %d\nNormal: %d, Warning: %d, Critical: %d, Unknown: %d\n真实 App Crash: %t\n结束原因: %s\n已过滤系统噪声: %d\n前台守护重启: %d\n最近偏离包名: %s",
 		summary.PackageName, summary.DeviceID, summary.PrecisionMode, summary.ScreenshotCount, summary.NormalCount, summary.WarningCount, summary.CriticalCount, summary.UnknownCount,
-		summary.AppCrashDetected, summary.TerminationReason, summary.IgnoredSystemLogCount)
+		summary.AppCrashDetected, summary.TerminationReason, summary.IgnoredSystemLogCount, summary.ForegroundRestartCount, summary.LastForeignPackage)
 	_, _ = AddExecutionReport(ExecutionReport{
 		ID: "MONKEY-" + time.Now().Format("20060102150405"), RunID: summary.RunID,
 		Name: "Monkey测试", Type: "Monkey 测试", Status: status, Duration: summary.Duration,
 		Author: req.Author, Environment: normalizeReportEnvironment(req.Environment), AnalysisResult: analysis,
 		ReportURL: PlatformBackendURL("/api/monkey/runs/" + summary.RunID + "/events"),
 	})
+}
+
+func monkeyExecutionReportStatus(summaryStatus string) string {
+	switch summaryStatus {
+	case "warning":
+		return "Warning"
+	case "failed", "incomplete":
+		return "Failed"
+	case "stopped":
+		return "Stopped"
+	default:
+		return "Passed"
+	}
 }
 
 func listArchivedMonkeyRuns() ([]MonkeyRunSummary, error) {

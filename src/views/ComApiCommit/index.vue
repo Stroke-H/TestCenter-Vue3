@@ -203,7 +203,19 @@ interface MonkeyRunSummary {
   appCrashDetected: boolean
   terminationReason?: string
   ignoredSystemLogCount: number
+  foregroundGuardEnabled: boolean
+  foregroundRestartCount: number
+  lastForeignPackage?: string
   error?: string
+}
+
+interface MonkeyForegroundGuardEvent {
+  action: 'restored' | 'restore-failed'
+  foregroundPackage?: string
+  targetPackage: string
+  restartCount: number
+  message: string
+  timestamp: string
 }
 
 const currentStatus = ref<ExecStatus>('Ready')
@@ -699,11 +711,12 @@ const applyMonkeySummary = (summary: MonkeyRunSummary) => {
     `[SSE][RUN] ${summary.runId} ${summary.status}`,
     `[SCREENSHOT] ${summary.screenshotCount} 张，normal=${summary.normalCount}, warning=${summary.warningCount}, critical=${summary.criticalCount}, unknown=${summary.unknownCount}`,
     `[EVIDENCE] 真实 App Crash=${summary.appCrashDetected ? '是' : '否'}，结束原因=${summary.terminationReason || '运行中'}，已过滤系统噪声=${summary.ignoredSystemLogCount || 0}`,
+    `[GUARD] 前台守护=${summary.foregroundGuardEnabled ? '开启' : '关闭'}，自动重启=${summary.foregroundRestartCount || 0} 次${summary.lastForeignPackage ? `，最近偏离=${summary.lastForeignPackage}` : ''}`,
     summary.error ? `[ERROR] ${summary.error}` : '[INFO] Monkey 真机测试采集中...'
   ]
   logs.value = [
     ...summaryLines,
-    ...logs.value.filter(line => !line.startsWith('[SSE][RUN]') && !line.startsWith('[SCREENSHOT]') && !line.startsWith('[EVIDENCE]') && line !== '[INFO] Monkey 真机测试采集中...')
+    ...logs.value.filter(line => !line.startsWith('[SSE][RUN]') && !line.startsWith('[SCREENSHOT]') && !line.startsWith('[EVIDENCE]') && !line.startsWith('[GUARD]') && line !== '[INFO] Monkey 真机测试采集中...')
   ].slice(-240)
   if (summary.status !== 'running') {
     void finalizeMonkeyRun(summary)
@@ -758,6 +771,11 @@ const monkeyRunStream = useMonkeyRunStream({
     if (message.type === 'risk-evidence') {
       const evidence = message.data as MonkeyRiskEvidence
       appendMonkeyLiveLog(`[SSE][${evidence.source.toUpperCase()}][${evidence.level.toUpperCase()}] ${evidence.message}`)
+      return
+    }
+    if (message.type === 'foreground-guard') {
+      const event = message.data as MonkeyForegroundGuardEvent
+      appendMonkeyLiveLog(`[SSE][GUARD][${event.action.toUpperCase()}] ${event.message}`)
     }
   }
 })
@@ -784,7 +802,8 @@ const startMonkeyRun = async () => {
     `[ADB] ${monkeyCommandPreview.value.replace(/\n/g, ' ')}`,
     `[SCREENSHOT] ${monkeyPrecisionMode.value === 'high' ? '高精度' : '低精度'}模式，每 ${monkeyScreenshotIntervalSec.value}s 截图一次`,
     `[DENSE] 异常加密采样${monkeyDenseSamplingEnabled.value ? '开启：warning 5s/张 60s，critical 2s/张 120s' : '关闭'}`,
-    `[CRASH] ${monkeyContinueAfterCrash.value ? '发现 Crash 后继续执行并持续留证' : '发现 Crash 后立即停止并留证'}`
+    `[CRASH] ${monkeyContinueAfterCrash.value ? '发现 Crash 后继续执行并持续留证' : '发现 Crash 后立即停止并留证'}`,
+    '[GUARD] 前台守护已开启：持续检测当前前台应用，偏离测试目标后自动关闭并重新拉起目标 App'
   ]
   uptime.value = 0
   duration.value = 0
@@ -1133,6 +1152,31 @@ const stopExecution = async () => {
     return
   }
 
+  if (isMonkeyTest) {
+    if (!monkeyRunId.value) return
+    appendMonkeyLiveLog(`[${new Date().toLocaleTimeString()}] 正在停止设备端 Monkey 进程并生成报告...`)
+    try {
+      const response = await fetch(buildBackendUrl(`/api/monkey/runs/${monkeyRunId.value}/stop`), {
+        method: 'POST',
+        headers: { Authorization: authStore.token || '' }
+      })
+      const result = await response.json() as MonkeyRunSummary | { message?: string; error?: string }
+      if (!response.ok && response.status !== 202) {
+        throw new Error('error' in result ? result.error : '停止 Monkey 失败')
+      }
+      if (response.status === 202) {
+        appendMonkeyLiveLog(`[STOP] ${'message' in result ? result.message : '报告仍在生成，等待实时通道返回最终状态'}`)
+        return
+      }
+      applyMonkeySummary(result as MonkeyRunSummary)
+      appendMonkeyLiveLog(`[${new Date().toLocaleTimeString()}] Monkey 已停止，当前测试数据已生成报告。`)
+    } catch (error: any) {
+      appendMonkeyLiveLog(`[STOP][ERROR] ${error.message}`)
+      ElMessage.error(error.message || '停止 Monkey 失败')
+    }
+    return
+  }
+
   currentStatus.value = 'Stopped'
 
   if (ws) {
@@ -1150,14 +1194,7 @@ const stopExecution = async () => {
   }
   monkeyRunStream.disconnect()
 
-  if (isMonkeyTest) {
-    if (monkeyRunId.value) {
-      await fetch(buildBackendUrl(`/api/monkey/runs/${monkeyRunId.value}/stop`), {
-        method: 'POST',
-        headers: { Authorization: authStore.token || '' }
-      })
-    }
-  } else if (!isDramaCheck) {
+  if (!isDramaCheck) {
     await reportStore.addReport({
       name: toolName.value,
       type: 'K6 压测',

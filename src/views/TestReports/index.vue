@@ -17,6 +17,7 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 
 import { storeToRefs } from 'pinia'
 import { useReportStore } from '@/stores'
+import { useAuthStore } from '@/stores/auth'
 import { retryFetch } from '@/utils/retryFetch'
 import { buildBackendUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
 import MonkeyHologram3D from '@/views/ComApiCommit/components/MonkeyHologram3D.vue'
@@ -41,6 +42,8 @@ const selectedReport = ref<any>(null)
 const monkeyDemoNodes = ref<MonkeyAtomicNode[]>([])
 const monkeyDemoEdges = ref<Array<{ source: string; target: string; event: string }>>([])
 const selectedMonkeyDemoNode = ref<MonkeyAtomicNode | null>(null)
+const monkeyViewerLoading = ref(false)
+const monkeyViewerTargetApp = ref('com.company.shortsdrama.wave')
 const selectedAnalyticsId = ref('')
 const trendChartRef = ref<HTMLElement>()
 const stackChartRef = ref<HTMLElement>()
@@ -54,6 +57,7 @@ const filterOptions = ['Web 性能分析', 'K6 压测', '接口验证', 'UI 自�
 
 // 挂载全局 Reports 仓库
 const reportStore = useReportStore()
+const authStore = useAuthStore()
 const { reports } = storeToRefs(reportStore)
 
 const availablePerformanceReports = ref<string[]>([])
@@ -100,6 +104,7 @@ const normalizeReportType = (type: string) => {
 }
 
 const isMonkeyAtomicDemoReport = (row: any) => row?.id === MONKEY_ATOMIC_DEMO_REPORT_ID
+const isMonkeyReport = (row: any) => normalizeReportType(row?.type || '') === 'Monkey 测试'
 
 const allReportsForDisplay = computed(() => {
   const hasDemoReport = reports.value.some(item => item.id === MONKEY_ATOMIC_DEMO_REPORT_ID)
@@ -476,9 +481,10 @@ const getStatusType = (status: string) => {
 }
 
 // 打开弹窗查看报告 (只针对压测)
-const viewReport = (row: any) => {
+const openMonkeyAtomicViewer = async (row: any) => {
+  selectedReport.value = row
   if (isMonkeyAtomicDemoReport(row)) {
-    selectedReport.value = row
+    monkeyViewerTargetApp.value = 'com.company.shortsdrama.wave'
     const graph = createMonkeyAtomicDemoGraph()
     monkeyDemoNodes.value = graph.nodes
     monkeyDemoEdges.value = graph.edges
@@ -488,6 +494,53 @@ const viewReport = (row: any) => {
       graph.nodes[0] ||
       null
     monkeyDemoVisible.value = true
+    return
+  }
+
+  monkeyViewerLoading.value = true
+  monkeyDemoNodes.value = []
+  monkeyDemoEdges.value = []
+  selectedMonkeyDemoNode.value = null
+  monkeyDemoVisible.value = true
+  try {
+    const headers = { Authorization: authStore.token || '' }
+    const eventsUrl = row.reportUrl || buildBackendUrl(`/api/monkey/runs/${row.runId}/events`)
+    const [eventsResponse, summaryResponse] = await Promise.all([
+      retryFetch(normalizeBackendUrl(eventsUrl), { headers }),
+      row.runId
+        ? retryFetch(buildBackendUrl(`/api/monkey/runs/${row.runId}`), { headers })
+        : Promise.resolve(null)
+    ])
+    if (!eventsResponse.ok) throw new Error('无法读取 Monkey 截图节点')
+    const events = await eventsResponse.json()
+    if (!Array.isArray(events)) throw new Error('Monkey 节点数据格式无效')
+    const summary = summaryResponse?.ok ? await summaryResponse.json() : null
+    monkeyViewerTargetApp.value = summary?.packageName || 'com.company.shortsdrama.wave'
+    monkeyDemoNodes.value = events.map(node => ({
+      ...node,
+      imageUrl: node.imageUrl ? normalizeBackendUrl(node.imageUrl) : ''
+    }))
+    monkeyDemoEdges.value = monkeyDemoNodes.value.slice(1).map((node, index) => ({
+      source: monkeyDemoNodes.value[index]?.id || node.id,
+      target: node.id,
+      event: node.event || 'screencap'
+    }))
+    selectedMonkeyDemoNode.value =
+      monkeyDemoNodes.value.find(node => node.risk === 'critical') ||
+      monkeyDemoNodes.value.find(node => node.risk === 'warning') ||
+      monkeyDemoNodes.value[0] ||
+      null
+  } catch (error: any) {
+    monkeyDemoVisible.value = false
+    ElMessage.error(error?.message || 'Monkey 原子图加载失败')
+  } finally {
+    monkeyViewerLoading.value = false
+  }
+}
+
+const viewReport = (row: any) => {
+  if (isMonkeyReport(row)) {
+    void openMonkeyAtomicViewer(row)
     return
   }
 
@@ -734,7 +787,7 @@ watch(activeFilter, async () => {
           <template #default="{ row }">
             <div class="action-btns">
               <el-button 
-                v-if="row.reportUrl"
+                v-if="row.reportUrl || (isMonkeyReport(row) && row.runId)"
                 type="primary" 
                 link 
                 :icon="View"
@@ -789,19 +842,19 @@ watch(activeFilter, async () => {
 
     <el-dialog
       v-model="monkeyDemoVisible"
-      title="Monkey 600 节点验收报告原子图 Demo"
+      :title="selectedReport?.name || 'Monkey 原子图报告'"
       width="92%"
       top="4vh"
       custom-class="monkey-demo-dialog"
       :destroy-on-close="true"
     >
-      <div class="monkey-demo-viewer">
+      <div v-loading="monkeyViewerLoading" class="monkey-demo-viewer">
         <div class="monkey-demo-stage">
           <MonkeyHologram3D
             :nodes="monkeyDemoNodes"
             :edges="monkeyDemoEdges"
             :selected-id="selectedMonkeyDemoNode?.id"
-            target-app="com.company.shortsdrama.wave"
+            :target-app="monkeyViewerTargetApp"
             @select="selectedMonkeyDemoNode = $event"
           />
         </div>
@@ -1079,7 +1132,7 @@ watch(activeFilter, async () => {
 
 .monkey-demo-viewer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 23vw, 380px);
   gap: 0;
   width: 100%;
   height: 100%;
@@ -1093,12 +1146,15 @@ watch(activeFilter, async () => {
   min-width: 0;
   min-height: 0;
   padding: 14px;
+  overflow: hidden;
 }
 
 .monkey-demo-panel {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   padding: 18px;
   padding-bottom: 26px;
@@ -1176,6 +1232,7 @@ watch(activeFilter, async () => {
   color: #bae6fd;
   font-size: 13px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .monkey-demo-stats {
@@ -1204,6 +1261,18 @@ watch(activeFilter, async () => {
 .monkey-demo-stats strong {
   color: #e0f2fe;
   font-size: 20px;
+}
+
+@media (max-width: 900px) {
+  .monkey-demo-viewer {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(340px, 1fr) minmax(220px, 38vh);
+  }
+
+  .monkey-demo-panel {
+    border-top: 1px solid rgba(34, 211, 238, 0.24);
+    border-left: 0;
+  }
 }
 /* ==================== AI 总结面板 ==================== */
 .ai-analysis-panel {

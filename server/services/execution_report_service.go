@@ -51,9 +51,19 @@ func GetExecutionReportsHandler(c *gin.Context) {
 	})
 	for index := range reports {
 		reports[index].ReportURL = resolveReportURLForResponse(reports[index])
+		reports[index].Status = normalizeMonkeyExecutionReportStatus(reports[index])
 	}
 
 	c.JSON(http.StatusOK, reports)
+}
+
+func normalizeMonkeyExecutionReportStatus(report ExecutionReport) string {
+	if report.Type == "Monkey 测试" &&
+		report.Status == "Failed" &&
+		strings.Contains(report.AnalysisResult, "结束原因: stopped_or_duration_reached") {
+		return "Stopped"
+	}
+	return report.Status
 }
 
 // AddExecutionReportHandler 保存一条新的执行记录

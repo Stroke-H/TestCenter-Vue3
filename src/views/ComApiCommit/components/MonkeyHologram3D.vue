@@ -44,6 +44,7 @@ let isDragging = false
 let lastPointer = { x: 0, y: 0 }
 let targetRotation = { x: -0.22, y: 0.34 }
 let currentRotation = { x: -0.22, y: 0.34 }
+let cameraWasAdjustedByUser = false
 
 const riskColors: Record<MonkeyGraphNode['risk'], number> = {
   normal: 0x28f0a0,
@@ -100,6 +101,8 @@ const disposeObject = (object: THREE.Object3D) => {
 }
 
 // Layout: Fibonacci sphere, so the whole model reads as a real globe instead of flat rings.
+const getSphereRadius = () => Math.min(7.2, Math.max(4.6, 3.8 + Math.sqrt(Math.max(props.nodes.length, 1)) * 0.36))
+
 const nodeToPosition = (_node: MonkeyGraphNode, index: number) => {
   const total = Math.max(props.nodes.length, 1)
   const goldenAngle = Math.PI * (3 - Math.sqrt(5))
@@ -107,7 +110,7 @@ const nodeToPosition = (_node: MonkeyGraphNode, index: number) => {
   const unitY = 1 - normalized * 2
   const radiusAtY = Math.sqrt(Math.max(0, 1 - unitY * unitY))
   const theta = index * goldenAngle
-  const sphereRadius = Math.min(7.2, Math.max(4.6, 3.8 + Math.sqrt(total) * 0.36))
+  const sphereRadius = getSphereRadius()
   const shellOffset = ((index % 5) - 2) * 0.08
   const x = Math.cos(theta) * radiusAtY * (sphereRadius + shellOffset)
   const z = Math.sin(theta) * radiusAtY * (sphereRadius + shellOffset)
@@ -543,6 +546,7 @@ const rebuildGraph = () => {
   })
 
   scene.add(group)
+  frameGraphInView(true)
 }
 
 const updateSelectedState = () => {
@@ -586,6 +590,21 @@ const resizeRenderer = () => {
   renderer.setSize(clientWidth, clientHeight)
   camera.aspect = clientWidth / Math.max(clientHeight, 1)
   camera.updateProjectionMatrix()
+  frameGraphInView(false)
+}
+
+const frameGraphInView = (force: boolean) => {
+  if (!camera || !canvasHost.value) return
+  const modelRadius = getSphereRadius() + 1.65
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov)
+  const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.1))
+  const verticalDistance = modelRadius / Math.tan(verticalFov / 2)
+  const horizontalDistance = modelRadius / Math.tan(horizontalFov / 2)
+  const fitDistance = Math.max(verticalDistance, horizontalDistance) * 1.22
+  if (force || !cameraWasAdjustedByUser || camera.position.z < fitDistance) {
+    camera.position.set(0, 0, Math.max(10, Math.min(42, fitDistance)))
+    camera.lookAt(0, 0, 0)
+  }
 }
 
 const handleWheel = (event: WheelEvent) => {
@@ -593,8 +612,9 @@ const handleWheel = (event: WheelEvent) => {
   // Zoom in / out when holding Ctrl or pinching on macOS trackpad
   if (event.ctrlKey) {
     event.preventDefault()
+    cameraWasAdjustedByUser = true
     const zoomFactor = event.deltaY * 0.015
-    camera.position.z = Math.max(5.5, Math.min(34, camera.position.z + zoomFactor))
+    camera.position.z = Math.max(5.5, Math.min(42, camera.position.z + zoomFactor))
   }
 }
 
@@ -734,6 +754,7 @@ const initScene = () => {
 
   camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100)
   camera.position.set(0, 0, 23)
+  camera.lookAt(0, 0, 0)
 
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))

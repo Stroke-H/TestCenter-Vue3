@@ -5,12 +5,16 @@
 ### Added
 - **Monkey Continue After Crash**: 新增可选“Crash 后继续执行”模式，默认仍为遇到真实 Crash 立即停止并留证；报告会标记真实 App Crash、结束原因和过滤掉的系统噪声数量。
 - **Monkey SSE Live Stream**: Monkey 真机测试改为通过 SSE 实时推送运行摘要、截图节点和风险证据，支持心跳、断线重连与最近事件续传；HTTP 保留为启动、停止、历史资源读取和低频状态校准通道。
+- **Monkey Foreground Guard**: Monkey 真机测试新增后台前台应用守护，每 2 秒检查当前 resumed Activity；连续确认偏离测试包名后会关闭普通三方前台应用并重新拉起目标 App，同时实时记录恢复次数和最近偏离包名。
 
 ### Fixed
 - **Monkey Runtime Checkpoint Status**: 修复 Monkey 每次截图后提前将运行状态结算为完成，导致前端在首张截图后停止轮询的问题。
 - **Monkey Evidence Noise Filter**: Monkey 风险节点仅收录目标 App 相关日志，系统背景噪声继续保留在完整日志中但不再触发异常加密采样。
 - **Monkey Activity Detection**: Activity 识别兼容新版 Android `dumpsys activity activities` 输出，减少截图节点显示 `UnknownActivity`。
 - **Monkey Stop Status Consistency**: 手动停止或超时退出会直接结算为 `stopped`，避免 SSE 实时通道先收到错误的失败终态。
+- **Monkey Stop Finalization**: 修复前端点击 Stop 后设备端 Monkey 仍可能继续运行的问题；停止操作会显式终止设备端 Monkey 进程，等待最终截图、摘要和报告落盘后再返回结果。
+- **Monkey Atomic Report Viewer**: 真实 Monkey 报告统一进入 Three.js 原子图查看器，不再把节点归档 JSON 直接显示为报告正文；主动停止生成的阶段性报告和历史同类记录状态改为 `Stopped`，真实 Crash 仍保留 `Failed`。
+- **Monkey Atomic Viewer Framing**: 原子图相机根据节点球体半径和可用视口自动居中取景，右侧节点详情面板支持自适应宽度、内部滚动和窄屏上下布局。
 
 ## 2026-05-22
 

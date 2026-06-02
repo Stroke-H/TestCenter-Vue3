@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -43,6 +44,65 @@ func TestParseCurrentActivitySupportsModernAndroidOutput(t *testing.T) {
 	output := "mResumedActivity: ActivityRecord{123 u0 com.example.app/.ui.MainActivity t42}"
 	if activity := parseCurrentActivity(output); activity != "com.example.app/.ui.MainActivity" {
 		t.Fatalf("unexpected activity: %s", activity)
+	}
+}
+
+func TestForegroundPackageFromActivity(t *testing.T) {
+	if packageName := foregroundPackageFromActivity("com.example.app/.ui.MainActivity"); packageName != "com.example.app" {
+		t.Fatalf("unexpected foreground package: %s", packageName)
+	}
+	if packageName := foregroundPackageFromActivity("UnknownActivity"); packageName != "" {
+		t.Fatalf("expected unknown activity to be ignored, got %s", packageName)
+	}
+}
+
+func TestShouldForceStopForegroundPackageProtectsSystemApps(t *testing.T) {
+	for _, packageName := range []string{"android", "com.android.systemui", "com.google.android.permissioncontroller"} {
+		if shouldForceStopForegroundPackage(packageName, "com.example.app") {
+			t.Fatalf("expected system package %s to be protected", packageName)
+		}
+	}
+	if !shouldForceStopForegroundPackage("com.example.other", "com.example.app") {
+		t.Fatal("expected unrelated third-party package to be force stopped")
+	}
+}
+
+func TestValidateMonkeyLaunchOutputRejectsAbortedLaunch(t *testing.T) {
+	if err := validateMonkeyLaunchOutput("Events injected: 1"); err != nil {
+		t.Fatalf("expected successful launcher output, got %v", err)
+	}
+	if err := validateMonkeyLaunchOutput("** No activities found to run, monkey aborted."); err == nil {
+		t.Fatal("expected aborted launcher output to fail")
+	}
+}
+
+func TestStopADBMonkeyProcessUsesAvailableCommand(t *testing.T) {
+	if err := stopADBMonkeyProcess(context.Background(), "/usr/bin/true", "device-1"); err != nil {
+		t.Fatalf("expected successful stop command, got %v", err)
+	}
+}
+
+func TestFinalCaptureContextSurvivesCanceledRun(t *testing.T) {
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if finalCtx := finalCaptureContext(runCtx); finalCtx.Err() != nil {
+		t.Fatalf("expected final capture context to remain usable, got %v", finalCtx.Err())
+	}
+}
+
+func TestMonkeyExecutionReportStatusPreservesStoppedRuns(t *testing.T) {
+	if status := monkeyExecutionReportStatus("stopped"); status != "Stopped" {
+		t.Fatalf("expected stopped report status, got %s", status)
+	}
+	if status := normalizeMonkeyExecutionReportStatus(ExecutionReport{
+		Type: "Monkey 测试", Status: "Failed", AnalysisResult: "结束原因: stopped_or_duration_reached",
+	}); status != "Stopped" {
+		t.Fatalf("expected historical stopped report normalization, got %s", status)
+	}
+	if status := normalizeMonkeyExecutionReportStatus(ExecutionReport{
+		Type: "Monkey 测试", Status: "Failed", AnalysisResult: "结束原因: target_app_crash",
+	}); status != "Failed" {
+		t.Fatalf("expected crash report to stay failed, got %s", status)
 	}
 }
 
