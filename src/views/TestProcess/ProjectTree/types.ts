@@ -28,7 +28,14 @@ export interface ProjectTreeNode {
   versions: ProjectVersionNode[]
 }
 
-export interface ProjectMemoRecord {
+export interface ProjectMemoItem {
+  id: string
   content: string
+  color: 'green' | 'red' | 'orange'
+  updatedAt: string
+}
+
+export interface ProjectMemoRecord {
+  items: ProjectMemoItem[]
   updatedAt: string
 }

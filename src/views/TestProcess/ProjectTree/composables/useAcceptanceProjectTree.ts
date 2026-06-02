@@ -5,6 +5,7 @@ import { buildBackendUrl } from '@/utils/runtimeUrl'
 import { retryFetch } from '@/utils/retryFetch'
 import type {
   AcceptanceReportRecord,
+  ProjectMemoItem,
   ProjectMemoRecord,
   ProjectTreeNode,
   ProjectVersionNode
@@ -128,7 +129,45 @@ const loadProjectMemos = (): Record<string, ProjectMemoRecord> => {
   try {
     const raw = window.localStorage.getItem(PROJECT_MEMOS_STORAGE_KEY)
     const parsed = raw ? JSON.parse(raw) : {}
-    return parsed && typeof parsed === 'object' ? parsed : {}
+    if (!parsed || typeof parsed !== 'object') return {}
+
+    const migrated: Record<string, ProjectMemoRecord> = {}
+    Object.keys(parsed).forEach((key) => {
+      const val = parsed[key]
+      if (!val) return
+
+      if (typeof val === 'string') {
+        const time = new Date().toISOString()
+        migrated[key] = {
+          items: [{ id: `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`, content: val, color: 'green', updatedAt: time }],
+          updatedAt: time
+        }
+      } else if (typeof val === 'object') {
+        if (Array.isArray(val.items)) {
+          migrated[key] = {
+            items: val.items.map((item: any) => ({
+              id: item.id || `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+              content: item.content || '',
+              color: item.color || 'green',
+              updatedAt: item.updatedAt || new Date().toISOString()
+            })),
+            updatedAt: val.updatedAt || new Date().toISOString()
+          }
+        } else if (typeof val.content === 'string') {
+          const time = val.updatedAt || new Date().toISOString()
+          migrated[key] = {
+            items: [{ id: `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`, content: val.content, color: 'green', updatedAt: time }],
+            updatedAt: time
+          }
+        } else {
+          migrated[key] = {
+            items: [],
+            updatedAt: new Date().toISOString()
+          }
+        }
+      }
+    })
+    return migrated
   } catch {
     return {}
   }
@@ -137,6 +176,7 @@ const loadProjectMemos = (): Record<string, ProjectMemoRecord> => {
 const saveProjectMemos = (memos: Record<string, ProjectMemoRecord>) => {
   window.localStorage.setItem(PROJECT_MEMOS_STORAGE_KEY, JSON.stringify(memos))
 }
+
 
 export function useAcceptanceProjectTree() {
   const authStore = useAuthStore()
@@ -218,14 +258,67 @@ export function useAcceptanceProjectTree() {
     return projectMemos.value[selectedProjectCode.value] || null
   })
 
-  const updateSelectedProjectMemo = (content: string) => {
+  const addProjectMemoItem = (content = '', color: 'green' | 'red' | 'orange' = 'green') => {
+    if (!selectedProjectCode.value) return null
+
+    const next = { ...projectMemos.value }
+    const currentRecord = next[selectedProjectCode.value] || { items: [], updatedAt: '' }
+    const newItem: ProjectMemoItem = {
+      id: `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      content,
+      color,
+      updatedAt: new Date().toISOString()
+    }
+
+    next[selectedProjectCode.value] = {
+      items: [...currentRecord.items, newItem],
+      updatedAt: new Date().toISOString()
+    }
+
+    projectMemos.value = next
+    saveProjectMemos(next)
+    return newItem
+  }
+
+  const updateProjectMemoItem = (itemId: string, updates: Partial<Omit<ProjectMemoItem, 'id'>>) => {
     if (!selectedProjectCode.value) return
 
     const next = { ...projectMemos.value }
-    const trimmedContent = content.trim()
-    if (trimmedContent) {
+    const currentRecord = next[selectedProjectCode.value]
+    if (!currentRecord) return
+
+    const updatedItems = currentRecord.items.map((item) => {
+      if (item.id === itemId) {
+        return {
+          ...item,
+          ...updates,
+          updatedAt: new Date().toISOString()
+        }
+      }
+      return item
+    })
+
+    next[selectedProjectCode.value] = {
+      items: updatedItems,
+      updatedAt: new Date().toISOString()
+    }
+
+    projectMemos.value = next
+    saveProjectMemos(next)
+  }
+
+  const deleteProjectMemoItem = (itemId: string) => {
+    if (!selectedProjectCode.value) return
+
+    const next = { ...projectMemos.value }
+    const currentRecord = next[selectedProjectCode.value]
+    if (!currentRecord) return
+
+    const updatedItems = currentRecord.items.filter((item) => item.id !== itemId)
+
+    if (updatedItems.length > 0) {
       next[selectedProjectCode.value] = {
-        content,
+        items: updatedItems,
         updatedAt: new Date().toISOString()
       }
     } else {
@@ -277,7 +370,9 @@ export function useAcceptanceProjectTree() {
     selectedProject,
     selectedProjectMemo,
     stats,
-    updateSelectedProjectMemo,
+    addProjectMemoItem,
+    updateProjectMemoItem,
+    deleteProjectMemoItem,
     fetchReports
   }
 }
