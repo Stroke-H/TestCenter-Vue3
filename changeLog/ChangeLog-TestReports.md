@@ -27,6 +27,8 @@
 - **Monkey Foreground Recovery Latency**: 前台包名恢复拆分为独立 `500ms` 快速守护线程，不再被广告 UI 扫描阻塞；目标 App 测试禁用 Monkey 自带 App Switch，避免随机事件反复拉起开屏页，同时降低离开 App 后在桌面或其他应用继续点击的时间。
 - **Monkey Option Text Wrapping**: Monkey 参数面板中的异常加密采样和 Crash 后继续执行说明支持自动换行，避免窄侧栏内文案被裁切。
 - **Monkey Runtime Card Path Wrapping**: Monkey 运行级别卡片允许 ADB 路径等连续长文本在侧栏宽度内强制断行，避免设备就绪说明横向溢出。
+- **Monkey Throttle Input Alignment**: Monkey Throttle 改为可直接输入、可上下步进调节的数字控件，默认及最小值为 `300ms`，每次增减 `100ms`，避免填写低于后端有效默认值的配置。
+- **Monkey Precision Toggle**: 高精度和低精度采样收束为与参数输入框等高的轮换按钮，按钮直接显示当前生效模式，点击后在 `10s/张` 与 `30s/张` 之间切换；悬浮与按压时提供轻量立体反馈。
 
 ## 2026-05-22
 

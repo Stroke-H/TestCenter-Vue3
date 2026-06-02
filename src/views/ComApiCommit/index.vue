@@ -296,6 +296,11 @@ const { imageUrl: selectedMonkeyImageUrl, loading: selectedMonkeyImageLoading } 
 })
 const monkeyScreenshotIntervalSec = computed(() => monkeyPrecisionMode.value === 'high' ? 10 : 30)
 const monkeyScreenshotEvery = computed(() => Math.max(1, Math.floor((monkeyScreenshotIntervalSec.value * 1000) / Math.max(1, monkeyThrottleMs.value))))
+const monkeyPrecisionLabel = computed(() => monkeyPrecisionMode.value === 'high' ? '高精度 · 10s/张' : '低精度 · 30s/张')
+
+const toggleMonkeyPrecisionMode = () => {
+  monkeyPrecisionMode.value = monkeyPrecisionMode.value === 'high' ? 'low' : 'high'
+}
 
 const monkeyCommandPreview = computed(() => {
   const baseArgs = [
@@ -1342,26 +1347,26 @@ onUnmounted(() => {
             </div>
             <div class="param-row">
               <div class="param-group half">
-                <label class="param-label">Throttle</label>
+                <label class="param-label">Throttle（毫秒）</label>
                 <el-input-number
                   v-model="monkeyThrottleMs"
-                  :min="0"
+                  :min="300"
                   :max="3000"
                   :step="100"
+                  :value-on-clear="300"
                   controls-position="right"
                   class="param-number"
                 />
+                <span class="param-help">每次随机事件间隔，可输入 300～3000ms。</span>
               </div>
               <div class="param-group half">
                 <label class="param-label">测试精度</label>
-                <el-segmented
-                  v-model="monkeyPrecisionMode"
-                  :options="[
-                    { label: '高精度 10s/张', value: 'high' },
-                    { label: '低精度 30s/张', value: 'low' }
-                  ]"
+                <el-button
                   class="monkey-mode-switch"
-                />
+                  @click="toggleMonkeyPrecisionMode"
+                >
+                  {{ monkeyPrecisionLabel }}
+                </el-button>
               </div>
             </div>
             <div class="param-group">
@@ -1632,6 +1637,7 @@ onUnmounted(() => {
 
 .half {
   flex: 1;
+  min-width: 0;
 }
 
 .param-label {
@@ -1641,6 +1647,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.param-help {
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .link-icon {
@@ -1677,6 +1689,28 @@ onUnmounted(() => {
 
 .monkey-mode-switch {
   width: 100%;
+  height: 32px;
+  margin: 0;
+  justify-content: center;
+  color: #475569;
+  background-color: #f8fafc;
+  border-color: #e2e8f0;
+  box-shadow: 0 2px 0 #cbd5e1, 0 4px 8px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, background-color 160ms ease;
+}
+
+.monkey-mode-switch:hover {
+  color: #2563eb;
+  background-color: #ffffff;
+  border-color: #93c5fd;
+  box-shadow: 0 4px 0 #bfdbfe, 0 9px 15px rgba(37, 99, 235, 0.14);
+  transform: translateY(-3px);
+}
+
+.monkey-mode-switch:active {
+  box-shadow: 0 1px 0 #bfdbfe, 0 3px 6px rgba(37, 99, 235, 0.1);
+  transform: translateY(0);
 }
 
 .monkey-option-checkbox {
