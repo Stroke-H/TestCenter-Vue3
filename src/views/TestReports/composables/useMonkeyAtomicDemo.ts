@@ -8,6 +8,11 @@ export interface MonkeyAtomicNode {
   risk: 'normal' | 'warning' | 'critical' | 'unknown'
   imageUrl?: string
   summary?: string
+  evidence?: Array<{
+    source: string
+    message: string
+    timestamp?: string
+  }>
   x?: number
   y?: number
 }

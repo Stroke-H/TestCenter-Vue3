@@ -15,6 +15,9 @@
 - **Monkey Stop Finalization**: 修复前端点击 Stop 后设备端 Monkey 仍可能继续运行的问题；停止操作会显式终止设备端 Monkey 进程，等待最终截图、摘要和报告落盘后再返回结果。
 - **Monkey Atomic Report Viewer**: 真实 Monkey 报告统一进入 Three.js 原子图查看器，不再把节点归档 JSON 直接显示为报告正文；主动停止生成的阶段性报告和历史同类记录状态改为 `Stopped`，真实 Crash 仍保留 `Failed`。
 - **Monkey Atomic Viewer Framing**: 原子图相机根据节点球体半径和可用视口自动居中取景，右侧节点详情面板支持自适应宽度、内部滚动和窄屏上下布局。
+- **Monkey Screenshot Preview Recovery**: Monkey 截图资源纳入统一后端地址归一化，并通过当前登录态鉴权读取，修复不同访问入口下执行结果和历史报告无法加载采样图片的问题。
+- **Monkey Atomic Result Retry**: 执行完成页仅在截图节点成功读取后结束状态校准，节点归档稍有延迟时会自动重试，避免完成态原子图偶发空白。
+- **Monkey Readable Evidence Summary**: 异常节点摘要改为面向用户的中文解释，原始日志收纳到摘要末尾的 `Detail` 悬浮入口中，兼顾可读性和排障信息完整度。
 
 ## 2026-05-22
 

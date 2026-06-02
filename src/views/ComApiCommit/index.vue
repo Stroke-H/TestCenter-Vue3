@@ -6,6 +6,8 @@ import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { buildBackendUrl, buildBackendWsUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
 import MonkeyHologram3D from './components/MonkeyHologram3D.vue'
+import MonkeyNodeSummary from './components/MonkeyNodeSummary.vue'
+import { useAuthenticatedImage } from './composables/useAuthenticatedImage'
 import { useMonkeyRunStream } from './composables/useMonkeyRunStream'
 import {
   Warning,
@@ -283,6 +285,11 @@ const monkeyRiskLevel = computed(() => {
 })
 
 const monkeyGraphReady = computed(() => isMonkeyTest && monkeyGraphNodes.value.length > 0 && visibleStatus.value !== 'Executing')
+const selectedMonkeyImageSource = computed(() => normalizeBackendUrl(selectedMonkeyNode.value?.imageUrl || ''))
+const { imageUrl: selectedMonkeyImageUrl, loading: selectedMonkeyImageLoading } = useAuthenticatedImage({
+  sourceUrl: selectedMonkeyImageSource,
+  getToken: () => authStore.token || ''
+})
 const monkeyScreenshotIntervalSec = computed(() => monkeyPrecisionMode.value === 'high' ? 10 : 30)
 const monkeyScreenshotEvery = computed(() => Math.max(1, Math.floor((monkeyScreenshotIntervalSec.value * 1000) / Math.max(1, monkeyThrottleMs.value))))
 
@@ -636,10 +643,11 @@ const loadMonkeyEvents = async (runId: string) => {
   const response = await fetch(buildBackendUrl(`/api/monkey/runs/${runId}/events`), {
     headers: { Authorization: authStore.token || '' }
   })
-  if (!response.ok) return
+  if (!response.ok) return false
   const events = await response.json() as MonkeyGraphNode[]
   monkeyGraphNodes.value = events.map((event, index) => ({
     ...event,
+    imageUrl: event.imageUrl ? normalizeBackendUrl(event.imageUrl) : '',
     x: 12 + (index % 12) * 7,
     y: 12 + Math.floor(index / 12) * 8
   }))
@@ -653,6 +661,7 @@ const loadMonkeyEvents = async (runId: string) => {
     monkeyGraphNodes.value.find(node => node.risk === 'warning') ||
     monkeyGraphNodes.value[0] ||
     null
+  return true
 }
 
 const appendMonkeyLiveLog = (line: string) => {
@@ -664,6 +673,7 @@ const upsertMonkeyGraphNode = (event: MonkeyGraphNode) => {
   const existingIndex = monkeyGraphNodes.value.findIndex(node => node.id === event.id)
   const nextNode = {
     ...event,
+    imageUrl: event.imageUrl ? normalizeBackendUrl(event.imageUrl) : '',
     x: 12 + ((existingIndex >= 0 ? existingIndex : monkeyGraphNodes.value.length) % 12) * 7,
     y: 12 + Math.floor((existingIndex >= 0 ? existingIndex : monkeyGraphNodes.value.length) / 12) * 8
   }
@@ -687,15 +697,19 @@ let finalizedMonkeyRunId = ''
 
 const finalizeMonkeyRun = async (summary: MonkeyRunSummary) => {
   if (finalizedMonkeyRunId === summary.runId) return
+  executionSucceeded.value = summary.status === 'passed'
+  executionFailed.value = ['failed', 'incomplete', 'stopped'].includes(summary.status)
+  const eventsLoaded = await loadMonkeyEvents(summary.runId)
+  if (!eventsLoaded) {
+    appendMonkeyLiveLog('[REPORT][WARN] 截图节点尚未准备完成，保留状态校准以便自动重试')
+    return
+  }
   finalizedMonkeyRunId = summary.runId
   monkeyRunStream.disconnect()
   if (monkeyReconcileTimer) clearInterval(monkeyReconcileTimer)
   monkeyReconcileTimer = null
   if (timer) clearInterval(timer)
   timer = null
-  executionSucceeded.value = summary.status === 'passed'
-  executionFailed.value = ['failed', 'incomplete', 'stopped'].includes(summary.status)
-  await loadMonkeyEvents(summary.runId)
   const runtimeLogs = await fetchMonkeyRuntimeLogs(summary.runId)
   logs.value = [...logs.value, ...runtimeLogs].slice(-240)
   reportStore.fetchReports()
@@ -1453,20 +1467,19 @@ onUnmounted(() => {
               </strong>
             </div>
             <img
-              v-if="selectedMonkeyNode?.imageUrl"
-              :src="selectedMonkeyNode.imageUrl"
-              :alt="selectedMonkeyNode.title"
+              v-if="selectedMonkeyImageUrl"
+              :src="selectedMonkeyImageUrl"
+              :alt="selectedMonkeyNode?.title || 'Monkey 截图预览'"
               class="monkey-preview-panel__image"
             />
-            <div v-else class="monkey-preview-panel__empty">图片已清理或暂不可用</div>
+            <div v-else class="monkey-preview-panel__empty">
+              {{ selectedMonkeyImageLoading ? '截图加载中...' : '图片已清理或暂不可用' }}
+            </div>
             <div v-if="selectedMonkeyNode" class="monkey-preview-panel__meta">
               <span>事件：{{ selectedMonkeyNode.event }}</span>
               <span>页面：{{ selectedMonkeyNode.activity }}</span>
               <span>来源：adb exec-out screencap -p</span>
-              <span v-if="selectedMonkeyNode.summary">摘要：{{ selectedMonkeyNode.summary }}</span>
-              <span v-for="item in selectedMonkeyNode.evidence || []" :key="`${item.source}-${item.message}`">
-                证据：{{ item.source }} / {{ item.message }}
-              </span>
+              <MonkeyNodeSummary :summary="selectedMonkeyNode.summary" :evidence="selectedMonkeyNode.evidence" />
             </div>
           </div>
         </div>

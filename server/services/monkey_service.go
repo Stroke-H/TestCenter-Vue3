@@ -1011,7 +1011,31 @@ func buildEvidenceSummary(risk string, evidence []MonkeyRiskEvidence) string {
 	if len(evidence) == 0 {
 		return "采样窗口未发现异常"
 	}
-	return evidence[0].Message
+	return summarizeMonkeyEvidenceMessage(evidence[0].Message)
+}
+
+func summarizeMonkeyEvidenceMessage(message string) string {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "aconfigstoragereadexception") && strings.Contains(lower, "fail to mmap storage"):
+		return "Android 系统配置映射读取失败，可能是设备系统组件的临时存储异常。建议观察目标 App 功能是否受到影响。"
+	case strings.Contains(lower, "error_package_not_found") && strings.Contains(lower, "android.xr"):
+		return "设备缺少 Android XR 系统组件。通常与当前目标 App 无关，可结合实际功能表现判断。"
+	case strings.Contains(lower, "firebasecrashlytics") && strings.Contains(lower, "filenotfoundexception"):
+		return "Crashlytics 临时日志文件不存在，可能与日志组件初始化或清理时序有关。建议结合后续异常节点确认影响。"
+	case strings.Contains(lower, "permission denied"):
+		return "检测到权限拒绝。建议检查目标 App 是否缺少运行所需权限。"
+	case strings.Contains(lower, "activitynotfoundexception") || strings.Contains(lower, "unable to start activity"):
+		return "页面拉起失败。建议检查目标页面是否存在、是否已注册，以及当前跳转参数是否正确。"
+	case strings.Contains(lower, "skipped frames") || strings.Contains(lower, "slow operation"):
+		return "检测到界面卡顿信号。建议结合对应截图和性能日志继续排查。"
+	case strings.Contains(lower, "fatal exception") || strings.Contains(lower, "crash:"):
+		return "检测到目标 App 崩溃信号。请优先查看 Detail 中的原始日志。"
+	case strings.Contains(lower, "anr in") || strings.Contains(lower, "application not responding"):
+		return "检测到目标 App 无响应信号。请优先查看 Detail 中的原始日志。"
+	default:
+		return "采样窗口检测到异常日志。请悬浮 Detail 查看原始日志并结合截图判断影响。"
+	}
 }
 
 func resolveCurrentActivity(ctx context.Context, adbPath string, deviceID string) string {
@@ -1305,8 +1329,15 @@ func loadMonkeySummary(runID string) (MonkeyRunSummary, error) {
 
 func loadMonkeyEvents(runID string) ([]MonkeyGraphEvent, error) {
 	var events []MonkeyGraphEvent
-	err := readJSON(filepath.Join(monkeyRunDir(runID), "events.json"), &events)
-	return events, err
+	if err := readJSON(filepath.Join(monkeyRunDir(runID), "events.json"), &events); err != nil {
+		return nil, err
+	}
+	for index := range events {
+		if len(events[index].Evidence) > 0 {
+			events[index].Summary = buildEvidenceSummary(events[index].Risk, events[index].Evidence)
+		}
+	}
+	return events, nil
 }
 
 func applyMonkeyRetentionPolicy() {

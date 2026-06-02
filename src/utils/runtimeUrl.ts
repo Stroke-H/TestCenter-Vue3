@@ -11,7 +11,8 @@ const isBackendOwnedPath = (pathname: string) => {
   return (
     pathname.startsWith('/reports/') ||
     pathname.startsWith('/performance-reports/') ||
-    pathname.startsWith('/api/test-runs/')
+    pathname.startsWith('/api/test-runs/') ||
+    pathname.startsWith('/api/monkey/')
   )
 }
 

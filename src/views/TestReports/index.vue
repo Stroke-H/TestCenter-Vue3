@@ -21,6 +21,8 @@ import { useAuthStore } from '@/stores/auth'
 import { retryFetch } from '@/utils/retryFetch'
 import { buildBackendUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
 import MonkeyHologram3D from '@/views/ComApiCommit/components/MonkeyHologram3D.vue'
+import MonkeyNodeSummary from '@/views/ComApiCommit/components/MonkeyNodeSummary.vue'
+import { useAuthenticatedImage } from '@/views/ComApiCommit/composables/useAuthenticatedImage'
 import {
   MONKEY_ATOMIC_DEMO_REPORT_ID,
   createMonkeyAtomicDemoGraph,
@@ -59,6 +61,11 @@ const filterOptions = ['Web 性能分析', 'K6 压测', '接口验证', 'UI 自�
 const reportStore = useReportStore()
 const authStore = useAuthStore()
 const { reports } = storeToRefs(reportStore)
+const selectedMonkeyDemoImageSource = computed(() => normalizeBackendUrl(selectedMonkeyDemoNode.value?.imageUrl || ''))
+const { imageUrl: selectedMonkeyDemoImageUrl, loading: selectedMonkeyDemoImageLoading } = useAuthenticatedImage({
+  sourceUrl: selectedMonkeyDemoImageSource,
+  getToken: () => authStore.token || ''
+})
 
 const availablePerformanceReports = ref<string[]>([])
 
@@ -868,17 +875,19 @@ watch(activeFilter, async () => {
           </div>
 
           <img
-            v-if="selectedMonkeyDemoNode?.imageUrl"
-            :src="selectedMonkeyDemoNode.imageUrl"
-            :alt="selectedMonkeyDemoNode.title"
+            v-if="selectedMonkeyDemoImageUrl"
+            :src="selectedMonkeyDemoImageUrl"
+            :alt="selectedMonkeyDemoNode?.title || 'Monkey 节点截图'"
             class="monkey-demo-panel__image"
           />
-          <div v-else class="monkey-demo-panel__empty">暂无截图</div>
+          <div v-else class="monkey-demo-panel__empty">
+            {{ selectedMonkeyDemoImageLoading ? '截图加载中...' : '暂无截图' }}
+          </div>
 
           <div v-if="selectedMonkeyDemoNode" class="monkey-demo-panel__meta">
             <span>事件：{{ selectedMonkeyDemoNode.event }}</span>
             <span>页面：{{ selectedMonkeyDemoNode.activity }}</span>
-            <span>摘要：{{ selectedMonkeyDemoNode.summary }}</span>
+            <MonkeyNodeSummary :summary="selectedMonkeyDemoNode.summary" :evidence="selectedMonkeyDemoNode.evidence" />
           </div>
 
           <div class="monkey-demo-stats">

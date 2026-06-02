@@ -3,6 +3,8 @@ package services
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -103,6 +105,46 @@ func TestMonkeyExecutionReportStatusPreservesStoppedRuns(t *testing.T) {
 		Type: "Monkey 测试", Status: "Failed", AnalysisResult: "结束原因: target_app_crash",
 	}); status != "Failed" {
 		t.Fatalf("expected crash report to stay failed, got %s", status)
+	}
+}
+
+func TestSummarizeMonkeyEvidenceMessageExplainsSystemStorageFailure(t *testing.T) {
+	summary := summarizeMonkeyEvidenceMessage(
+		"03-11 03:51:48.042 W/AconfigPackage(22925): failed to map some package from com.android.btservices.package.map: android.os.flagging.AconfigStorageReadException: ERROR_CANNOT_READ_STORAGE_FILE: Fail to mmap storage",
+	)
+	if !strings.Contains(summary, "Android 系统配置映射读取失败") {
+		t.Fatalf("expected readable system storage explanation, got %s", summary)
+	}
+}
+
+func TestBuildEvidenceSummaryKeepsRawLogOutOfReadableSummary(t *testing.T) {
+	summary := buildEvidenceSummary("warning", []MonkeyRiskEvidence{{
+		Level: "warning", Source: "logcat", Message: "03-11 E/Unknown: exception while doing something",
+	}})
+	if strings.Contains(summary, "03-11") {
+		t.Fatalf("expected readable summary instead of raw log, got %s", summary)
+	}
+}
+
+func TestLoadMonkeyEventsRebuildsReadableHistoricalSummary(t *testing.T) {
+	runID := "MONKEY-TEST-READABLE-SUMMARY"
+	path := filepath.Join(monkeyRunDir(runID), "events.json")
+	t.Cleanup(func() { _ = os.RemoveAll(monkeyRunDir(runID)) })
+	if err := writeJSON(path, []MonkeyGraphEvent{{
+		ID: "screen-0001", Risk: "warning", Summary: "03-11 raw legacy log",
+		Evidence: []MonkeyRiskEvidence{{
+			Level: "warning", Source: "logcat",
+			Message: "03-11 W/AconfigPackage: android.os.flagging.AconfigStorageReadException: ERROR_CANNOT_READ_STORAGE_FILE: Fail to mmap storage",
+		}},
+	}}); err != nil {
+		t.Fatalf("write historical events: %v", err)
+	}
+	events, err := loadMonkeyEvents(runID)
+	if err != nil {
+		t.Fatalf("load historical events: %v", err)
+	}
+	if len(events) != 1 || strings.Contains(events[0].Summary, "03-11") {
+		t.Fatalf("expected readable historical summary, got %+v", events)
 	}
 }
 
