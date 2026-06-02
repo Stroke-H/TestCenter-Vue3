@@ -299,33 +299,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div
-        v-else
-        class="project-memos-empty"
-      >
-        <el-icon class="project-memos-empty__icon"><CollectionTag /></el-icon>
-        <span class="project-memos-empty__text">暂无配置记录，选择下方颜色新建便利贴</span>
-        <div class="project-memos-empty__colors">
-          <button
-            class="empty-color-btn empty-color-btn--green"
-            @click="handleAddNewNote('green')"
-          >
-            绿色便签
-          </button>
-          <button
-            class="empty-color-btn empty-color-btn--orange"
-            @click="handleAddNewNote('orange')"
-          >
-            橙色便签
-          </button>
-          <button
-            class="empty-color-btn empty-color-btn--red"
-            @click="handleAddNewNote('red')"
-          >
-            红色便签
-          </button>
-        </div>
-      </div>
     </section>
 
     <ProjectTreeBoard
@@ -610,72 +583,6 @@ onBeforeUnmount(() => {
   padding: 2px !important;
   height: 20px !important;
   width: 20px !important;
-}
-
-/* Empty State */
-.project-memos-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  border: 1px dashed #cbd5e1;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #64748b;
-  gap: 12px;
-}
-
-.project-memos-empty__icon {
-  font-size: 28px;
-  color: #94a3b8;
-}
-
-.project-memos-empty__text {
-  font-size: 13px;
-}
-
-.project-memos-empty__colors {
-  display: flex;
-  gap: 10px;
-  margin-top: 4px;
-}
-
-.empty-color-btn {
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  outline: none;
-}
-
-.empty-color-btn--green {
-  background-color: #ecfdf5;
-  color: #047857;
-  border: 1px solid #a7f3d0;
-}
-.empty-color-btn--green:hover {
-  background-color: #d1fae5;
-}
-
-.empty-color-btn--orange {
-  background-color: #fff7ed;
-  color: #c2410c;
-  border: 1px solid #fed7aa;
-}
-.empty-color-btn--orange:hover {
-  background-color: #ffedd5;
-}
-
-.empty-color-btn--red {
-  background-color: #fef2f2;
-  color: #b91c1c;
-  border: 1px solid #fecaca;
-}
-.empty-color-btn--red:hover {
-  background-color: #fee2e2;
 }
 
 @media (max-width: 900px) {

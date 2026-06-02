@@ -1392,7 +1392,7 @@ onUnmounted(() => {
             <div class="monkey-risk-card">
               <span class="monkey-risk-card__label">运行级别</span>
               <strong>{{ monkeyRiskLevel }}</strong>
-              <span>
+              <span class="monkey-risk-card__description">
                 ADB {{ monkeyAdbAvailable ? `已就绪：${monkeyAdbPath}` : '未就绪：请确认 Android Studio SDK Platform-Tools 已安装' }}。
                 当前每 {{ monkeyScreenshotIntervalSec }} 秒截图一次，执行后生成真实截图节点。
               </span>
@@ -1702,6 +1702,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
   padding: 12px;
   border-radius: 10px;
   background: #f0fdf4;
@@ -1709,6 +1710,14 @@ onUnmounted(() => {
   color: #166534;
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+.monkey-risk-card__description {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .monkey-risk-card__label {
