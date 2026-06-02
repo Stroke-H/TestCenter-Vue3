@@ -213,6 +213,10 @@ func TestBuildMonkeyArgsAddsIgnoreCrashesOnlyWhenEnabled(t *testing.T) {
 	if !slices.Contains(args, "--ignore-crashes") {
 		t.Fatal("expected --ignore-crashes when continueAfterCrash is enabled")
 	}
+	appSwitchIndex := slices.Index(args, "--pct-appswitch")
+	if appSwitchIndex < 0 || appSwitchIndex+1 >= len(args) || args[appSwitchIndex+1] != "0" {
+		t.Fatalf("expected app switching to stay disabled during target app testing, got %v", args)
+	}
 
 	args = buildMonkeyArgs(MonkeyRunRequest{
 		DeviceID:    "device-1",

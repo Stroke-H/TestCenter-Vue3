@@ -730,10 +730,12 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 	denseUntil := time.Time{}
 	denseLevel := ""
 	criticalEvidenceDetected := false
+	immediateCaptureRequests := make(chan struct{}, 1)
 	recordEvidence := func(e MonkeyRiskEvidence) {
 		e.Timestamp = time.Now().Format(time.RFC3339)
 		evidenceMu.Lock()
 		pendingEvidence = append(pendingEvidence, e)
+		wasDenseSampling := time.Now().Before(denseUntil)
 		if req.DenseSamplingEnabled {
 			if e.Level == "critical" {
 				criticalEvidenceDetected = true
@@ -745,6 +747,12 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 			}
 		}
 		evidenceMu.Unlock()
+		if e.Level == "critical" || (req.DenseSamplingEnabled && !wasDenseSampling) {
+			select {
+			case immediateCaptureRequests <- struct{}{}:
+			default:
+			}
+		}
 		publishMonkeyStreamEvent(run, "risk-evidence", e)
 	}
 	consumeEvidence := func() ([]MonkeyRiskEvidence, bool) {
@@ -834,7 +842,8 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 	if !statusBarExpansionProtected {
 		go keepMonkeyStatusBarCollapsed(guardCtx, adbPath, req.DeviceID)
 	}
-	go monitorMonkeyForegroundApp(guardCtx, adbPath, req, run, recordEvidence)
+	go monitorMonkeyForegroundPackage(guardCtx, adbPath, req, run, recordEvidence)
+	go monitorMonkeyBoundaryProtection(guardCtx, adbPath, req, run, recordEvidence)
 
 	events := []MonkeyGraphEvent{}
 	durationTimer := time.NewTimer(time.Until(startedAt.Add(time.Duration(req.DurationSec) * time.Second)))
@@ -906,6 +915,9 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 			updateMonkeySummaryFromEvents(run, events, ctx.Err().Error(), true)
 			saveMonkeyExecutionReport(req, monkeyRunSummarySnapshot(run))
 			return
+		case <-immediateCaptureRequests:
+			time.Sleep(300 * time.Millisecond)
+			capture(ctx)
 		case <-time.After(currentDenseInterval()):
 			capture(ctx)
 		}
@@ -942,14 +954,14 @@ func monkeyRunSummarySnapshot(run *monkeyRunState) MonkeyRunSummary {
 }
 
 func buildMonkeyArgs(req MonkeyRunRequest) []string {
-	touch, motion, nav, majorNav, appSwitch := "60", "30", "4", "3", "3"
+	touch, motion, nav, majorNav := "60", "30", "4", "3"
 	switch req.Strategy {
 	case "tap-heavy":
-		touch, motion, nav, majorNav, appSwitch = "80", "15", "2", "1", "2"
+		touch, motion, nav, majorNav = "80", "15", "2", "1"
 	case "scroll-heavy":
-		touch, motion, nav, majorNav, appSwitch = "45", "50", "2", "1", "2"
+		touch, motion, nav, majorNav = "45", "50", "2", "1"
 	case "navigation-heavy":
-		touch, motion, nav, majorNav, appSwitch = "45", "25", "15", "10", "5"
+		touch, motion, nav, majorNav = "45", "25", "15", "10"
 	}
 	args := []string{
 		"-s", req.DeviceID, "shell", "monkey",
@@ -960,7 +972,7 @@ func buildMonkeyArgs(req MonkeyRunRequest) []string {
 		"--pct-syskeys", "0",
 		"--pct-nav", nav,
 		"--pct-majornav", majorNav,
-		"--pct-appswitch", appSwitch,
+		"--pct-appswitch", "0",
 		"--pct-anyevent", "0",
 		"--throttle", fmt.Sprintf("%d", req.ThrottleMs),
 	}
@@ -1161,6 +1173,19 @@ func resolveCurrentActivity(ctx context.Context, adbPath string, deviceID string
 	return "UnknownActivity"
 }
 
+func resolveForegroundActivityFast(ctx context.Context, adbPath string, deviceID string) string {
+	dumpsysCtx, cancel := context.WithTimeout(ctx, 900*time.Millisecond)
+	defer cancel()
+	output, err := exec.CommandContext(dumpsysCtx, adbPath, "-s", deviceID, "shell", "dumpsys", "activity", "activities").CombinedOutput()
+	if err != nil {
+		return "UnknownActivity"
+	}
+	if activity := parseCurrentActivity(string(output)); activity != "" {
+		return activity
+	}
+	return "UnknownActivity"
+}
+
 func parseCurrentActivity(output string) string {
 	for _, line := range strings.Split(string(output), "\n") {
 		if strings.Contains(line, "mResumedActivity") ||
@@ -1176,12 +1201,53 @@ func parseCurrentActivity(output string) string {
 	return ""
 }
 
-func monitorMonkeyForegroundApp(ctx context.Context, adbPath string, req MonkeyRunRequest, run *monkeyRunState, recordEvidence func(MonkeyRiskEvidence)) {
-	ticker := time.NewTicker(2 * time.Second)
+func monitorMonkeyForegroundPackage(ctx context.Context, adbPath string, req MonkeyRunRequest, run *monkeyRunState, recordEvidence func(MonkeyRiskEvidence)) {
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	lastForeignPackage := ""
-	consecutiveForeignChecks := 0
 	restoreCooldownUntil := time.Time{}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if time.Now().Before(restoreCooldownUntil) {
+				continue
+			}
+			activity := resolveForegroundActivityFast(ctx, adbPath, req.DeviceID)
+			foregroundPackage := foregroundPackageFromActivity(activity)
+			if foregroundPackage != "" && foregroundPackage != req.PackageName && !isMonkeyAdActivity(activity) {
+				err := restoreMonkeyTargetApp(ctx, adbPath, req.DeviceID, foregroundPackage, req.PackageName)
+				summary := updateMonkeyGuardSummary(run, func(summary *MonkeyRunSummary) {
+					summary.LastForeignPackage = foregroundPackage
+					if err == nil {
+						summary.ForegroundRestartCount++
+					}
+				})
+
+				action := "restored"
+				message := fmt.Sprintf("检测到前台偏离 %s，已立即重新拉起目标 App %s", foregroundPackage, req.PackageName)
+				if err != nil {
+					action = "restore-failed"
+					message = fmt.Sprintf("检测到前台偏离 %s，但重新拉起目标 App 失败: %v", foregroundPackage, err)
+					recordEvidence(MonkeyRiskEvidence{Level: "warning", Source: "foreground-guard", Message: message})
+					restoreCooldownUntil = time.Now().Add(2 * time.Second)
+				} else {
+					restoreCooldownUntil = time.Now().Add(1500 * time.Millisecond)
+				}
+				publishMonkeyGuardEvent(run, action, foregroundPackage, req.PackageName, summary.ForegroundRestartCount, message)
+				publishMonkeyStreamEvent(run, "summary", summary)
+				continue
+			}
+		}
+	}
+}
+
+func monitorMonkeyBoundaryProtection(ctx context.Context, adbPath string, req MonkeyRunRequest, run *monkeyRunState, recordEvidence func(MonkeyRiskEvidence)) {
+	ticker := time.NewTicker(750 * time.Millisecond)
+	defer ticker.Stop()
+	restoreCooldownUntil := time.Time{}
+	lastOverlayInspectionAt := time.Time{}
 	lastAdInspectionAt := time.Time{}
 	adSignature := ""
 	adDetectedAt := time.Time{}
@@ -1194,28 +1260,33 @@ func monitorMonkeyForegroundApp(ctx context.Context, adbPath string, req MonkeyR
 			if time.Now().Before(restoreCooldownUntil) {
 				continue
 			}
-			if overlay := resolveMonkeySystemOverlay(ctx, adbPath, req.DeviceID); overlay != "" {
-				err := dismissMonkeySystemOverlay(ctx, adbPath, req.DeviceID)
-				action := "system-overlay-dismissed"
-				message := fmt.Sprintf("检测到系统菜单覆盖层 %s，已收起并返回目标 App", overlay)
-				if err != nil {
-					action = "system-overlay-dismiss-failed"
-					message = fmt.Sprintf("检测到系统菜单覆盖层 %s，但自动收起失败: %v", overlay, err)
-					recordEvidence(MonkeyRiskEvidence{Level: "warning", Source: "foreground-guard", Message: message})
-				}
-				summary := updateMonkeyGuardSummary(run, func(summary *MonkeyRunSummary) {
-					if err == nil {
-						summary.SystemOverlayDismissCount++
+			if time.Since(lastOverlayInspectionAt) >= 2*time.Second {
+				lastOverlayInspectionAt = time.Now()
+				overlay := resolveMonkeySystemOverlay(ctx, adbPath, req.DeviceID)
+				if overlay != "" {
+					err := dismissMonkeySystemOverlay(ctx, adbPath, req.DeviceID)
+					action := "system-overlay-dismissed"
+					message := fmt.Sprintf("检测到系统菜单覆盖层 %s，已收起并返回目标 App", overlay)
+					if err != nil {
+						action = "system-overlay-dismiss-failed"
+						message = fmt.Sprintf("检测到系统菜单覆盖层 %s，但自动收起失败: %v", overlay, err)
+						recordEvidence(MonkeyRiskEvidence{Level: "warning", Source: "foreground-guard", Message: message})
 					}
-				})
-				publishMonkeyGuardEvent(run, action, "", req.PackageName, summary.ForegroundRestartCount, message)
-				publishMonkeyStreamEvent(run, "summary", summary)
-				restoreCooldownUntil = time.Now().Add(2 * time.Second)
-				continue
+					summary := updateMonkeyGuardSummary(run, func(summary *MonkeyRunSummary) {
+						if err == nil {
+							summary.SystemOverlayDismissCount++
+						}
+					})
+					publishMonkeyGuardEvent(run, action, "", req.PackageName, summary.ForegroundRestartCount, message)
+					publishMonkeyStreamEvent(run, "summary", summary)
+					restoreCooldownUntil = time.Now().Add(2 * time.Second)
+					continue
+				}
 			}
 
 			activity := resolveCurrentActivity(ctx, adbPath, req.DeviceID)
-			if time.Since(lastAdInspectionAt) >= 3*time.Second {
+			foregroundPackage := foregroundPackageFromActivity(activity)
+			if (foregroundPackage == "" || foregroundPackage == req.PackageName || isMonkeyAdActivity(activity)) && time.Since(lastAdInspectionAt) >= 3*time.Second {
 				lastAdInspectionAt = time.Now()
 				inspection, err := inspectMonkeyAdUI(ctx, adbPath, req.DeviceID)
 				if isMonkeyAdActivity(activity) {
@@ -1268,44 +1339,6 @@ func monitorMonkeyForegroundApp(ctx context.Context, adbPath string, req MonkeyR
 					adDetectedAt = time.Time{}
 				}
 			}
-
-			foregroundPackage := foregroundPackageFromActivity(activity)
-			if foregroundPackage == "" || foregroundPackage == req.PackageName {
-				lastForeignPackage = ""
-				consecutiveForeignChecks = 0
-				continue
-			}
-			if foregroundPackage != lastForeignPackage {
-				lastForeignPackage = foregroundPackage
-				consecutiveForeignChecks = 1
-				continue
-			}
-			consecutiveForeignChecks++
-			if consecutiveForeignChecks < 2 {
-				continue
-			}
-			consecutiveForeignChecks = 0
-
-			err := restoreMonkeyTargetApp(ctx, adbPath, req.DeviceID, foregroundPackage, req.PackageName)
-			summary := updateMonkeyGuardSummary(run, func(summary *MonkeyRunSummary) {
-				summary.LastForeignPackage = foregroundPackage
-				if err == nil {
-					summary.ForegroundRestartCount++
-				}
-			})
-
-			action := "restored"
-			message := fmt.Sprintf("检测到前台偏离 %s，已重新拉起目标 App %s", foregroundPackage, req.PackageName)
-			if err != nil {
-				action = "restore-failed"
-				message = fmt.Sprintf("检测到前台偏离 %s，但重新拉起目标 App 失败: %v", foregroundPackage, err)
-				recordEvidence(MonkeyRiskEvidence{Level: "warning", Source: "foreground-guard", Message: message})
-				restoreCooldownUntil = time.Now().Add(4 * time.Second)
-			} else {
-				restoreCooldownUntil = time.Now().Add(8 * time.Second)
-			}
-			publishMonkeyGuardEvent(run, action, foregroundPackage, req.PackageName, summary.ForegroundRestartCount, message)
-			publishMonkeyStreamEvent(run, "summary", summary)
 		}
 	}
 }

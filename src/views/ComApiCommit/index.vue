@@ -305,6 +305,7 @@ const monkeyCommandPreview = computed(() => {
     `  --pct-motion ${monkeyStrategy.value === 'scroll-heavy' ? 40 : 20}`,
     `  --pct-nav ${monkeyStrategy.value === 'navigation-heavy' ? 25 : 10}`,
     `  --pct-majornav ${monkeyStrategy.value === 'navigation-heavy' ? 20 : 10}`,
+    '  --pct-appswitch 0',
     `  --throttle ${monkeyThrottleMs.value}`,
     ...(monkeyContinueAfterCrash.value ? ['  --ignore-crashes'] : []),
     `  -s ${monkeySeed.value}`,
@@ -1379,12 +1380,12 @@ onUnmounted(() => {
               <el-input v-model="monkeySeed" placeholder="数字 seed；非数字会由后端稳定转换" />
             </div>
             <div class="param-group">
-              <el-checkbox v-model="monkeyDenseSamplingEnabled">
+              <el-checkbox v-model="monkeyDenseSamplingEnabled" class="monkey-option-checkbox">
                 异常加密采样（warning 5s/张持续60s，critical 2s/张持续120s）
               </el-checkbox>
             </div>
             <div class="param-group">
-              <el-checkbox v-model="monkeyContinueAfterCrash">
+              <el-checkbox v-model="monkeyContinueAfterCrash" class="monkey-option-checkbox">
                 Crash 后继续执行（持续采样并记录后续问题）
               </el-checkbox>
             </div>
@@ -1676,6 +1677,25 @@ onUnmounted(() => {
 
 .monkey-mode-switch {
   width: 100%;
+}
+
+.monkey-option-checkbox {
+  width: 100%;
+  height: auto;
+  align-items: flex-start;
+  white-space: normal;
+}
+
+.monkey-option-checkbox :deep(.el-checkbox__input) {
+  margin-top: 3px;
+}
+
+.monkey-option-checkbox :deep(.el-checkbox__label) {
+  min-width: 0;
+  padding-left: 8px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
 }
 
 .monkey-risk-card {

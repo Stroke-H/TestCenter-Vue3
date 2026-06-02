@@ -23,6 +23,9 @@
 - **Monkey Fullscreen Report Viewer**: Monkey 原子图报告取消普通弹窗的白色 frame、外边距和底部操作栏，改为无边框全屏展示，保留右上角悬浮关闭按钮并让原子图舞台铺满浏览器可用区域。
 - **Monkey Pixel Status Bar Guard**: Monkey 真机测试期间优先禁用 Android 通知栏下拉展开，并通过高频主动收起命令兼容 Pixel 7 等焦点不切换到 `SystemUI` 的机型；测试结束后自动恢复通知栏状态，避免随机事件持续点击快捷设置。
 - **Monkey Detail Panel Scroll**: Monkey 执行结果和历史原子图报告的右侧详情面板支持内部上下滚动，并修复面板 padding 导致的横向裁切，保证截图、日志摘要和统计信息可完整查看。
+- **Monkey Evidence Screenshot Alignment**: 异常证据新增事件驱动补拍：critical 日志立即触发截图，warning 在进入加密窗口时先补一张，再按既有 5 秒或 2 秒节奏持续采样，减少截图与真实错误时刻错位。
+- **Monkey Foreground Recovery Latency**: 前台包名恢复拆分为独立 `500ms` 快速守护线程，不再被广告 UI 扫描阻塞；目标 App 测试禁用 Monkey 自带 App Switch，避免随机事件反复拉起开屏页，同时降低离开 App 后在桌面或其他应用继续点击的时间。
+- **Monkey Option Text Wrapping**: Monkey 参数面板中的异常加密采样和 Crash 后继续执行说明支持自动换行，避免窄侧栏内文案被裁切。
 
 ## 2026-05-22
 
