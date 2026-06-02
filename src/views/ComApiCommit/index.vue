@@ -208,12 +208,15 @@ interface MonkeyRunSummary {
   ignoredSystemLogCount: number
   foregroundGuardEnabled: boolean
   foregroundRestartCount: number
+  systemOverlayDismissCount: number
+  adDismissCount: number
+  adRestartCount: number
   lastForeignPackage?: string
   error?: string
 }
 
 interface MonkeyForegroundGuardEvent {
-  action: 'restored' | 'restore-failed'
+  action: 'restored' | 'restore-failed' | 'system-overlay-dismissed' | 'system-overlay-dismiss-failed' | 'ad-waiting' | 'ad-dismissed' | 'ad-restarted' | 'ad-restart-failed'
   foregroundPackage?: string
   targetPackage: string
   restartCount: number
@@ -727,7 +730,7 @@ const applyMonkeySummary = (summary: MonkeyRunSummary) => {
     `[SCREENSHOT] ${summary.screenshotCount} 张，normal=${summary.normalCount}, warning=${summary.warningCount}, critical=${summary.criticalCount}, unknown=${summary.unknownCount}`,
     `[BATCH] 已执行 ${summary.batchCount || 1} 个 Monkey 批次，平台将持续续跑至设定时长`,
     `[EVIDENCE] 真实 App Crash=${summary.appCrashDetected ? '是' : '否'}，结束原因=${summary.terminationReason || '运行中'}，已过滤系统噪声=${summary.ignoredSystemLogCount || 0}`,
-    `[GUARD] 前台守护=${summary.foregroundGuardEnabled ? '开启' : '关闭'}，自动重启=${summary.foregroundRestartCount || 0} 次${summary.lastForeignPackage ? `，最近偏离=${summary.lastForeignPackage}` : ''}`,
+    `[GUARD] 前台守护=${summary.foregroundGuardEnabled ? '开启' : '关闭'}，自动重启=${summary.foregroundRestartCount || 0} 次，系统菜单收起=${summary.systemOverlayDismissCount || 0} 次，广告关闭=${summary.adDismissCount || 0} 次，广告重启=${summary.adRestartCount || 0} 次${summary.lastForeignPackage ? `，最近偏离=${summary.lastForeignPackage}` : ''}`,
     summary.error ? `[ERROR] ${summary.error}` : '[INFO] Monkey 真机测试采集中...'
   ]
   logs.value = [
@@ -819,7 +822,7 @@ const startMonkeyRun = async () => {
     `[SCREENSHOT] ${monkeyPrecisionMode.value === 'high' ? '高精度' : '低精度'}模式，每 ${monkeyScreenshotIntervalSec.value}s 截图一次`,
     `[DENSE] 异常加密采样${monkeyDenseSamplingEnabled.value ? '开启：warning 5s/张 60s，critical 2s/张 120s' : '关闭'}`,
     `[CRASH] ${monkeyContinueAfterCrash.value ? '发现 Crash 后继续执行并持续留证' : '发现 Crash 后立即停止并留证'}`,
-    '[GUARD] 前台守护已开启：持续检测当前前台应用，偏离测试目标后自动关闭并重新拉起目标 App'
+    '[GUARD] 边界保护已开启：自动收起系统菜单；检测到广告页后等待 5 秒，优先尝试关闭，无法关闭时重启目标 App'
   ]
   uptime.value = 0
   duration.value = 0

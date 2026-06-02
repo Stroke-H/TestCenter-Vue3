@@ -6,6 +6,7 @@
 - **Monkey Continue After Crash**: 新增可选“Crash 后继续执行”模式，默认仍为遇到真实 Crash 立即停止并留证；报告会标记真实 App Crash、结束原因和过滤掉的系统噪声数量。
 - **Monkey SSE Live Stream**: Monkey 真机测试改为通过 SSE 实时推送运行摘要、截图节点和风险证据，支持心跳、断线重连与最近事件续传；HTTP 保留为启动、停止、历史资源读取和低频状态校准通道。
 - **Monkey Foreground Guard**: Monkey 真机测试新增后台前台应用守护，每 2 秒检查当前 resumed Activity；连续确认偏离测试包名后会关闭普通三方前台应用并重新拉起目标 App，同时实时记录恢复次数和最近偏离包名。
+- **Monkey Boundary Protection**: 前台守护扩展为边界保护：检测到通知栏、快捷设置或系统侧边栏时自动收起；检测到开屏、插屏、激励广告等保守特征后等待约 5 秒，优先点击关闭控件或返回键，仍无法关闭时重启目标 App。报告同步记录系统菜单收起、广告关闭和广告失败重启次数。
 
 ### Fixed
 - **Monkey Runtime Checkpoint Status**: 修复 Monkey 每次截图后提前将运行状态结算为完成，导致前端在首张截图后停止轮询的问题。

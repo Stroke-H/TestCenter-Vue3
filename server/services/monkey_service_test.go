@@ -70,6 +70,49 @@ func TestShouldForceStopForegroundPackageProtectsSystemApps(t *testing.T) {
 	}
 }
 
+func TestDetectMonkeySystemOverlayFromFocusedNotificationShade(t *testing.T) {
+	output := "mCurrentFocus=Window{123 u0 com.android.systemui/com.android.systemui.shade.NotificationShade}"
+	if overlay := detectMonkeySystemOverlay(output); overlay != "通知栏" {
+		t.Fatalf("expected notification shade overlay, got %s", overlay)
+	}
+}
+
+func TestParseMonkeyAdInspectionFindsCloseButton(t *testing.T) {
+	output := `UI hierarchy dumped to: /dev/tty
+<hierarchy rotation="0">
+  <node text="Advertisement" resource-id="com.example:id/interstitial_container" class="android.view.View" content-desc="" bounds="[0,0][1080,2400]" clickable="false">
+    <node text="" resource-id="com.example:id/ad_close" class="android.widget.ImageButton" content-desc="关闭广告" bounds="[960,80][1040,160]" clickable="true"></node>
+  </node>
+</hierarchy>`
+	inspection, err := parseMonkeyAdInspection(output)
+	if err != nil {
+		t.Fatalf("parse ad hierarchy: %v", err)
+	}
+	if !inspection.Detected || !inspection.HasCloseTarget || inspection.CloseTargetX != 1000 || inspection.CloseTargetY != 120 {
+		t.Fatalf("unexpected ad inspection: %+v", inspection)
+	}
+}
+
+func TestParseMonkeyAdInspectionRejectsNormalCloseButton(t *testing.T) {
+	output := `<hierarchy rotation="0"><node text="关闭" resource-id="com.example:id/close" class="android.widget.Button" content-desc="" bounds="[10,20][110,120]" clickable="true"></node></hierarchy>`
+	inspection, err := parseMonkeyAdInspection(output)
+	if err != nil {
+		t.Fatalf("parse normal hierarchy: %v", err)
+	}
+	if inspection.Detected {
+		t.Fatalf("expected normal close button to be ignored, got %+v", inspection)
+	}
+}
+
+func TestIsMonkeyAdActivity(t *testing.T) {
+	if !isMonkeyAdActivity("com.google.android.gms.ads.AdActivity/.MainActivity") {
+		t.Fatal("expected ad activity to be detected")
+	}
+	if isMonkeyAdActivity("com.example.app/.ui.SettingsActivity") {
+		t.Fatal("did not expect normal app activity to be detected as ad")
+	}
+}
+
 func TestValidateMonkeyLaunchOutputRejectsAbortedLaunch(t *testing.T) {
 	if err := validateMonkeyLaunchOutput("Events injected: 1"); err != nil {
 		t.Fatalf("expected successful launcher output, got %v", err)

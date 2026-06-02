@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"hash/fnv"
 	"image"
@@ -76,6 +77,9 @@ type MonkeyRunSummary struct {
 	IgnoredSystemLogCount     int    `json:"ignoredSystemLogCount"`
 	ForegroundGuardEnabled    bool   `json:"foregroundGuardEnabled"`
 	ForegroundRestartCount    int    `json:"foregroundRestartCount"`
+	SystemOverlayDismissCount int    `json:"systemOverlayDismissCount"`
+	AdDismissCount            int    `json:"adDismissCount"`
+	AdRestartCount            int    `json:"adRestartCount"`
 	LastForeignPackage        string `json:"lastForeignPackage,omitempty"`
 	Error                     string `json:"error,omitempty"`
 }
@@ -143,7 +147,30 @@ var (
 	packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
 	logcatPIDPattern   = regexp.MustCompile(`\(\s*(\d+)\)`)
 	activityPattern    = regexp.MustCompile(`([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)`)
+	nodeBoundsPattern  = regexp.MustCompile(`\[(\d+),(\d+)\]\[(\d+),(\d+)\]`)
 )
+
+type monkeyUIHierarchy struct {
+	Nodes []monkeyUINode `xml:"node"`
+}
+
+type monkeyUINode struct {
+	Text        string         `xml:"text,attr"`
+	ResourceID  string         `xml:"resource-id,attr"`
+	Class       string         `xml:"class,attr"`
+	ContentDesc string         `xml:"content-desc,attr"`
+	Bounds      string         `xml:"bounds,attr"`
+	Clickable   string         `xml:"clickable,attr"`
+	Nodes       []monkeyUINode `xml:"node"`
+}
+
+type monkeyAdInspection struct {
+	Detected       bool
+	Signature      string
+	CloseTargetX   int
+	CloseTargetY   int
+	HasCloseTarget bool
+}
 
 type monkeyPackageCache struct {
 	Packages  []MonkeyPackage
@@ -1144,6 +1171,9 @@ func monitorMonkeyForegroundApp(ctx context.Context, adbPath string, req MonkeyR
 	lastForeignPackage := ""
 	consecutiveForeignChecks := 0
 	restoreCooldownUntil := time.Time{}
+	lastAdInspectionAt := time.Time{}
+	adSignature := ""
+	adDetectedAt := time.Time{}
 
 	for {
 		select {
@@ -1153,7 +1183,81 @@ func monitorMonkeyForegroundApp(ctx context.Context, adbPath string, req MonkeyR
 			if time.Now().Before(restoreCooldownUntil) {
 				continue
 			}
+			if overlay := resolveMonkeySystemOverlay(ctx, adbPath, req.DeviceID); overlay != "" {
+				err := dismissMonkeySystemOverlay(ctx, adbPath, req.DeviceID)
+				action := "system-overlay-dismissed"
+				message := fmt.Sprintf("检测到系统菜单覆盖层 %s，已收起并返回目标 App", overlay)
+				if err != nil {
+					action = "system-overlay-dismiss-failed"
+					message = fmt.Sprintf("检测到系统菜单覆盖层 %s，但自动收起失败: %v", overlay, err)
+					recordEvidence(MonkeyRiskEvidence{Level: "warning", Source: "foreground-guard", Message: message})
+				}
+				summary := updateMonkeyGuardSummary(run, func(summary *MonkeyRunSummary) {
+					if err == nil {
+						summary.SystemOverlayDismissCount++
+					}
+				})
+				publishMonkeyGuardEvent(run, action, "", req.PackageName, summary.ForegroundRestartCount, message)
+				publishMonkeyStreamEvent(run, "summary", summary)
+				restoreCooldownUntil = time.Now().Add(2 * time.Second)
+				continue
+			}
+
 			activity := resolveCurrentActivity(ctx, adbPath, req.DeviceID)
+			if time.Since(lastAdInspectionAt) >= 3*time.Second {
+				lastAdInspectionAt = time.Now()
+				inspection, err := inspectMonkeyAdUI(ctx, adbPath, req.DeviceID)
+				if isMonkeyAdActivity(activity) {
+					if !inspection.Detected {
+						inspection = monkeyAdInspection{Detected: true, Signature: strings.ToLower(activity)}
+					}
+					err = nil
+				}
+				if err == nil && inspection.Detected {
+					if inspection.Signature != adSignature {
+						adSignature = inspection.Signature
+						adDetectedAt = time.Now()
+						publishMonkeyGuardEvent(run, "ad-waiting", "", req.PackageName, monkeyRunSummarySnapshot(run).ForegroundRestartCount, "检测到疑似广告页，等待 5 秒后尝试自动关闭")
+						continue
+					}
+					if time.Since(adDetectedAt) >= 5*time.Second {
+						dismissed := dismissMonkeyAd(ctx, adbPath, req.DeviceID, inspection)
+						action := "ad-dismissed"
+						message := "检测到广告页，已尝试点击关闭控件或返回键恢复测试"
+						summary := updateMonkeyGuardSummary(run, func(summary *MonkeyRunSummary) {
+							if dismissed {
+								summary.AdDismissCount++
+							}
+						})
+						if !dismissed {
+							restartErr := restoreMonkeyTargetApp(ctx, adbPath, req.DeviceID, "", req.PackageName)
+							action = "ad-restarted"
+							message = fmt.Sprintf("广告页无法自动关闭，已重启目标 App %s", req.PackageName)
+							if restartErr != nil {
+								action = "ad-restart-failed"
+								message = fmt.Sprintf("广告页无法自动关闭，重启目标 App 失败: %v", restartErr)
+								recordEvidence(MonkeyRiskEvidence{Level: "warning", Source: "foreground-guard", Message: message})
+							}
+							summary = updateMonkeyGuardSummary(run, func(summary *MonkeyRunSummary) {
+								if restartErr == nil {
+									summary.ForegroundRestartCount++
+									summary.AdRestartCount++
+								}
+							})
+						}
+						publishMonkeyGuardEvent(run, action, "", req.PackageName, summary.ForegroundRestartCount, message)
+						publishMonkeyStreamEvent(run, "summary", summary)
+						adSignature = ""
+						adDetectedAt = time.Time{}
+						restoreCooldownUntil = time.Now().Add(3 * time.Second)
+						continue
+					}
+				} else {
+					adSignature = ""
+					adDetectedAt = time.Time{}
+				}
+			}
+
 			foregroundPackage := foregroundPackageFromActivity(activity)
 			if foregroundPackage == "" || foregroundPackage == req.PackageName {
 				lastForeignPackage = ""
@@ -1172,15 +1276,12 @@ func monitorMonkeyForegroundApp(ctx context.Context, adbPath string, req MonkeyR
 			consecutiveForeignChecks = 0
 
 			err := restoreMonkeyTargetApp(ctx, adbPath, req.DeviceID, foregroundPackage, req.PackageName)
-			run.mu.Lock()
-			run.summary.LastForeignPackage = foregroundPackage
-			if err == nil {
-				run.summary.ForegroundRestartCount++
-			}
-			restartCount := run.summary.ForegroundRestartCount
-			_ = writeJSON(filepath.Join(monkeyRunDir(run.summary.RunID), "summary.json"), run.summary)
-			summary := run.summary
-			run.mu.Unlock()
+			summary := updateMonkeyGuardSummary(run, func(summary *MonkeyRunSummary) {
+				summary.LastForeignPackage = foregroundPackage
+				if err == nil {
+					summary.ForegroundRestartCount++
+				}
+			})
 
 			action := "restored"
 			message := fmt.Sprintf("检测到前台偏离 %s，已重新拉起目标 App %s", foregroundPackage, req.PackageName)
@@ -1192,13 +1293,185 @@ func monitorMonkeyForegroundApp(ctx context.Context, adbPath string, req MonkeyR
 			} else {
 				restoreCooldownUntil = time.Now().Add(8 * time.Second)
 			}
-			publishMonkeyStreamEvent(run, "foreground-guard", MonkeyForegroundGuardEvent{
-				Action: action, ForegroundPackage: foregroundPackage, TargetPackage: req.PackageName,
-				RestartCount: restartCount, Message: message, Timestamp: time.Now().Format(time.RFC3339),
-			})
+			publishMonkeyGuardEvent(run, action, foregroundPackage, req.PackageName, summary.ForegroundRestartCount, message)
 			publishMonkeyStreamEvent(run, "summary", summary)
 		}
 	}
+}
+
+func updateMonkeyGuardSummary(run *monkeyRunState, update func(*MonkeyRunSummary)) MonkeyRunSummary {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	update(&run.summary)
+	_ = writeJSON(filepath.Join(monkeyRunDir(run.summary.RunID), "summary.json"), run.summary)
+	return run.summary
+}
+
+func publishMonkeyGuardEvent(run *monkeyRunState, action string, foregroundPackage string, targetPackage string, restartCount int, message string) {
+	publishMonkeyStreamEvent(run, "foreground-guard", MonkeyForegroundGuardEvent{
+		Action: action, ForegroundPackage: foregroundPackage, TargetPackage: targetPackage,
+		RestartCount: restartCount, Message: message, Timestamp: time.Now().Format(time.RFC3339),
+	})
+}
+
+func resolveMonkeySystemOverlay(ctx context.Context, adbPath string, deviceID string) string {
+	overlayCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(overlayCtx, adbPath, "-s", deviceID, "shell", "dumpsys", "window", "windows").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return detectMonkeySystemOverlay(string(output))
+}
+
+func detectMonkeySystemOverlay(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		lower := strings.ToLower(line)
+		if !strings.Contains(lower, "mcurrentfocus") && !strings.Contains(lower, "mfocusedapp") {
+			continue
+		}
+		switch {
+		case strings.Contains(lower, "notificationshade") || strings.Contains(lower, "notificationpanel"):
+			return "通知栏"
+		case strings.Contains(lower, "quicksettings"):
+			return "快捷设置"
+		case strings.Contains(lower, "com.android.systemui"):
+			return "系统侧边栏"
+		}
+	}
+	return ""
+}
+
+func dismissMonkeySystemOverlay(ctx context.Context, adbPath string, deviceID string) error {
+	dismissCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(dismissCtx, adbPath, "-s", deviceID, "shell", "cmd", "statusbar", "collapse").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	_ = exec.CommandContext(dismissCtx, adbPath, "-s", deviceID, "shell", "input", "keyevent", "KEYCODE_BACK").Run()
+	return nil
+}
+
+func inspectMonkeyAdUI(ctx context.Context, adbPath string, deviceID string) (monkeyAdInspection, error) {
+	inspectCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(inspectCtx, adbPath, "-s", deviceID, "shell", "uiautomator", "dump", "/dev/tty").CombinedOutput()
+	if err != nil {
+		return monkeyAdInspection{}, err
+	}
+	return parseMonkeyAdInspection(string(output))
+}
+
+func parseMonkeyAdInspection(output string) (monkeyAdInspection, error) {
+	hierarchyStart := strings.Index(output, "<hierarchy")
+	if hierarchyStart < 0 {
+		return monkeyAdInspection{}, fmt.Errorf("uiautomator output does not contain hierarchy")
+	}
+	hierarchyEnd := strings.Index(output[hierarchyStart:], "</hierarchy>")
+	if hierarchyEnd < 0 {
+		return monkeyAdInspection{}, fmt.Errorf("uiautomator hierarchy is incomplete")
+	}
+	hierarchyEnd += hierarchyStart + len("</hierarchy>")
+	var hierarchy monkeyUIHierarchy
+	if err := xml.Unmarshal([]byte(output[hierarchyStart:hierarchyEnd]), &hierarchy); err != nil {
+		return monkeyAdInspection{}, err
+	}
+	nodes := flattenMonkeyUINodes(hierarchy.Nodes)
+	signal := ""
+	for _, node := range nodes {
+		value := monkeyUINodeSearchText(node)
+		if token := firstMonkeyToken(value, []string{
+			"interstitial", "rewarded", "reward_ad", "app_open_ad", "splash_ad", "ad_container", "ad_close", "admob", "applovin",
+			"unityads", "ironsource", "vungle", "mintegral", "pangle", "广告", "advertisement", "sponsored",
+		}); token != "" {
+			signal = token
+			break
+		}
+	}
+	if signal == "" {
+		return monkeyAdInspection{}, nil
+	}
+	inspection := monkeyAdInspection{Detected: true, Signature: signal}
+	for _, node := range nodes {
+		value := monkeyUINodeSearchText(node)
+		if !containsAnyMonkeyToken(value, []string{"关闭", "跳过", "skip", "close", "dismiss", "cross", "btn_close", "iv_close", "ad_close"}) {
+			continue
+		}
+		if x, y, ok := monkeyNodeCenter(node.Bounds); ok {
+			inspection.CloseTargetX = x
+			inspection.CloseTargetY = y
+			inspection.HasCloseTarget = true
+			return inspection, nil
+		}
+	}
+	return inspection, nil
+}
+
+func flattenMonkeyUINodes(nodes []monkeyUINode) []monkeyUINode {
+	items := make([]monkeyUINode, 0, len(nodes))
+	for _, node := range nodes {
+		items = append(items, node)
+		items = append(items, flattenMonkeyUINodes(node.Nodes)...)
+	}
+	return items
+}
+
+func monkeyUINodeSearchText(node monkeyUINode) string {
+	return strings.ToLower(strings.Join([]string{node.Text, node.ResourceID, node.Class, node.ContentDesc}, " "))
+}
+
+func containsAnyMonkeyToken(value string, tokens []string) bool {
+	return firstMonkeyToken(value, tokens) != ""
+}
+
+func firstMonkeyToken(value string, tokens []string) string {
+	for _, token := range tokens {
+		if strings.Contains(value, token) {
+			return token
+		}
+	}
+	return ""
+}
+
+func isMonkeyAdActivity(activity string) bool {
+	return containsAnyMonkeyToken(strings.ToLower(activity), []string{
+		"adactivity", "interstitial", "rewarded", "appopenad", "splashad", "applovin", "unityads",
+		"ironsource", "vungle", "mintegral", "pangle", "gdtad", "kwad",
+	})
+}
+
+func monkeyNodeCenter(bounds string) (int, int, bool) {
+	match := nodeBoundsPattern.FindStringSubmatch(bounds)
+	if len(match) != 5 {
+		return 0, 0, false
+	}
+	values := make([]int, 0, 4)
+	for _, value := range match[1:] {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, 0, false
+		}
+		values = append(values, parsed)
+	}
+	return (values[0] + values[2]) / 2, (values[1] + values[3]) / 2, true
+}
+
+func dismissMonkeyAd(ctx context.Context, adbPath string, deviceID string, inspection monkeyAdInspection) bool {
+	dismissCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	if inspection.HasCloseTarget {
+		_ = exec.CommandContext(dismissCtx, adbPath, "-s", deviceID, "shell", "input", "tap",
+			strconv.Itoa(inspection.CloseTargetX), strconv.Itoa(inspection.CloseTargetY)).Run()
+		time.Sleep(800 * time.Millisecond)
+		if current, err := inspectMonkeyAdUI(dismissCtx, adbPath, deviceID); err == nil && !current.Detected && !isMonkeyAdActivity(resolveCurrentActivity(dismissCtx, adbPath, deviceID)) {
+			return true
+		}
+	}
+	_ = exec.CommandContext(dismissCtx, adbPath, "-s", deviceID, "shell", "input", "keyevent", "KEYCODE_BACK").Run()
+	time.Sleep(800 * time.Millisecond)
+	current, err := inspectMonkeyAdUI(dismissCtx, adbPath, deviceID)
+	return err == nil && !current.Detected && !isMonkeyAdActivity(resolveCurrentActivity(dismissCtx, adbPath, deviceID))
 }
 
 func foregroundPackageFromActivity(activity string) string {
@@ -1342,9 +1615,9 @@ func resolveMonkeyTerminationReason(summary MonkeyRunSummary, errText string) st
 
 func saveMonkeyExecutionReport(req MonkeyRunRequest, summary MonkeyRunSummary) {
 	status := monkeyExecutionReportStatus(summary.Status)
-	analysis := fmt.Sprintf("Monkey 真机测试\n包名: %s\n设备: %s\n模式: %s\n执行批次: %d\n截图: %d\nNormal: %d, Warning: %d, Critical: %d, Unknown: %d\n真实 App Crash: %t\n结束原因: %s\n已过滤系统噪声: %d\n前台守护重启: %d\n最近偏离包名: %s",
+	analysis := fmt.Sprintf("Monkey 真机测试\n包名: %s\n设备: %s\n模式: %s\n执行批次: %d\n截图: %d\nNormal: %d, Warning: %d, Critical: %d, Unknown: %d\n真实 App Crash: %t\n结束原因: %s\n已过滤系统噪声: %d\n前台守护重启: %d\n系统菜单自动收起: %d\n广告自动关闭: %d\n广告失败重启: %d\n最近偏离包名: %s",
 		summary.PackageName, summary.DeviceID, summary.PrecisionMode, summary.BatchCount, summary.ScreenshotCount, summary.NormalCount, summary.WarningCount, summary.CriticalCount, summary.UnknownCount,
-		summary.AppCrashDetected, summary.TerminationReason, summary.IgnoredSystemLogCount, summary.ForegroundRestartCount, summary.LastForeignPackage)
+		summary.AppCrashDetected, summary.TerminationReason, summary.IgnoredSystemLogCount, summary.ForegroundRestartCount, summary.SystemOverlayDismissCount, summary.AdDismissCount, summary.AdRestartCount, summary.LastForeignPackage)
 	_, _ = AddExecutionReport(ExecutionReport{
 		ID: "MONKEY-" + time.Now().Format("20060102150405"), RunID: summary.RunID,
 		Name: "Monkey测试", Type: "Monkey 测试", Status: status, Duration: summary.Duration,
