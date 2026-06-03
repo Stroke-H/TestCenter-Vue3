@@ -53,6 +53,7 @@ func DefaultDashboardPermissions(username string) map[string]bool {
 	permissions := map[string]bool{
 		"dashboard.com_api_commit.visible":   true,
 		"dashboard.test_process.visible":     true,
+		"dashboard.project_tree.visible":     true,
 		"dashboard.sandbox_accounts.visible": true,
 		"dashboard.ui_auto.visible":          true,
 		"dashboard.testcase_gen.visible":     true,
@@ -62,6 +63,9 @@ func DefaultDashboardPermissions(username string) map[string]bool {
 		"monkey.run.view":                    true,
 		"monkey.run.start":                   true,
 		"monkey.run.stop":                    true,
+		"monkey.device.wireless_pair":        true,
+		"monkey.device.wireless_connect":     true,
+		"monkey.device.wireless_disconnect":  true,
 		"dashboard.jungle.visible":           false,
 		"dashboard.novel_reader.visible":     false,
 		"dashboard.video_player.visible":     false,

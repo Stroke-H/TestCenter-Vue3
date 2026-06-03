@@ -7,6 +7,9 @@
 - **Monkey SSE Live Stream**: Monkey 真机测试改为通过 SSE 实时推送运行摘要、截图节点和风险证据，支持心跳、断线重连与最近事件续传；HTTP 保留为启动、停止、历史资源读取和低频状态校准通道。
 - **Monkey Foreground Guard**: Monkey 真机测试新增后台前台应用守护，每 2 秒检查当前 resumed Activity；连续确认偏离测试包名后会关闭普通三方前台应用并重新拉起目标 App，同时实时记录恢复次数和最近偏离包名。
 - **Monkey Boundary Protection**: 前台守护扩展为边界保护：检测到通知栏、快捷设置或系统侧边栏时自动收起；检测到开屏、插屏、激励广告等保守特征后等待约 5 秒，优先点击关闭控件或返回键，仍无法关闭时重启目标 App。报告同步记录系统菜单收起、广告关闭和广告失败重启次数。
+- **Monkey Wireless ADB**: Monkey 真机测试新增无线 ADB 两步式接入，支持 Android 11+ 配对码配对、局域网连接、设备来源标识、主动断开、运行前状态校验和后台断线重连；已登记设备地址会在服务重启后恢复连接，配对码仅用于当前请求且不会落盘。
+- **Monkey Wireless ADB Permissions**: 无线 ADB 新增独立的配对、连接和断开权限，后端仅接受局域网 `IP:端口` 并执行固定 ADB 命令模板。
+- **Monkey Wireless ADB Step Guide**: 无线连接弹窗改为 `Step 1` / `Step 2` 引导，配对成功后显示完成标识并自动突出连接步骤，帮助用户继续填写连接地址。
 
 ### Fixed
 - **Monkey Runtime Checkpoint Status**: 修复 Monkey 每次截图后提前将运行状态结算为完成，导致前端在首张截图后停止轮询的问题。
@@ -25,10 +28,11 @@
 - **Monkey Detail Panel Scroll**: Monkey 执行结果和历史原子图报告的右侧详情面板支持内部上下滚动，并修复面板 padding 导致的横向裁切，保证截图、日志摘要和统计信息可完整查看。
 - **Monkey Evidence Screenshot Alignment**: 异常证据新增事件驱动补拍：critical 日志立即触发截图，warning 在进入加密窗口时先补一张，再按既有 5 秒或 2 秒节奏持续采样，减少截图与真实错误时刻错位。
 - **Monkey Foreground Recovery Latency**: 前台包名恢复拆分为独立 `500ms` 快速守护线程，不再被广告 UI 扫描阻塞；目标 App 测试禁用 Monkey 自带 App Switch，避免随机事件反复拉起开屏页，同时降低离开 App 后在桌面或其他应用继续点击的时间。
+- **Monkey Foreground Recovery Activity**: 前台守护恢复目标 App 时会优先记录并拉起真实 Activity，兼容没有标准 Launcher Activity 或处于 Android 归档状态的应用；包级 Monkey 拉起仅作为回退，避免守护识别到偏离后无法返回测试项目。
 - **Monkey Option Text Wrapping**: Monkey 参数面板中的异常加密采样和 Crash 后继续执行说明支持自动换行，避免窄侧栏内文案被裁切。
 - **Monkey Runtime Card Path Wrapping**: Monkey 运行级别卡片允许 ADB 路径等连续长文本在侧栏宽度内强制断行，避免设备就绪说明横向溢出。
 - **Monkey Throttle Input Alignment**: Monkey Throttle 改为可直接输入、可上下步进调节的数字控件，默认及最小值为 `300ms`，每次增减 `100ms`，避免填写低于后端有效默认值的配置。
-- **Monkey Precision Toggle**: 高精度和低精度采样收束为与参数输入框等高的轮换按钮，按钮直接显示当前生效模式，点击后在 `10s/张` 与 `30s/张` 之间切换；悬浮与按压时提供轻量立体反馈。
+- **Monkey Precision Toggle**: 高精度和低精度采样收束为与参数输入框等高的轮换按钮，按钮直接显示当前生效模式，点击后在 `10s/张` 与 `30s/张` 之间切换；视觉样式与刷新设备按钮保持一致。
 
 ## 2026-05-22
 

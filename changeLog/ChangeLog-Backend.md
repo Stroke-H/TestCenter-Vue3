@@ -1,5 +1,14 @@
 # ChangeLog - Backend (TestCenter Server)
 
+## 2026-06-02
+
+### Added
+- **Monkey Wireless ADB Service**: 新增无线 ADB 配对、连接、重连和断开接口；仅接受局域网 `IP:端口`，配对码仅用于当前请求且不会落盘，已登记地址可在服务重启后恢复连接。
+- **Monkey Wireless ADB Permissions**: 无线 ADB 配对、连接和断开接口接入独立后端权限校验，并限制为固定 ADB 命令模板。
+
+### Fixed
+- **Monkey Recovery Activity Resolution**: Monkey 前台守护恢复目标 App 时优先解析并拉起真实 Activity，兼容没有标准 Launcher Activity 或处于 Android 归档状态的应用；包级 Monkey 拉起仅作为回退。
+
 ## 2026-04-24
 
 ### Added

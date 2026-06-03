@@ -31,6 +31,7 @@ interface RecentTool {
   iconColor: string
   iconBg: string
   path?: string
+  permissionKey?: string
   timestamp: number
 }
 
@@ -47,15 +48,25 @@ const normalizeRecentTool = (tool: RecentTool): RecentTool => {
     ...tool,
     id: 'acceptance-project-tree',
     name: '项目树',
-    description: projectTreeDescription
+    description: projectTreeDescription,
+    permissionKey: 'dashboard.project_tree.visible'
   }
 }
+
+const canAccessRecentTool = (tool: RecentTool) => {
+  if (tool.id === 'acceptance-project-tree' || tool.path === '/test_process/project_tree') {
+    return permissionStore.canAccess('dashboard.project_tree.visible')
+  }
+  return permissionStore.canAccess(tool.permissionKey)
+}
+
+const visibleRecentTools = computed(() => recentTools.value.filter(canAccessRecentTool))
 
 onMounted(() => {
   const cached = localStorage.getItem('recent_tools_cache')
   if (cached) {
     try {
-      recentTools.value = JSON.parse(cached).map(normalizeRecentTool)
+      recentTools.value = JSON.parse(cached).map(normalizeRecentTool).filter(canAccessRecentTool)
       localStorage.setItem('recent_tools_cache', JSON.stringify(recentTools.value))
     } catch (e) {}
   }
@@ -70,6 +81,7 @@ const addToRecent = (tool: ToolDef | RecentTool) => {
     iconColor: tool.iconColor,
     iconBg: tool.iconBg,
     path: tool.path,
+    permissionKey: tool.permissionKey,
     timestamp: Date.now()
   }
 
@@ -250,6 +262,7 @@ const perfTools = ref<ToolDef[]>([
 
 const canShowApiTools = computed(() => permissionStore.canAccess('dashboard.com_api_commit.visible'))
 const canShowTestProcess = computed(() => permissionStore.canAccess('dashboard.test_process.visible'))
+const canShowProjectTree = computed(() => permissionStore.canAccess('dashboard.project_tree.visible'))
 const canShowSandboxAccounts = computed(() => permissionStore.canAccess('dashboard.sandbox_accounts.visible'))
 const canShowUIAuto = computed(() => permissionStore.canAccess('dashboard.ui_auto.visible'))
 const canShowTestCaseGen = computed(() => permissionStore.canAccess('dashboard.testcase_gen.visible'))
@@ -278,7 +291,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
         <a v-if="recentTools.length > 0" href="#" class="clear-link" @click.prevent="clearHistory">清除历史</a>
       </div>
 
-      <div v-if="recentTools.length === 0" class="card-grid card-grid--4">
+      <div v-if="visibleRecentTools.length === 0" class="card-grid card-grid--4">
         <div class="tool-card tool-card--empty">
           <div class="tool-card__top">
             <div class="tool-card__icon recent-empty-icon">
@@ -299,7 +312,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
 
       <div v-else class="card-grid card-grid--4">
         <div
-          v-for="tool in recentTools"
+          v-for="tool in visibleRecentTools"
           :key="tool.id"
           class="tool-card tool-card--launch"
         >
@@ -364,7 +377,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
     </div>
  
     <!-- ========== Test Process Tools ========== -->
-    <div v-if="canShowTestProcess || canShowSandboxAccounts" class="section">
+    <div v-if="canShowTestProcess || canShowProjectTree || canShowSandboxAccounts" class="section">
       <div class="section-header">
         <div class="section-title-row">
           <div class="section-icon section-icon--orange">
@@ -400,7 +413,7 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
           </div>
         </div>
 
-        <div v-if="canShowTestProcess" class="tool-card">
+        <div v-if="canShowProjectTree" class="tool-card">
           <div class="tool-card__top">
             <div class="tool-card__icon" style="background: rgba(37, 99, 235, 0.1)">
               <el-icon :size="20" color="#2563eb"><component :is="Icons.Share" /></el-icon>
@@ -419,7 +432,8 @@ const canShowVideoPlayer = computed(() => permissionStore.canAccess('dashboard.v
                 description: projectTreeDescription,
                 iconName: 'Share',
                 iconColor: '#2563eb',
-                iconBg: 'rgba(37, 99, 235, 0.1)'
+                iconBg: 'rgba(37, 99, 235, 0.1)',
+                permissionKey: 'dashboard.project_tree.visible'
               })"
             >打开</a>
           </div>

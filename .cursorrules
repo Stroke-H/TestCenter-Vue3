@@ -29,9 +29,10 @@
 6. **注释规范**：只在复杂业务、边界条件、权限判断、并发流程、数据迁移、兼容逻辑处写解释性注释。不要写重复代码字面含义的废话注释。
 7. **UI/UX 一致性**：优先延续平台已有视觉语言。卡片、按钮、间距、状态色、空状态和加载态要统一、克制、清晰。
 8. **权限与登录态**：权限控制必须同时考虑前端展示和后端校验。不要只靠隐藏入口保护功能。
-9. **局域网固定访问规则**：用户可见入口必须优先使用固定局域网主机名，例如 `http://strokeh.local:5173/dashboard`。不要在前端页面、报告 URL、WebSocket、iframe、下载链接、飞书回链中硬编码 `localhost`、本机 IP 或临时 IP。
-10. **运行时地址统一生成**：前端需要访问后端 HTTP、WebSocket、静态报告时，必须使用 `src/utils/runtimeUrl.ts` 的 `buildBackendUrl`、`buildBackendWsUrl`、`normalizeBackendUrl`；后端生成平台链接时，必须使用 `server/services/platform_url.go` 的 `PlatformFrontendURL`、`PlatformBackendURL`。只有 Vite 本机代理、启动脚本健康检查这类纯本机内部逻辑可以使用 `127.0.0.1`。
-11. **固定访问链路自检**：涉及登录、报告查看、脚本运行、WebSocket、iframe、飞书消息链接、下载链接的改动，交付前必须扫描是否新增了 `localhost:8080`、访问者侧 IP 拼接或散落的 `window.location.hostname + ':8080'` 写法，并验证 `strokeh.local` 下关键接口可访问。
+9. **新增卡片必须接入权限系统**：任何新增的仪表盘卡片、功能入口卡片、工具分区卡片、报告入口卡片或设置入口卡片，都必须同步新增或复用明确的 `permissionKey`，并接入前端权限枚举、后端默认权限、路由 `meta.permissionKey`、卡片显隐判断和最近使用缓存过滤；如果卡片背后存在可执行接口，后端接口也必须做同权限或更细粒度权限校验。禁止新增“只在 UI 上可见但权限系统不可配置”的卡片入口。
+10. **局域网固定访问规则**：用户可见入口必须优先使用固定局域网主机名，例如 `http://strokeh.local:5173/dashboard`。不要在前端页面、报告 URL、WebSocket、iframe、下载链接、飞书回链中硬编码 `localhost`、本机 IP 或临时 IP。
+11. **运行时地址统一生成**：前端需要访问后端 HTTP、WebSocket、静态报告时，必须使用 `src/utils/runtimeUrl.ts` 的 `buildBackendUrl`、`buildBackendWsUrl`、`normalizeBackendUrl`；后端生成平台链接时，必须使用 `server/services/platform_url.go` 的 `PlatformFrontendURL`、`PlatformBackendURL`。只有 Vite 本机代理、启动脚本健康检查这类纯本机内部逻辑可以使用 `127.0.0.1`。
+12. **固定访问链路自检**：涉及登录、报告查看、脚本运行、WebSocket、iframe、飞书消息链接、下载链接的改动，交付前必须扫描是否新增了 `localhost:8080`、访问者侧 IP 拼接或散落的 `window.location.hostname + ':8080'` 写法，并验证 `strokeh.local` 下关键接口可访问。
 
 ## 四、验证闭环
 

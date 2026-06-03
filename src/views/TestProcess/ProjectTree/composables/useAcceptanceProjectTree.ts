@@ -139,7 +139,7 @@ const loadProjectMemos = (): Record<string, ProjectMemoRecord> => {
       if (typeof val === 'string') {
         const time = new Date().toISOString()
         migrated[key] = {
-          items: [{ id: `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`, content: val, color: 'green', updatedAt: time }],
+          items: [{ id: `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`, content: val, color: 'green', updatedAt: time, history: [] }],
           updatedAt: time
         }
       } else if (typeof val === 'object') {
@@ -149,14 +149,21 @@ const loadProjectMemos = (): Record<string, ProjectMemoRecord> => {
               id: item.id || `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
               content: item.content || '',
               color: item.color || 'green',
-              updatedAt: item.updatedAt || new Date().toISOString()
+              updatedAt: item.updatedAt || new Date().toISOString(),
+              history: Array.isArray(item.history)
+                ? item.history.map((historyItem: any) => ({
+                    content: historyItem.content || '',
+                    color: historyItem.color || item.color || 'green',
+                    modifiedAt: historyItem.modifiedAt || historyItem.updatedAt || new Date().toISOString()
+                  })).filter((historyItem: any) => normalizeText(historyItem.content))
+                : []
             })),
             updatedAt: val.updatedAt || new Date().toISOString()
           }
         } else if (typeof val.content === 'string') {
           const time = val.updatedAt || new Date().toISOString()
           migrated[key] = {
-            items: [{ id: `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`, content: val.content, color: 'green', updatedAt: time }],
+            items: [{ id: `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`, content: val.content, color: 'green', updatedAt: time, history: [] }],
             updatedAt: time
           }
         } else {
@@ -175,6 +182,60 @@ const loadProjectMemos = (): Record<string, ProjectMemoRecord> => {
 
 const saveProjectMemos = (memos: Record<string, ProjectMemoRecord>) => {
   window.localStorage.setItem(PROJECT_MEMOS_STORAGE_KEY, JSON.stringify(memos))
+}
+
+const isTTminsProject = (project: ProjectTreeNode) => {
+  const projectText = `${project.projectCode} ${project.projectName}`.toLowerCase()
+  return projectText.includes('ttmins')
+}
+
+const hasSameMemoItem = (items: ProjectMemoItem[], source: ProjectMemoItem) => {
+  const sourceContent = normalizeText(source.content)
+  if (!sourceContent) return true
+  return items.some((item) => normalizeText(item.content) === sourceContent && item.color === source.color)
+}
+
+const copyA1160MemosToTTminsProjects = (
+  projectTree: ProjectTreeNode[],
+  projectMemos: Record<string, ProjectMemoRecord>
+) => {
+  const sourceRecord = projectMemos.A1160
+  const sourceItems = (sourceRecord?.items || [])
+    .filter((item) => normalizeText(item.content))
+    .slice(0, 4)
+
+  if (!sourceItems.length) return projectMemos
+
+  const now = new Date().toISOString()
+  let changed = false
+  const next = { ...projectMemos }
+
+  projectTree
+    .filter((project) => project.projectCode !== 'A1160' && isTTminsProject(project))
+    .forEach((project) => {
+      const currentRecord = next[project.projectCode] || { items: [], updatedAt: '' }
+      const currentItems = currentRecord.items || []
+      const missingItems = sourceItems.filter((item) => !hasSameMemoItem(currentItems, item))
+
+      if (!missingItems.length) return
+
+      next[project.projectCode] = {
+        items: [
+          ...currentItems,
+          ...missingItems.map((item, index) => ({
+            id: `memo-${Date.now()}-${project.projectCode}-${index}-${Math.random().toString(36).substring(2, 8)}`,
+            content: item.content,
+            color: item.color,
+            updatedAt: now,
+            history: []
+          }))
+        ],
+        updatedAt: now
+      }
+      changed = true
+    })
+
+  return changed ? next : projectMemos
 }
 
 
@@ -267,7 +328,8 @@ export function useAcceptanceProjectTree() {
       id: `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
       content,
       color,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      history: []
     }
 
     next[selectedProjectCode.value] = {
@@ -289,10 +351,24 @@ export function useAcceptanceProjectTree() {
 
     const updatedItems = currentRecord.items.map((item) => {
       if (item.id === itemId) {
+        const nextContent = typeof updates.content === 'string' ? updates.content : item.content
+        const nextColor = updates.color || item.color
+        const modifiedAt = new Date().toISOString()
+        const contentChanged = nextContent !== item.content || nextColor !== item.color
         return {
           ...item,
           ...updates,
-          updatedAt: new Date().toISOString()
+          history: contentChanged
+            ? [
+                ...(item.history || []),
+                {
+                  content: item.content,
+                  color: item.color,
+                  modifiedAt
+                }
+              ]
+            : item.history || [],
+          updatedAt: contentChanged ? modifiedAt : item.updatedAt
         }
       }
       return item
@@ -300,6 +376,31 @@ export function useAcceptanceProjectTree() {
 
     next[selectedProjectCode.value] = {
       items: updatedItems,
+      updatedAt: new Date().toISOString()
+    }
+
+    projectMemos.value = next
+    saveProjectMemos(next)
+  }
+
+  const reorderProjectMemoItems = (sourceItemId: string, targetItemId: string) => {
+    if (!selectedProjectCode.value || sourceItemId === targetItemId) return
+
+    const next = { ...projectMemos.value }
+    const currentRecord = next[selectedProjectCode.value]
+    if (!currentRecord) return
+
+    const currentItems = [...currentRecord.items]
+    const sourceIndex = currentItems.findIndex((item) => item.id === sourceItemId)
+    const targetIndex = currentItems.findIndex((item) => item.id === targetItemId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+
+    const [sourceItem] = currentItems.splice(sourceIndex, 1)
+    if (!sourceItem) return
+    currentItems.splice(targetIndex, 0, sourceItem)
+
+    next[selectedProjectCode.value] = {
+      items: currentItems,
       updatedAt: new Date().toISOString()
     }
 
@@ -348,6 +449,11 @@ export function useAcceptanceProjectTree() {
       const data = await response.json()
       reports.value = Array.isArray(data) ? data : []
       const nextProjectTree = buildProjectTree(reports.value)
+      const syncedProjectMemos = copyA1160MemosToTTminsProjects(nextProjectTree, projectMemos.value)
+      if (syncedProjectMemos !== projectMemos.value) {
+        projectMemos.value = syncedProjectMemos
+        saveProjectMemos(syncedProjectMemos)
+      }
       if (!nextProjectTree.some((project) => project.projectCode === selectedProjectCode.value)) {
         selectedProjectCode.value = nextProjectTree[0]?.projectCode || ''
       }
@@ -372,6 +478,7 @@ export function useAcceptanceProjectTree() {
     stats,
     addProjectMemoItem,
     updateProjectMemoItem,
+    reorderProjectMemoItems,
     deleteProjectMemoItem,
     fetchReports
   }

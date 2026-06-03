@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useDramaRunStore, useReportStore } from '@/stores'
+import { useDramaRunStore, usePermissionStore, useReportStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { buildBackendUrl, buildBackendWsUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
@@ -24,6 +24,7 @@ const router = useRouter()
 const reportStore = useReportStore()
 const authStore = useAuthStore()
 const dramaRunStore = useDramaRunStore()
+const permissionStore = usePermissionStore()
 
 // 从路由参数获取工具信息
 const toolName = ref((route.query.name as string) || '测试剧集是否重复')
@@ -187,6 +188,7 @@ interface MonkeyDevice {
   status: string
   model?: string
   product?: string
+  source?: 'usb' | 'wifi'
 }
 
 interface MonkeyPackage {
@@ -262,6 +264,12 @@ const monkeyPackages = ref<MonkeyPackage[]>([])
 const monkeyPackagesLoading = ref(false)
 const monkeyAdbAvailable = ref(false)
 const monkeyAdbPath = ref('')
+const monkeyWirelessDialogVisible = ref(false)
+const monkeyWirelessPairAddress = ref('')
+const monkeyWirelessPairingCode = ref('')
+const monkeyWirelessConnectAddress = ref('')
+const monkeyWirelessSubmitting = ref(false)
+const monkeyWirelessPaired = ref(false)
 const monkeyDurationSec = ref(3600)
 const monkeyEventTotal = ref(1200)
 const monkeySeed = ref('20260526')
@@ -610,6 +618,61 @@ const fetchMonkeyDevices = async () => {
     }
   } catch (error: any) {
     ElMessage.error(error.message || '读取 Android 设备失败')
+  }
+}
+
+const postMonkeyWirelessADB = async (path: string, body: Record<string, string>) => {
+  monkeyWirelessSubmitting.value = true
+  try {
+    const response = await fetch(buildBackendUrl(path), {
+      method: 'POST',
+      headers: monkeyAuthHeaders(),
+      body: JSON.stringify(body)
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || '无线 ADB 操作失败')
+    ElMessage.success(data.message || '无线 ADB 操作成功')
+    await fetchMonkeyDevices()
+    return true
+  } catch (error: any) {
+    ElMessage.error(error.message || '无线 ADB 操作失败')
+    return false
+  } finally {
+    monkeyWirelessSubmitting.value = false
+  }
+}
+
+const pairMonkeyWirelessADB = async () => {
+  const paired = await postMonkeyWirelessADB('/api/monkey/wireless/pair', {
+    address: monkeyWirelessPairAddress.value,
+    pairingCode: monkeyWirelessPairingCode.value
+  })
+  if (paired) {
+    monkeyWirelessPairingCode.value = ''
+    monkeyWirelessPaired.value = true
+  }
+}
+
+const connectMonkeyWirelessADB = async () => {
+  const connected = await postMonkeyWirelessADB('/api/monkey/wireless/connect', {
+    address: monkeyWirelessConnectAddress.value
+  })
+  if (connected) {
+    monkeyDevice.value = monkeyWirelessConnectAddress.value.trim()
+    monkeyWirelessDialogVisible.value = false
+  }
+}
+
+const disconnectSelectedMonkeyWirelessADB = async () => {
+  if (!monkeyDevice.value || !monkeyDevices.value.find(device => device.id === monkeyDevice.value && device.source === 'wifi')) {
+    ElMessage.warning('请先选择已连接的 Wi-Fi 设备')
+    return
+  }
+  const disconnected = await postMonkeyWirelessADB('/api/monkey/wireless/disconnect', {
+    address: monkeyDevice.value
+  })
+  if (disconnected) {
+    monkeyDevice.value = ''
   }
 }
 
@@ -1313,12 +1376,29 @@ onUnmounted(() => {
                   <el-option
                     v-for="device in monkeyDevices"
                     :key="device.id"
-                    :label="`${device.model || device.id} (${device.status})`"
+                    :label="`${device.model || device.id} · ${device.source === 'wifi' ? 'Wi-Fi' : 'USB'} (${device.status})`"
                     :value="device.id"
                     :disabled="device.status !== 'device'"
                   />
                 </el-select>
                 <el-button size="small" @click="fetchMonkeyDevices">刷新设备</el-button>
+              </div>
+              <div class="monkey-wireless-actions">
+                <el-button
+                  v-if="permissionStore.canAccess('monkey.device.wireless_pair') || permissionStore.canAccess('monkey.device.wireless_connect')"
+                  size="small"
+                  @click="monkeyWirelessDialogVisible = true"
+                >
+                  无线连接设备
+                </el-button>
+                <el-button
+                  v-if="permissionStore.canAccess('monkey.device.wireless_disconnect')"
+                  size="small"
+                  :disabled="!monkeyDevices.some(device => device.id === monkeyDevice && device.source === 'wifi')"
+                  @click="disconnectSelectedMonkeyWirelessADB"
+                >
+                  断开 Wi-Fi
+                </el-button>
               </div>
             </div>
             <div class="param-row">
@@ -1537,6 +1617,50 @@ onUnmounted(() => {
         </button>
       </div>
     </div>
+
+    <el-dialog
+      v-model="monkeyWirelessDialogVisible"
+      title="无线连接 Android 设备"
+      width="520px"
+      append-to-body
+    >
+      <div class="monkey-wireless-dialog">
+        <section :class="['monkey-wireless-step', { 'is-completed': monkeyWirelessPaired }]">
+          <div class="monkey-wireless-step__header">
+            <strong>Step 1 · 配对设备</strong>
+            <span v-if="monkeyWirelessPaired" class="monkey-wireless-step__completed">已完成</span>
+          </div>
+          <p>在手机中打开“开发者选项 > 无线调试 > 使用配对码配对设备”，填写手机显示的配对地址和 6 位配对码。</p>
+          <el-input v-model="monkeyWirelessPairAddress" placeholder="配对地址，例如 192.168.1.86:37091" />
+          <el-input v-model="monkeyWirelessPairingCode" maxlength="6" placeholder="6 位配对码" show-word-limit />
+          <el-button
+            v-if="permissionStore.canAccess('monkey.device.wireless_pair')"
+            type="primary"
+            :loading="monkeyWirelessSubmitting"
+            @click="pairMonkeyWirelessADB"
+          >
+            配对
+          </el-button>
+        </section>
+        <section :class="['monkey-wireless-step', { 'is-active': monkeyWirelessPaired }]">
+          <div class="monkey-wireless-step__header">
+            <strong>Step 2 · 连接设备</strong>
+            <span v-if="monkeyWirelessPaired" class="monkey-wireless-step__current">请继续连接</span>
+          </div>
+          <p>配对成功后，返回手机无线调试页面，填写页面顶部显示的连接地址。连接端口通常与配对端口不同。</p>
+          <p v-if="monkeyWirelessPaired" class="monkey-wireless-step__guide">配对已完成。现在请填写手机无线调试页面顶部的连接地址。</p>
+          <el-input v-model="monkeyWirelessConnectAddress" placeholder="连接地址，例如 192.168.1.86:39147" />
+          <el-button
+            v-if="permissionStore.canAccess('monkey.device.wireless_connect')"
+            type="primary"
+            :loading="monkeyWirelessSubmitting"
+            @click="connectMonkeyWirelessADB"
+          >
+            连接并刷新设备
+          </el-button>
+        </section>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -1687,30 +1811,78 @@ onUnmounted(() => {
   align-items: center;
 }
 
+.monkey-wireless-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .monkey-mode-switch {
   width: 100%;
   height: 32px;
   margin: 0;
   justify-content: center;
-  color: #475569;
-  background-color: #f8fafc;
-  border-color: #e2e8f0;
-  box-shadow: 0 2px 0 #cbd5e1, 0 4px 8px rgba(15, 23, 42, 0.08);
-  transform: translateY(-1px);
-  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, background-color 160ms ease;
 }
 
-.monkey-mode-switch:hover {
-  color: #2563eb;
-  background-color: #ffffff;
-  border-color: #93c5fd;
-  box-shadow: 0 4px 0 #bfdbfe, 0 9px 15px rgba(37, 99, 235, 0.14);
-  transform: translateY(-3px);
+.monkey-wireless-dialog {
+  display: grid;
+  gap: 20px;
 }
 
-.monkey-mode-switch:active {
-  box-shadow: 0 1px 0 #bfdbfe, 0 3px 6px rgba(37, 99, 235, 0.1);
-  transform: translateY(0);
+.monkey-wireless-step {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.monkey-wireless-step.is-completed {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.monkey-wireless-step.is-active {
+  border-color: #60a5fa;
+  background: #eff6ff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+.monkey-wireless-step__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.monkey-wireless-step__completed,
+.monkey-wireless-step__current {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.monkey-wireless-step__completed {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+.monkey-wireless-step__current {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.monkey-wireless-step p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.monkey-wireless-step .monkey-wireless-step__guide {
+  color: #1d4ed8;
+  font-weight: 600;
 }
 
 .monkey-option-checkbox {

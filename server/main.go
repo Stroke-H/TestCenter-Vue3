@@ -149,6 +149,11 @@ func main() {
 		{
 			monkey.GET("/devices", services.ListMonkeyDevicesHandler)
 			monkey.GET("/devices/:deviceId/packages", services.ListMonkeyPackagesHandler)
+			monkey.GET("/wireless/devices", services.ListMonkeyWirelessADBDevicesHandler)
+			monkey.POST("/wireless/pair", services.PairMonkeyWirelessADBHandler)
+			monkey.POST("/wireless/connect", services.ConnectMonkeyWirelessADBHandler)
+			monkey.POST("/wireless/reconnect", services.ReconnectMonkeyWirelessADBHandler)
+			monkey.POST("/wireless/disconnect", services.DisconnectMonkeyWirelessADBHandler)
 			monkey.GET("/runs", services.ListMonkeyRunsHandler)
 			monkey.POST("/runs", services.StartMonkeyRunHandler)
 			monkey.GET("/runs/:runId", services.GetMonkeyRunHandler)
@@ -223,6 +228,7 @@ func main() {
 	feishu.InitFeishuBridge(r)
 	services.InitScheduledTaskService()
 	services.InitMonkeyRetentionService()
+	services.InitMonkeyWirelessADBService()
 
 	host := os.Getenv("TESTCENTER_BACKEND_HOST")
 	if host == "" {

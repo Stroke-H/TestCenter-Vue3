@@ -23,6 +23,7 @@ const {
   selectedProjectMemo,
   addProjectMemoItem,
   updateProjectMemoItem,
+  reorderProjectMemoItems,
   deleteProjectMemoItem,
   fetchReports
 } = useAcceptanceProjectTree()
@@ -54,6 +55,8 @@ interface NoteDraft {
   color: 'green' | 'red' | 'orange'
 }
 const editingNotes = ref<Record<string, NoteDraft>>({})
+const draggingNoteId = ref('')
+const dragOverNoteId = ref('')
 
 const startEditNote = (note: ProjectMemoItem) => {
   editingNotes.value[note.id] = {
@@ -101,6 +104,55 @@ const setDraftColor = (noteId: string, color: 'green' | 'red' | 'orange') => {
   if (draft) {
     draft.color = color
   }
+}
+
+const formatNoteTime = (value: string) => {
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+const getNoteHistoryTooltip = (note: ProjectMemoItem) => {
+  const history = note.history || []
+  if (!history.length) return '暂无历史修改记录'
+
+  return history
+    .slice()
+    .reverse()
+    .map((item) => `${formatNoteTime(item.modifiedAt)} 修改前：${item.content}`)
+    .join('\n')
+}
+
+const handleNoteDragStart = (event: DragEvent, noteId: string) => {
+  if (editingNotes.value[noteId]) return
+  draggingNoteId.value = noteId
+  event.dataTransfer?.setData('text/plain', noteId)
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+  }
+}
+
+const handleNoteDragEnter = (noteId: string) => {
+  if (!draggingNoteId.value || draggingNoteId.value === noteId) return
+  dragOverNoteId.value = noteId
+}
+
+const handleNoteDrop = (event: DragEvent, targetNoteId: string) => {
+  event.preventDefault()
+  const sourceNoteId = event.dataTransfer?.getData('text/plain') || draggingNoteId.value
+  if (sourceNoteId && sourceNoteId !== targetNoteId) {
+    reorderProjectMemoItems(sourceNoteId, targetNoteId)
+  }
+  draggingNoteId.value = ''
+  dragOverNoteId.value = ''
+}
+
+const handleNoteDragEnd = () => {
+  draggingNoteId.value = ''
+  dragOverNoteId.value = ''
 }
 
 onMounted(() => {
@@ -209,8 +261,18 @@ onBeforeUnmount(() => {
           class="memo-sticky-note"
           :class="[
             `memo-sticky-note--${editingNotes[note.id] ? editingNotes[note.id]!.color : note.color}`,
-            { 'memo-sticky-note--editing': editingNotes[note.id] }
+            {
+              'memo-sticky-note--editing': editingNotes[note.id],
+              'memo-sticky-note--dragging': draggingNoteId === note.id,
+              'memo-sticky-note--drag-over': dragOverNoteId === note.id
+            }
           ]"
+          :draggable="!editingNotes[note.id]"
+          @dragstart="handleNoteDragStart($event, note.id)"
+          @dragenter.prevent="handleNoteDragEnter(note.id)"
+          @dragover.prevent
+          @drop="handleNoteDrop($event, note.id)"
+          @dragend="handleNoteDragEnd"
         >
           <!-- Editing state -->
           <template v-if="editingNotes[note.id]">
@@ -267,34 +329,40 @@ onBeforeUnmount(() => {
 
           <!-- View state -->
           <template v-else>
-            <div
-              class="memo-sticky-note__view"
-              :title="note.content"
-              @click="startEditNote(note)"
+            <el-tooltip
+              effect="dark"
+              placement="top-start"
+              :content="getNoteHistoryTooltip(note)"
+              popper-class="memo-history-tooltip"
             >
-              <div class="memo-sticky-note__content">
-                <span class="memo-sticky-note__text">{{ note.content }}</span>
-                <span class="memo-sticky-note__time">
-                  {{ new Date(note.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}
-                </span>
+              <div
+                class="memo-sticky-note__view"
+                @click="startEditNote(note)"
+              >
+                <div class="memo-sticky-note__content">
+                  <span class="memo-sticky-note__text">{{ note.content }}</span>
+                  <span class="memo-sticky-note__time">
+                    {{ formatNoteTime(note.updatedAt) }}
+                  </span>
+                </div>
+                <div class="memo-sticky-note__actions" @click.stop>
+                  <el-button
+                    type="primary"
+                    link
+                    :icon="Edit"
+                    title="编辑"
+                    @click="startEditNote(note)"
+                  />
+                  <el-button
+                    type="danger"
+                    link
+                    :icon="Delete"
+                    title="删除"
+                    @click="deleteProjectMemoItem(note.id)"
+                  />
+                </div>
               </div>
-              <div class="memo-sticky-note__actions" @click.stop>
-                <el-button
-                  type="primary"
-                  link
-                  :icon="Edit"
-                  title="编辑"
-                  @click="startEditNote(note)"
-                />
-                <el-button
-                  type="danger"
-                  link
-                  :icon="Delete"
-                  title="删除"
-                  @click="deleteProjectMemoItem(note.id)"
-                />
-              </div>
-            </div>
+            </el-tooltip>
           </template>
         </div>
       </div>
@@ -369,24 +437,45 @@ onBeforeUnmount(() => {
 /* Memos List Layout - thin long items */
 .project-memos-list {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 14px;
 }
 
 /* Sticky Note Styles */
 .memo-sticky-note {
   position: relative;
+  width: fit-content;
+  max-width: 100%;
   border-radius: 6px;
   transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   overflow: hidden;
+  cursor: grab;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
   border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.memo-sticky-note:active {
+  cursor: grabbing;
 }
 
 .memo-sticky-note:hover {
   transform: translateY(-4px) scale(1.01);
   box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
   z-index: 10;
+}
+
+.memo-sticky-note--dragging {
+  opacity: 0.45;
+  transform: scale(0.98);
+}
+
+.memo-sticky-note--drag-over {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.35), 0 10px 18px rgba(37, 99, 235, 0.16);
+}
+
+.memo-sticky-note--editing {
+  cursor: default;
 }
 
 /* Color Themes for Sticky Notes (Slightly more saturated to look like colored paper) */
@@ -413,25 +502,25 @@ onBeforeUnmount(() => {
   padding: 3px 10px;
   cursor: pointer;
   min-height: 26px;
+  width: fit-content;
+  max-width: 100%;
 }
 
 .memo-sticky-note__content {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: min(860px, calc(100vw - 260px));
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
 }
 
 .memo-sticky-note__text {
-  flex: 1;
-  min-width: 0;
+  flex: 0 1 auto;
   font-size: 12px;
   line-height: 1.4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .memo-sticky-note--green .memo-sticky-note__text {
@@ -447,7 +536,7 @@ onBeforeUnmount(() => {
 .memo-sticky-note__time {
   font-size: 10px;
   white-space: nowrap;
-  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .memo-sticky-note--green .memo-sticky-note__time {
@@ -465,6 +554,7 @@ onBeforeUnmount(() => {
 
 .memo-sticky-note__actions {
   display: flex;
+  flex-shrink: 0;
   gap: 2px;
   margin-left: 10px;
   opacity: 0;
@@ -488,6 +578,8 @@ onBeforeUnmount(() => {
   gap: 10px;
   padding: 3px 10px;
   min-height: 26px;
+  min-width: 320px;
+  width: min(640px, calc(100vw - 80px));
 }
 
 .memo-sticky-note__squares {
@@ -583,6 +675,12 @@ onBeforeUnmount(() => {
   padding: 2px !important;
   height: 20px !important;
   width: 20px !important;
+}
+
+:global(.memo-history-tooltip) {
+  max-width: min(520px, calc(100vw - 48px));
+  white-space: pre-line;
+  line-height: 1.55;
 }
 
 @media (max-width: 900px) {

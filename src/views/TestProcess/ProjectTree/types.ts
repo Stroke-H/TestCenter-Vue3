@@ -33,6 +33,13 @@ export interface ProjectMemoItem {
   content: string
   color: 'green' | 'red' | 'orange'
   updatedAt: string
+  history?: ProjectMemoHistoryItem[]
+}
+
+export interface ProjectMemoHistoryItem {
+  content: string
+  color: 'green' | 'red' | 'orange'
+  modifiedAt: string
 }
 
 export interface ProjectMemoRecord {

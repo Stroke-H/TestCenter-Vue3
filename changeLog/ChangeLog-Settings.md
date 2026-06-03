@@ -1,5 +1,11 @@
 # ChangeLog - Settings (配置中心)
 
+## 2026-06-02
+
+### Added
+- **Monkey Wireless ADB Permissions**: 权限管理新增无线 ADB 配对、连接和断开权限，前端操作入口与后端接口同步校验。
+- **Project Tree Permission**: 权限管理新增“项目树”独立权限，仪表盘卡片、路由访问和最近使用入口都会同步受控。
+
 ## 2026-05-21
 
 ### Added

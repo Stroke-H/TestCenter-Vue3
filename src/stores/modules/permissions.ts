@@ -20,6 +20,7 @@ export interface UserPermissionRecord {
 export const PERMISSION_MODULES: PermissionModule[] = [
   { key: 'dashboard.com_api_commit.visible', title: 'API 工具', description: '执行测试类 API 工具入口', group: '仪表盘' },
   { key: 'dashboard.test_process.visible', title: '流程验证', description: '必测流程验证入口', group: '仪表盘' },
+  { key: 'dashboard.project_tree.visible', title: '项目树', description: '按项目和版本查看验收记录树入口', group: '仪表盘' },
   { key: 'dashboard.sandbox_accounts.visible', title: '测试账号管理', description: '沙盒账号与测试账号入口', group: '仪表盘' },
   { key: 'dashboard.ui_auto.visible', title: 'UI 自动化', description: 'UI 自动化工作台入口', group: '仪表盘' },
   { key: 'dashboard.testcase_gen.visible', title: '测试用例生成', description: '测试用例生成入口', group: '仪表盘' },
@@ -29,6 +30,9 @@ export const PERMISSION_MODULES: PermissionModule[] = [
   { key: 'monkey.run.view', title: '查看 Monkey 结果', description: '查看 Monkey 设备、运行记录、日志和截图', group: '仪表盘' },
   { key: 'monkey.run.start', title: '启动 Monkey 测试', description: '允许在 Android 设备上启动真实 Monkey 测试', group: '仪表盘' },
   { key: 'monkey.run.stop', title: '停止 Monkey 测试', description: '允许停止正在运行的 Monkey 测试', group: '仪表盘' },
+  { key: 'monkey.device.wireless_pair', title: '配对无线 ADB', description: '允许使用手机无线调试配对码建立 ADB 配对', group: '仪表盘' },
+  { key: 'monkey.device.wireless_connect', title: '连接无线 ADB', description: '允许连接或重新连接已配对的无线 Android 设备', group: '仪表盘' },
+  { key: 'monkey.device.wireless_disconnect', title: '断开无线 ADB', description: '允许主动断开无线 Android 设备', group: '仪表盘' },
   { key: 'dashboard.jungle.visible', title: '斗兽棋', description: '斗兽棋入口', group: '仪表盘' },
   { key: 'dashboard.novel_reader.visible', title: '小说阅读器', description: '小说阅读器入口', group: '仪表盘' },
   { key: 'dashboard.video_player.visible', title: '视频播放器', description: '视频播放与摸鱼模式入口', group: '仪表盘' },

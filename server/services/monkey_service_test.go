@@ -59,6 +59,43 @@ func TestForegroundPackageFromActivity(t *testing.T) {
 	}
 }
 
+func TestNormalizeMonkeyWirelessAddressAcceptsPrivateLANAddress(t *testing.T) {
+	address, err := normalizeMonkeyWirelessAddress("192.168.1.86:39147")
+	if err != nil || address != "192.168.1.86:39147" {
+		t.Fatalf("expected private wireless address, got address=%s err=%v", address, err)
+	}
+}
+
+func TestNormalizeMonkeyWirelessAddressRejectsPublicAddress(t *testing.T) {
+	if _, err := normalizeMonkeyWirelessAddress("8.8.8.8:5555"); err == nil {
+		t.Fatal("expected public wireless address to be rejected")
+	}
+}
+
+func TestMonkeyADBDeviceSourceDetectsWirelessAddress(t *testing.T) {
+	if source := monkeyADBDeviceSource("192.168.1.86:39147"); source != "wifi" {
+		t.Fatalf("expected wifi device source, got %s", source)
+	}
+	if source := monkeyADBDeviceSource("28191FDH200BE2"); source != "usb" {
+		t.Fatalf("expected usb device source, got %s", source)
+	}
+}
+
+func TestParseMonkeyRecoveryActivityUsesArchivedOriginalComponent(t *testing.T) {
+	output := "archiveActivityInfo=ArchiveActivityInfo { title = RapidTV, originalComponentName = ComponentInfo{com.rapid.short.tv/com.drama.rapid.ui.activity.FirstActivity} }"
+	activity := parseMonkeyRecoveryActivity(output, "com.rapid.short.tv")
+	if activity != "com.rapid.short.tv/com.drama.rapid.ui.activity.FirstActivity" {
+		t.Fatalf("expected archived recovery activity, got %s", activity)
+	}
+}
+
+func TestParseMonkeyRecoveryActivityRejectsOtherPackage(t *testing.T) {
+	output := "com.example.other/com.example.other.MainActivity"
+	if activity := parseMonkeyRecoveryActivity(output, "com.rapid.short.tv"); activity != "" {
+		t.Fatalf("expected unrelated recovery activity to be rejected, got %s", activity)
+	}
+}
+
 func TestShouldForceStopForegroundPackageProtectsSystemApps(t *testing.T) {
 	for _, packageName := range []string{"android", "com.android.systemui", "com.google.android.permissioncontroller"} {
 		if shouldForceStopForegroundPackage(packageName, "com.example.app") {

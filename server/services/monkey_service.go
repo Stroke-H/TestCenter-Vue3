@@ -12,6 +12,8 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,15 +34,29 @@ type MonkeyDevice struct {
 	Model       string `json:"model,omitempty"`
 	Product     string `json:"product,omitempty"`
 	TransportID string `json:"transportId,omitempty"`
+	Source      string `json:"source"`
 }
 
 type MonkeyPackage struct {
 	Name string `json:"name"`
 }
 
+type MonkeyWirelessADBRequest struct {
+	Address     string `json:"address"`
+	PairingCode string `json:"pairingCode,omitempty"`
+}
+
+type MonkeyWirelessADBDevice struct {
+	Address       string `json:"address"`
+	Status        string `json:"status"`
+	LastConnected string `json:"lastConnected,omitempty"`
+	LastError     string `json:"lastError,omitempty"`
+}
+
 type MonkeyRunRequest struct {
 	PackageName          string `json:"packageName"`
 	DeviceID             string `json:"deviceId"`
+	RecoveryActivity     string `json:"recoveryActivity,omitempty"`
 	PrecisionMode        string `json:"precisionMode"`
 	DurationSec          int    `json:"durationSec"`
 	EventTotal           int    `json:"eventTotal"`
@@ -139,15 +155,19 @@ type monkeyRunState struct {
 }
 
 var (
-	monkeyRunsMu       sync.Mutex
-	monkeyRuns         = map[string]*monkeyRunState{}
-	monkeyPackagesMu   sync.Mutex
-	monkeyPackagesTTL  = 5 * time.Minute
-	monkeyPackages     = map[string]monkeyPackageCache{}
-	packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
-	logcatPIDPattern   = regexp.MustCompile(`\(\s*(\d+)\)`)
-	activityPattern    = regexp.MustCompile(`([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)`)
-	nodeBoundsPattern  = regexp.MustCompile(`\[(\d+),(\d+)\]\[(\d+),(\d+)\]`)
+	monkeyRunsMu           sync.Mutex
+	monkeyRuns             = map[string]*monkeyRunState{}
+	monkeyPackagesMu       sync.Mutex
+	monkeyPackagesTTL      = 5 * time.Minute
+	monkeyPackages         = map[string]monkeyPackageCache{}
+	monkeyWirelessMu       sync.Mutex
+	monkeyWirelessADBs     = map[string]MonkeyWirelessADBDevice{}
+	packageNamePattern     = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
+	pairingCodePattern     = regexp.MustCompile(`^\d{6}$`)
+	logcatPIDPattern       = regexp.MustCompile(`\(\s*(\d+)\)`)
+	activityPattern        = regexp.MustCompile(`([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)`)
+	nodeBoundsPattern      = regexp.MustCompile(`\[(\d+),(\d+)\]\[(\d+),(\d+)\]`)
+	archiveActivityPattern = regexp.MustCompile(`originalComponentName\s*=\s*ComponentInfo\{([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)\}`)
 )
 
 type monkeyUIHierarchy struct {
@@ -184,6 +204,18 @@ func InitMonkeyRetentionService() {
 		defer ticker.Stop()
 		for range ticker.C {
 			applyMonkeyRetentionPolicy()
+		}
+	}()
+}
+
+func InitMonkeyWirelessADBService() {
+	loadMonkeyWirelessADBDevices()
+	go func() {
+		reconnectRegisteredMonkeyWirelessDevices()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			reconnectRegisteredMonkeyWirelessDevices()
 		}
 	}()
 }
@@ -235,6 +267,112 @@ func ListMonkeyPackagesHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"adbAvailable": true, "adbPath": adbPath, "packages": packages, "cached": cached})
+}
+
+func PairMonkeyWirelessADBHandler(c *gin.Context) {
+	user, ok := requireMonkeyPermission(c, "monkey.device.wireless_pair")
+	if !ok {
+		return
+	}
+	var req MonkeyWirelessADBRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	address, err := normalizeMonkeyWirelessAddress(req.Address)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !pairingCodePattern.MatchString(strings.TrimSpace(req.PairingCode)) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请输入手机显示的 6 位无线调试配对码"})
+		return
+	}
+	adbPath, err := resolveADBPath()
+	if err == nil {
+		_, err = runMonkeyADBCommandWithInput(c.Request.Context(), 20*time.Second, strings.TrimSpace(req.PairingCode)+"\n", adbPath, "pair", address)
+	}
+	logMonkeyWirelessAudit(user.Username, "pair", address, err)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("无线 ADB 配对失败: %v", err)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"address": address, "message": "无线 ADB 配对成功，请继续填写手机无线调试页显示的连接地址"})
+}
+
+func ConnectMonkeyWirelessADBHandler(c *gin.Context) {
+	user, ok := requireMonkeyPermission(c, "monkey.device.wireless_connect")
+	if !ok {
+		return
+	}
+	handleConnectMonkeyWirelessADB(c, user.Username)
+}
+
+func ReconnectMonkeyWirelessADBHandler(c *gin.Context) {
+	user, ok := requireMonkeyPermission(c, "monkey.device.wireless_connect")
+	if !ok {
+		return
+	}
+	handleConnectMonkeyWirelessADB(c, user.Username)
+}
+
+func handleConnectMonkeyWirelessADB(c *gin.Context, username string) {
+	var req MonkeyWirelessADBRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	address, err := connectMonkeyWirelessADB(c.Request.Context(), req.Address)
+	logMonkeyWirelessAudit(username, "connect", strings.TrimSpace(req.Address), err)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"address": address, "message": "无线 ADB 已连接"})
+}
+
+func DisconnectMonkeyWirelessADBHandler(c *gin.Context) {
+	user, ok := requireMonkeyPermission(c, "monkey.device.wireless_disconnect")
+	if !ok {
+		return
+	}
+	var req MonkeyWirelessADBRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	address, err := normalizeMonkeyWirelessAddress(req.Address)
+	if err == nil {
+		var adbPath string
+		adbPath, err = resolveADBPath()
+		if err == nil {
+			_, err = runMonkeyADBCommand(c.Request.Context(), 12*time.Second, adbPath, "disconnect", address)
+		}
+	}
+	monkeyWirelessMu.Lock()
+	delete(monkeyWirelessADBs, address)
+	saveMonkeyWirelessADBDevicesLocked()
+	monkeyWirelessMu.Unlock()
+	logMonkeyWirelessAudit(user.Username, "disconnect", address, err)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("断开无线 ADB 失败: %v", err)})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"address": address, "message": "无线 ADB 已断开"})
+}
+
+func ListMonkeyWirelessADBDevicesHandler(c *gin.Context) {
+	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+		return
+	}
+	monkeyWirelessMu.Lock()
+	devices := make([]MonkeyWirelessADBDevice, 0, len(monkeyWirelessADBs))
+	for _, device := range monkeyWirelessADBs {
+		devices = append(devices, device)
+	}
+	monkeyWirelessMu.Unlock()
+	sort.Slice(devices, func(i, j int) bool { return devices[i].Address < devices[j].Address })
+	c.JSON(http.StatusOK, gin.H{"devices": devices})
 }
 
 func StartMonkeyRunHandler(c *gin.Context) {
@@ -573,7 +711,7 @@ func listMonkeyDevices(ctx context.Context, adbPath string) ([]MonkeyDevice, err
 		if len(fields) < 2 {
 			continue
 		}
-		device := MonkeyDevice{ID: fields[0], Status: fields[1]}
+		device := MonkeyDevice{ID: fields[0], Status: fields[1], Source: monkeyADBDeviceSource(fields[0])}
 		for _, field := range fields[2:] {
 			if key, value, ok := strings.Cut(field, ":"); ok {
 				switch key {
@@ -589,6 +727,170 @@ func listMonkeyDevices(ctx context.Context, adbPath string) ([]MonkeyDevice, err
 		devices = append(devices, device)
 	}
 	return devices, nil
+}
+
+func monkeyADBDeviceSource(deviceID string) string {
+	if _, err := normalizeMonkeyWirelessAddress(deviceID); err == nil {
+		return "wifi"
+	}
+	return "usb"
+}
+
+func normalizeMonkeyWirelessAddress(address string) (string, error) {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return "", fmt.Errorf("请输入完整局域网连接地址，例如 192.168.1.86:39147")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || (!ip.IsPrivate() && !ip.IsLinkLocalUnicast()) {
+		return "", fmt.Errorf("仅允许连接局域网 IP 地址")
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", fmt.Errorf("请输入合法端口号")
+	}
+	return net.JoinHostPort(ip.String(), strconv.Itoa(portNumber)), nil
+}
+
+func runMonkeyADBCommand(ctx context.Context, timeout time.Duration, adbPath string, args ...string) (string, error) {
+	return runMonkeyADBCommandWithInput(ctx, timeout, "", adbPath, args...)
+}
+
+func runMonkeyADBCommandWithInput(ctx context.Context, timeout time.Duration, input string, adbPath string, args ...string) (string, error) {
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(cmdCtx, adbPath, args...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
+	output, err := cmd.CombinedOutput()
+	if cmdCtx.Err() == context.DeadlineExceeded {
+		return "", fmt.Errorf("ADB 命令执行超时")
+	}
+	message := strings.TrimSpace(string(output))
+	if err != nil {
+		if message == "" {
+			message = err.Error()
+		}
+		return message, fmt.Errorf("%s", message)
+	}
+	return message, nil
+}
+
+func connectMonkeyWirelessADB(ctx context.Context, rawAddress string) (string, error) {
+	address, err := normalizeMonkeyWirelessAddress(rawAddress)
+	if err != nil {
+		return "", err
+	}
+	adbPath, err := resolveADBPath()
+	if err != nil {
+		return "", err
+	}
+	output, err := runMonkeyADBCommand(ctx, 12*time.Second, adbPath, "connect", address)
+	if err != nil {
+		registerMonkeyWirelessADB(address, "offline", err.Error())
+		return "", fmt.Errorf("无线 ADB 连接失败: %v", err)
+	}
+	lower := strings.ToLower(output)
+	if !strings.Contains(lower, "connected to") && !strings.Contains(lower, "already connected") {
+		err = fmt.Errorf("无线 ADB 未确认连接成功: %s", output)
+		registerMonkeyWirelessADB(address, "offline", err.Error())
+		return "", err
+	}
+	registerMonkeyWirelessADB(address, "device", "")
+	return address, nil
+}
+
+func registerMonkeyWirelessADB(address string, status string, errorMessage string) {
+	monkeyWirelessMu.Lock()
+	defer monkeyWirelessMu.Unlock()
+	device := monkeyWirelessADBs[address]
+	device.Address = address
+	device.Status = status
+	device.LastError = errorMessage
+	if status == "device" {
+		device.LastConnected = time.Now().Format(time.RFC3339)
+	}
+	monkeyWirelessADBs[address] = device
+	saveMonkeyWirelessADBDevicesLocked()
+}
+
+func monkeyWirelessADBDevicesPath() string {
+	return filepath.Join(projectRootDir(), "server", "data", "monkey_wireless_devices.json")
+}
+
+func loadMonkeyWirelessADBDevices() {
+	var devices []MonkeyWirelessADBDevice
+	if err := readJSON(monkeyWirelessADBDevicesPath(), &devices); err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[MonkeyWirelessADB] load registered devices failed: %v", err)
+		}
+		return
+	}
+	monkeyWirelessMu.Lock()
+	defer monkeyWirelessMu.Unlock()
+	for _, device := range devices {
+		address, err := normalizeMonkeyWirelessAddress(device.Address)
+		if err == nil {
+			device.Address = address
+			monkeyWirelessADBs[address] = device
+		}
+	}
+}
+
+func saveMonkeyWirelessADBDevicesLocked() {
+	devices := make([]MonkeyWirelessADBDevice, 0, len(monkeyWirelessADBs))
+	for _, device := range monkeyWirelessADBs {
+		devices = append(devices, device)
+	}
+	sort.Slice(devices, func(i, j int) bool { return devices[i].Address < devices[j].Address })
+	if err := writeJSON(monkeyWirelessADBDevicesPath(), devices); err != nil {
+		log.Printf("[MonkeyWirelessADB] persist registered devices failed: %v", err)
+	}
+}
+
+func reconnectRegisteredMonkeyWirelessDevices() {
+	adbPath, err := resolveADBPath()
+	if err != nil {
+		return
+	}
+	monkeyWirelessMu.Lock()
+	addresses := make([]string, 0, len(monkeyWirelessADBs))
+	for address := range monkeyWirelessADBs {
+		addresses = append(addresses, address)
+	}
+	monkeyWirelessMu.Unlock()
+	for _, address := range addresses {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if _, err := runMonkeyADBCommand(ctx, 4*time.Second, adbPath, "-s", address, "get-state"); err != nil {
+			_, _ = connectMonkeyWirelessADB(ctx, address)
+		}
+		cancel()
+	}
+}
+
+func logMonkeyWirelessAudit(username string, action string, address string, err error) {
+	status := "success"
+	if err != nil {
+		status = "failed"
+	}
+	log.Printf("[MonkeyWirelessADB] user=%s action=%s address=%s status=%s", username, action, address, status)
+}
+
+func ensureMonkeyADBDeviceConnected(ctx context.Context, adbPath string, deviceID string) error {
+	if _, err := runMonkeyADBCommand(ctx, 5*time.Second, adbPath, "-s", deviceID, "get-state"); err == nil {
+		return nil
+	}
+	if monkeyADBDeviceSource(deviceID) != "wifi" {
+		return fmt.Errorf("Android 设备未连接，请刷新设备列表并确认调试授权")
+	}
+	if _, err := connectMonkeyWirelessADB(ctx, deviceID); err != nil {
+		return fmt.Errorf("无线 Android 设备已离线且自动重连失败: %v", err)
+	}
+	if _, err := runMonkeyADBCommand(ctx, 5*time.Second, adbPath, "-s", deviceID, "get-state"); err != nil {
+		return fmt.Errorf("无线 Android 设备连接状态校验失败: %v", err)
+	}
+	return nil
 }
 
 func listThirdPartyPackages(ctx context.Context, adbPath string, deviceID string) ([]MonkeyPackage, bool, error) {
@@ -643,6 +945,9 @@ func startMonkeyRun(parent context.Context, req MonkeyRunRequest) (*monkeyRunSta
 	}
 	if req.DeviceID == "" {
 		return nil, fmt.Errorf("请选择 Android 设备")
+	}
+	if err := ensureMonkeyADBDeviceConnected(parent, adbPath, req.DeviceID); err != nil {
+		return nil, err
 	}
 	if req.DurationSec <= 0 {
 		req.DurationSec = 3600
@@ -724,6 +1029,7 @@ func runMonkeyPipeline(ctx context.Context, adbPath string, req MonkeyRunRequest
 		closeMonkeyStreamSubscribers(run)
 		close(run.stopped)
 	}()
+	req.RecoveryActivity = resolveMonkeyRecoveryActivity(ctx, adbPath, req.DeviceID, req.PackageName)
 
 	var evidenceMu sync.Mutex
 	pendingEvidence := []MonkeyRiskEvidence{}
@@ -1217,7 +1523,7 @@ func monitorMonkeyForegroundPackage(ctx context.Context, adbPath string, req Mon
 			activity := resolveForegroundActivityFast(ctx, adbPath, req.DeviceID)
 			foregroundPackage := foregroundPackageFromActivity(activity)
 			if foregroundPackage != "" && foregroundPackage != req.PackageName && !isMonkeyAdActivity(activity) {
-				err := restoreMonkeyTargetApp(ctx, adbPath, req.DeviceID, foregroundPackage, req.PackageName)
+				err := restoreMonkeyTargetApp(ctx, adbPath, req.DeviceID, foregroundPackage, req.PackageName, req.RecoveryActivity)
 				summary := updateMonkeyGuardSummary(run, func(summary *MonkeyRunSummary) {
 					summary.LastForeignPackage = foregroundPackage
 					if err == nil {
@@ -1312,7 +1618,7 @@ func monitorMonkeyBoundaryProtection(ctx context.Context, adbPath string, req Mo
 							}
 						})
 						if !dismissed {
-							restartErr := restoreMonkeyTargetApp(ctx, adbPath, req.DeviceID, "", req.PackageName)
+							restartErr := restoreMonkeyTargetApp(ctx, adbPath, req.DeviceID, "", req.PackageName, req.RecoveryActivity)
 							action = "ad-restarted"
 							message = fmt.Sprintf("广告页无法自动关闭，已重启目标 App %s", req.PackageName)
 							if restartErr != nil {
@@ -1576,24 +1882,72 @@ func foregroundPackageFromActivity(activity string) string {
 	return strings.TrimSpace(packageName)
 }
 
-func restoreMonkeyTargetApp(ctx context.Context, adbPath string, deviceID string, foreignPackage string, targetPackage string) error {
+func restoreMonkeyTargetApp(ctx context.Context, adbPath string, deviceID string, foreignPackage string, targetPackage string, recoveryActivity ...string) error {
 	restoreCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if shouldForceStopForegroundPackage(foreignPackage, targetPackage) {
 		_ = exec.CommandContext(restoreCtx, adbPath, "-s", deviceID, "shell", "am", "force-stop", foreignPackage).Run()
 	}
-	_ = exec.CommandContext(restoreCtx, adbPath, "-s", deviceID, "shell", "am", "force-stop", targetPackage).Run()
-	output, err := exec.CommandContext(
-		restoreCtx, adbPath, "-s", deviceID, "shell", "monkey",
-		"-p", targetPackage, "-c", "android.intent.category.LAUNCHER", "1",
-	).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	if activity := firstMonkeyRecoveryActivity(recoveryActivity); activity != "" {
+		output, err := exec.CommandContext(restoreCtx, adbPath, "-s", deviceID, "shell", "am", "start", "-n", activity).CombinedOutput()
+		if err == nil && !strings.Contains(strings.ToLower(string(output)), "error") {
+			return nil
+		}
 	}
-	if err := validateMonkeyLaunchOutput(string(output)); err != nil {
-		return err
+	for _, args := range [][]string{
+		{"-s", deviceID, "shell", "monkey", "-p", targetPackage, "-c", "android.intent.category.LAUNCHER", "1"},
+		{"-s", deviceID, "shell", "monkey", "-p", targetPackage, "1"},
+	} {
+		output, err := exec.CommandContext(restoreCtx, adbPath, args...).CombinedOutput()
+		if err == nil {
+			if err := validateMonkeyLaunchOutput(string(output)); err == nil {
+				return nil
+			}
+		}
 	}
-	return nil
+	return fmt.Errorf("目标 App 拉起失败：未找到可用启动 Activity")
+}
+
+func firstMonkeyRecoveryActivity(activities []string) string {
+	for _, activity := range activities {
+		activity = strings.TrimSpace(activity)
+		if activityPattern.MatchString(activity) {
+			return activityPattern.FindString(activity)
+		}
+	}
+	return ""
+}
+
+func resolveMonkeyRecoveryActivity(ctx context.Context, adbPath string, deviceID string, targetPackage string) string {
+	current := resolveCurrentActivity(ctx, adbPath, deviceID)
+	if foregroundPackageFromActivity(current) == targetPackage {
+		return current
+	}
+	for _, args := range [][]string{
+		{"-s", deviceID, "shell", "cmd", "package", "resolve-activity", "--brief", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", targetPackage},
+		{"-s", deviceID, "shell", "cmd", "package", "resolve-activity", "--brief", targetPackage},
+		{"-s", deviceID, "shell", "dumpsys", "package", targetPackage},
+	} {
+		output, err := exec.CommandContext(ctx, adbPath, args...).CombinedOutput()
+		if err == nil {
+			if activity := parseMonkeyRecoveryActivity(string(output), targetPackage); activity != "" {
+				return activity
+			}
+		}
+	}
+	return ""
+}
+
+func parseMonkeyRecoveryActivity(output string, targetPackage string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if activity := firstMonkeyRecoveryActivity([]string{line}); foregroundPackageFromActivity(activity) == targetPackage {
+			return activity
+		}
+	}
+	if match := archiveActivityPattern.FindStringSubmatch(output); len(match) >= 2 && foregroundPackageFromActivity(match[1]) == targetPackage {
+		return match[1]
+	}
+	return ""
 }
 
 func validateMonkeyLaunchOutput(output string) error {

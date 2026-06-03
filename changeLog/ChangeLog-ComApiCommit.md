@@ -1,5 +1,14 @@
 # ChangeLog - ComApiCommit
 
+## 2026-06-02
+
+### Added
+- **Monkey Wireless ADB Connection**: Monkey 真机测试新增无线连接入口，支持 Android 11+ 配对码配对、连接地址接入、已连接设备来源标识和主动断开，让局域网内未通过 USB 接入的 Android 设备也可执行测试。
+- **Monkey Wireless ADB Step Guide**: 无线连接弹窗改为 `Step 1` / `Step 2` 引导；配对成功后会显示“已完成”标识，并自动突出连接步骤和下一步填写提示。
+
+### Fixed
+- **Monkey Wireless Foreground Recovery**: 无线与有线设备统一复用前台守护逻辑；目标 App 没有标准 Launcher Activity 时，优先记录并拉起真实 Activity，避免检测到偏离后无法返回测试应用。
+
 ## 2026-05-27
 
 ### Added
