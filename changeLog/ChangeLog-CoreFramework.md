@@ -1,5 +1,10 @@
 # ChangeLog - CoreFramework
 
+## 2026-06-05
+
+### Changed
+- **DeepSeek V4 AI Configuration**: AI provider 示例配置移除 MiMo/Xiaomi provider，改为 DeepSeek V4 Flash/Pro 承接聊天、轻聊、测试用例生成和定时报告总结能力；配置缺失时的默认模型同步更新为 `deepseek-v4-flash`。
+
 ## 2026-05-21
 
 ### Changed

@@ -125,7 +125,7 @@ func LoadAIConfig() *AIConfig {
 	file, err := os.Open(path)
 	if err != nil {
 		log.Printf("[Bot Brain] Warning: Failed to open %s. Using default empty config: %v", path, err)
-		GlobalAIConfig = &AIConfig{Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1"}
+		GlobalAIConfig = &AIConfig{Model: "deepseek-v4-flash", BaseURL: "https://api.deepseek.com"}
 		return GlobalAIConfig
 	}
 	defer file.Close()

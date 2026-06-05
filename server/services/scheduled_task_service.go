@@ -84,10 +84,24 @@ type dramaProfile struct {
 	DramaListURL string
 }
 
+type scheduledTaskAttemptResult struct {
+	Attempt   int
+	ReportDir string
+	StartedAt time.Time
+	Duration  time.Duration
+	Err       error
+}
+
 var (
 	scheduledTaskMu   sync.Mutex
 	scheduledRunnerOn sync.Once
 )
+
+var scheduledTaskRetryDelays = []time.Duration{
+	5 * time.Minute,
+	10 * time.Minute,
+	15 * time.Minute,
+}
 
 func InitScheduledTaskService() {
 	scheduledRunnerOn.Do(func() {
@@ -244,17 +258,20 @@ func runDueScheduledTasks() {
 func executeScheduledTask(task ScheduledTask) {
 	start := time.Now()
 	runID := fmt.Sprintf("ST-%s-%d", sanitizeReportSuffix(task.ID), start.UnixMilli())
-	reportDir := dramaRuntimeReportDir(runID)
 	log.Printf("[ScheduledTask] executing %s (%s)", task.Name, task.ID)
 
-	err := runDramaPlaybackTask(task.TestEnv, reportDir)
+	attempts := runScheduledDramaTaskWithRetries(task, runID)
+	finalAttempt := attempts[len(attempts)-1]
 	duration := time.Since(start)
 	result := "success"
 	status := "Passed"
-	if err != nil {
-		result = err.Error()
+	reportDir := finalAttempt.ReportDir
+	if finalAttempt.Err != nil {
+		result = buildScheduledTaskAttemptSummary(attempts)
 		status = "Failed"
-		log.Printf("[ScheduledTask] execute failed: %v", err)
+		log.Printf("[ScheduledTask] execute failed after %d attempt(s): %v", len(attempts), finalAttempt.Err)
+	} else if len(attempts) > 1 {
+		result = fmt.Sprintf("success after %d attempt(s)", len(attempts))
 	}
 
 	reportURL := ""
@@ -293,6 +310,62 @@ func executeScheduledTask(task ScheduledTask) {
 	appendScheduledTaskAuditLog(task, status, result, formatDuration(duration), reportURL, start)
 
 	updateScheduledTaskAfterRun(task, start, result)
+}
+
+func runScheduledDramaTaskWithRetries(task ScheduledTask, runID string) []scheduledTaskAttemptResult {
+	maxAttempts := len(scheduledTaskRetryDelays) + 1
+	attempts := make([]scheduledTaskAttemptResult, 0, maxAttempts)
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			delay := scheduledTaskRetryDelays[attempt-2]
+			log.Printf("[ScheduledTask] retrying %s (%s), attempt %d/%d after %s", task.Name, task.ID, attempt, maxAttempts, delay)
+			time.Sleep(delay)
+		}
+
+		attemptStart := time.Now()
+		attemptRunID := runID
+		if attempt > 1 {
+			attemptRunID = fmt.Sprintf("%s-attempt-%d", runID, attempt)
+		}
+		reportDir := dramaRuntimeReportDir(attemptRunID)
+		err := runDramaPlaybackTask(task.TestEnv, reportDir)
+		attemptResult := scheduledTaskAttemptResult{
+			Attempt:   attempt,
+			ReportDir: reportDir,
+			StartedAt: attemptStart,
+			Duration:  time.Since(attemptStart),
+			Err:       err,
+		}
+		attempts = append(attempts, attemptResult)
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("[ScheduledTask] %s (%s) succeeded on attempt %d/%d", task.Name, task.ID, attempt, maxAttempts)
+			}
+			return attempts
+		}
+
+		log.Printf("[ScheduledTask] %s (%s) attempt %d/%d failed: %v", task.Name, task.ID, attempt, maxAttempts, err)
+	}
+
+	return attempts
+}
+
+func buildScheduledTaskAttemptSummary(attempts []scheduledTaskAttemptResult) string {
+	if len(attempts) == 0 {
+		return "task failed without attempt detail"
+	}
+
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("failed after %d attempt(s)", len(attempts)))
+	for _, attempt := range attempts {
+		if attempt.Err == nil {
+			builder.WriteString(fmt.Sprintf("\nAttempt %d: success, duration=%s", attempt.Attempt, formatDuration(attempt.Duration)))
+			continue
+		}
+		builder.WriteString(fmt.Sprintf("\nAttempt %d: %v, duration=%s", attempt.Attempt, attempt.Err, formatDuration(attempt.Duration)))
+	}
+	return builder.String()
 }
 
 func runDramaPlaybackTask(testEnv string, reportDir string) error {
