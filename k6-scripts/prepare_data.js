@@ -131,19 +131,40 @@ async function main() {
 
   const dramaDataText = await dramaRes.text();
   let dramaIds = [];
+  const dramaMeta = {};
   try {
      // 兼容性识别：如果返回的是 CSV 格式 (含有 _id,int_id 表头)
      if (dramaDataText.includes('_id') || dramaDataText.includes(',')) {
-        console.log('📝 检测到 CSV 格式，正在提取 hex _id 列...');
+        console.log('📝 检测到 CSV 格式，正在提取 hex _id 列与剧集元信息...');
         const lines = dramaDataText.split(/[\n\r]+/).filter(l => l.trim() !== '');
-        // 跳过表头，提取每行第一列
-        dramaIds = lines.slice(1)
-                      .map(line => line.split(',')[0].trim())
-                      .filter(id => /^[0-9a-fA-F]{24}$/.test(id)); // 只保留 24 位 hex ID
+        const headers = parseCSVLine(lines[0]).map(value => value.trim());
+        const idIndex = findHeaderIndex(headers, ['_id', 'id', 'drama_id']);
+        dramaIds = lines.slice(1).map(line => {
+          const row = parseCSVLine(line);
+          const id = (row[idIndex >= 0 ? idIndex : 0] || '').trim();
+          if (/^[0-9a-fA-F]{24}$/.test(id)) {
+            dramaMeta[id] = buildDramaMetaFromRecord(headers, row);
+            return id;
+          }
+          return '';
+        }).filter(Boolean);
      } else {
         // 兜底逻辑：尝试作为 JSON 解析
         const rawJson = JSON.parse(dramaDataText);
-        dramaIds = Array.isArray(rawJson) ? rawJson : [];
+        const rawList = Array.isArray(rawJson) ? rawJson : [];
+        dramaIds = rawList.map(item => {
+          if (typeof item === 'string') return item;
+          const id = String(item?._id || item?.id || item?.drama_id || '').trim();
+          if (/^[0-9a-fA-F]{24}$/.test(id)) {
+            dramaMeta[id] = normalizeDramaMeta({
+              int_id: item?.int_id,
+              title: item?.title,
+              cn_title: item?.cn_title
+            });
+            return id;
+          }
+          return '';
+        }).filter(Boolean);
      }
   } catch (e) {
      console.log('⚠️ 数据解析异常，尝试正则提取所有 hex ID...');
@@ -167,8 +188,8 @@ async function main() {
     },
     // 将 API 基础路径透传给 K6 脚本，避免硬编码
     apiBase: DRAMA_LIST_URL.split('/api/')[0],
-    // 只存我们需要的 int_id 数组即可
-    dramaList: dramaIds 
+    dramaList: dramaIds,
+    dramaMeta
   };
 
   fs.writeFileSync(OUTPUT_FILE, JSON.stringify(targetOutput, null, 2), 'utf8');
@@ -179,3 +200,64 @@ main().catch(err => {
   console.error('🔥 脚本执行发生致命异常:', err);
   process.exit(1);
 });
+
+function parseCSVLine(line) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    const next = line[i + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      current += '"';
+      i++;
+      continue;
+    }
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (char === ',' && !inQuotes) {
+      result.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  result.push(current);
+  return result;
+}
+
+function findHeaderIndex(headers, candidates) {
+  const normalized = headers.map(value => value.toLowerCase());
+  return candidates.map(value => normalized.indexOf(value.toLowerCase())).find(index => index >= 0) ?? -1;
+}
+
+function buildDramaMetaFromRecord(headers, row) {
+  const record = {};
+  headers.forEach((header, index) => {
+    record[header] = row[index];
+  });
+  return normalizeDramaMeta({
+    int_id: firstRecordValue(record, ['int_id', 'intId']),
+    title: firstRecordValue(record, ['title', 'name']),
+    cn_title: firstRecordValue(record, ['cn_title', 'cnTitle', '中文标题'])
+  });
+}
+
+function firstRecordValue(record, keys) {
+  for (const key of keys) {
+    if (record[key] !== undefined && String(record[key]).trim() !== '') {
+      return record[key];
+    }
+  }
+  return '';
+}
+
+function normalizeDramaMeta(meta) {
+  return {
+    int_id: String(meta.int_id ?? '').trim(),
+    title: String(meta.title ?? '').trim(),
+    cn_title: String(meta.cn_title ?? '').trim()
+  };
+}

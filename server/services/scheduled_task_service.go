@@ -9,10 +9,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -302,8 +304,8 @@ func executeScheduledTask(task ScheduledTask) {
 		log.Printf("[ScheduledTask] add report failed: %v", addErr)
 	}
 
-	notice := buildScheduledTaskNotice(task, status, result, formatDuration(duration), reportURL, start, reportDir)
-	if notifyErr := notifyScheduledTaskCreator(task.Creator, notice); notifyErr != nil {
+	noticeText, noticeCard := buildScheduledTaskNotice(task, status, result, formatDuration(duration), reportURL, start, reportDir)
+	if notifyErr := notifyScheduledTaskCreator(task.Creator, noticeText, noticeCard); notifyErr != nil {
 		log.Printf("[ScheduledTask] notify failed: %v", notifyErr)
 	}
 
@@ -406,12 +408,14 @@ func runCommand(dir string, env []string, name string, args ...string) error {
 	return err
 }
 
-func buildScheduledTaskNotice(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time, reportDir string) string {
+func buildScheduledTaskNotice(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time, reportDir string) (string, map[string]any) {
 	analysis, err := analyzeScheduledTaskReportWithAI(task, status, result, duration, startedAt, reportDir)
 	if err != nil {
 		log.Printf("[ScheduledTask] report analysis skipped: %v", err)
 		analysis = "报告分析暂未生成，请打开平台查看完整报告。"
 	}
+	failures := loadScheduledDramaFailures(reportDir)
+	failureDetail := formatScheduledDramaFailureDetail(failures)
 
 	statusText := "通过"
 	if status != "Passed" {
@@ -427,8 +431,419 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 	builder.WriteString("耗时：" + duration + "\n\n")
 	builder.WriteString("报告总结\n")
 	builder.WriteString(sanitizeFeishuPlainText(analysis) + "\n\n")
+	if strings.TrimSpace(failureDetail) != "" {
+		builder.WriteString("异常剧集明细\n")
+		builder.WriteString(failureDetail + "\n\n")
+	}
 	builder.WriteString("报告地址：" + reportURL)
-	return sanitizeFeishuPlainText(builder.String())
+	text := sanitizeFeishuPlainText(builder.String())
+	return text, buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, failures)
+}
+
+func formatScheduledDramaFailureDetail(failures []dramaFailureSummary) string {
+	if len(failures) == 0 {
+		return ""
+	}
+
+	sort.SliceStable(failures, func(i, j int) bool {
+		left := valueOrFallback(failures[i].IntID, failures[i].DramaID)
+		right := valueOrFallback(failures[j].IntID, failures[j].DramaID)
+		return left < right
+	})
+
+	var builder strings.Builder
+	for index, failure := range failures {
+		if index > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString(valueOrFallback(failure.IntID, "-") + "\n")
+		builder.WriteString(valueOrFallback(failure.DramaID, "-") + "\n")
+		builder.WriteString(valueOrFallback(failure.Title, "-") + "\n")
+		builder.WriteString(valueOrFallback(failure.CNTitle, "-") + "\n")
+		for _, line := range failure.Errors {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			if !strings.HasPrefix(trimmed, "•") {
+				trimmed = "• " + trimmed
+			}
+			builder.WriteString(trimmed + "\n")
+		}
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duration string, reportURL string, analysis string, failures []dramaFailureSummary) map[string]any {
+	statusColor := "green"
+	if statusText != "通过" || len(failures) > 0 {
+		statusColor = "orange"
+	}
+	if statusText == "失败" {
+		statusColor = "red"
+	}
+
+	elements := []map[string]any{
+		{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": fmt.Sprintf("**任务：** %s\n**项目：** %s\n**环境：** %s\n**结果：** %s\n**耗时：** %s", escapeLarkMarkdown(task.Name), escapeLarkMarkdown(valueOrFallback(task.TestProject, task.TestProjectCode)), escapeLarkMarkdown(task.TestEnv), escapeLarkMarkdown(statusText), escapeLarkMarkdown(duration)),
+			},
+		},
+		{"tag": "hr"},
+		{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": "**报告总结**\n" + escapeLarkMarkdown(sanitizeFeishuPlainText(analysis)),
+			},
+		},
+	}
+
+	if len(failures) > 0 {
+		elements = append(elements, map[string]any{"tag": "hr"})
+		elements = append(elements, map[string]any{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": fmt.Sprintf("**异常剧集明细（%d 部）**", len(failures)),
+			},
+		})
+		for _, failure := range failures {
+			elements = append(elements, map[string]any{
+				"tag": "div",
+				"text": map[string]any{
+					"tag":     "lark_md",
+					"content": formatDramaFailureCardBlock(failure),
+				},
+			})
+		}
+	}
+
+	if strings.TrimSpace(reportURL) != "" {
+		elements = append(elements, map[string]any{"tag": "hr"})
+		elements = append(elements, map[string]any{
+			"tag": "action",
+			"actions": []map[string]any{
+				{
+					"tag":  "button",
+					"text": map[string]any{"tag": "plain_text", "content": "查看完整报告"},
+					"url":  reportURL,
+					"type": "primary",
+				},
+			},
+		})
+	}
+
+	return map[string]any{
+		"config": map[string]any{
+			"wide_screen_mode": true,
+		},
+		"header": map[string]any{
+			"template": statusColor,
+			"title": map[string]any{
+				"tag":     "plain_text",
+				"content": "剧集播放接口测试完成",
+			},
+		},
+		"elements": elements,
+	}
+}
+
+func formatDramaFailureCardBlock(failure dramaFailureSummary) string {
+	lines := []string{
+		fmt.Sprintf("**%s  %s**", escapeLarkMarkdown(valueOrFallback(failure.IntID, "-")), escapeLarkMarkdown(valueOrFallback(failure.Title, "-"))),
+		escapeLarkMarkdown(valueOrFallback(failure.DramaID, "-")),
+		escapeLarkMarkdown(valueOrFallback(failure.CNTitle, "-")),
+	}
+	for _, line := range failure.Errors {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, escapeLarkMarkdown(trimmed))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func escapeLarkMarkdown(text string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"*", "\\*",
+		"`", "\\`",
+	)
+	return replacer.Replace(strings.TrimSpace(text))
+}
+
+func loadScheduledDramaFailures(reportDir string) []dramaFailureSummary {
+	rootDir, _ := filepath.Abs("..")
+	merged := make(map[string]dramaFailureSummary)
+	addFailures := func(items []dramaFailureSummary) {
+		for _, item := range items {
+			key := strings.TrimSpace(item.DramaID)
+			if key == "" {
+				continue
+			}
+			existing := merged[key]
+			if existing.DramaID == "" {
+				existing = item
+			} else {
+				existing.IntID = valueOrFallback(existing.IntID, item.IntID)
+				existing.Title = valueOrFallback(existing.Title, item.Title)
+				existing.CNTitle = valueOrFallback(existing.CNTitle, item.CNTitle)
+			}
+			existing.Errors = mergeDramaFailureErrorLines(existing.Errors, item.Errors)
+			merged[key] = existing
+		}
+	}
+
+	summaryPath := filepath.Join(rootDir, reportDir, "drama_failure_summary.json")
+	if content, err := os.ReadFile(summaryPath); err == nil {
+		var payload dramaFailureSummaryFile
+		if json.Unmarshal(content, &payload) == nil {
+			addFailures(payload.Failures)
+		}
+	}
+
+	retryPath := filepath.Join(rootDir, reportDir, "drama_retry_result.json")
+	if content, err := os.ReadFile(retryPath); err == nil {
+		var payload dramaRetryResultFile
+		if json.Unmarshal(content, &payload) == nil {
+			addFailures(payload.StructuredFailures)
+			addFailures(parseLegacyRetryFailures(payload.PersistentFailures))
+		}
+	}
+
+	if len(merged) == 0 {
+		return nil
+	}
+	failures := make([]dramaFailureSummary, 0, len(merged))
+	for _, item := range merged {
+		failures = append(failures, item)
+	}
+	enrichScheduledDramaFailures(rootDir, failures)
+	return failures
+}
+
+func enrichScheduledDramaFailures(rootDir string, failures []dramaFailureSummary) {
+	if len(failures) == 0 {
+		return
+	}
+
+	info, err := readDramaInfoForMetadata(rootDir)
+	if err != nil {
+		log.Printf("[ScheduledTask] read drama metadata config skipped: %v", err)
+		return
+	}
+	if strings.TrimSpace(info.APIBase) == "" || strings.TrimSpace(info.Auth.XToken) == "" {
+		return
+	}
+
+	client := &http.Client{Timeout: 12 * time.Second}
+	cache := make(map[string]dramaManagementItem)
+	for index := range failures {
+		failure := &failures[index]
+		if hasDramaTitleMetadata(*failure) {
+			continue
+		}
+		item, ok := lookupDramaManagementItem(client, info, *failure, cache)
+		if !ok {
+			continue
+		}
+		failure.IntID = valueOrFallback(failure.IntID, item.IntIDString())
+		failure.Title = valueOrFallback(failure.Title, item.Title)
+		failure.CNTitle = valueOrFallback(failure.CNTitle, valueOrFallback(item.CNTitle, item.CNName))
+	}
+}
+
+func readDramaInfoForMetadata(rootDir string) (dramaInfoFile, error) {
+	content, err := os.ReadFile(filepath.Join(rootDir, "drama_info.json"))
+	if err != nil {
+		return dramaInfoFile{}, err
+	}
+	var info dramaInfoFile
+	if err := json.Unmarshal(content, &info); err != nil {
+		return dramaInfoFile{}, err
+	}
+	return info, nil
+}
+
+func hasDramaTitleMetadata(failure dramaFailureSummary) bool {
+	return strings.TrimSpace(failure.IntID) != "" &&
+		strings.TrimSpace(failure.Title) != "" &&
+		strings.TrimSpace(failure.CNTitle) != ""
+}
+
+type dramaManagementListResponse struct {
+	Code  int                   `json:"code"`
+	Data  []dramaManagementItem `json:"data"`
+	Total int                   `json:"total"`
+}
+
+type dramaManagementItem struct {
+	ID      string `json:"id"`
+	IntID   any    `json:"int_id"`
+	Title   string `json:"title"`
+	CNTitle string `json:"cn_title"`
+	CNName  string `json:"cn_name"`
+}
+
+func (item dramaManagementItem) IntIDString() string {
+	switch value := item.IntID.(type) {
+	case json.Number:
+		return value.String()
+	case float64:
+		return fmt.Sprintf("%.0f", value)
+	case string:
+		return strings.TrimSpace(value)
+	default:
+		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func lookupDramaManagementItem(client *http.Client, info dramaInfoFile, failure dramaFailureSummary, cache map[string]dramaManagementItem) (dramaManagementItem, bool) {
+	if item, ok := cache[failure.DramaID]; ok {
+		return item, true
+	}
+
+	queryCandidates := []url.Values{}
+	if strings.TrimSpace(failure.DramaID) != "" {
+		queryCandidates = append(queryCandidates,
+			url.Values{"id": {failure.DramaID}},
+			url.Values{"keyword": {failure.DramaID}},
+			url.Values{"search": {failure.DramaID}},
+		)
+	}
+	if strings.TrimSpace(failure.IntID) != "" {
+		queryCandidates = append(queryCandidates,
+			url.Values{"int_id": {failure.IntID}},
+			url.Values{"keyword": {failure.IntID}},
+			url.Values{"search": {failure.IntID}},
+		)
+	}
+
+	for _, values := range queryCandidates {
+		values.Set("page", "1")
+		values.Set("page_size", "20")
+		if item, ok := fetchMatchingDramaManagementItem(client, info, values, failure); ok {
+			cache[failure.DramaID] = item
+			return item, true
+		}
+	}
+
+	const pageSize = 200
+	const maxPages = 80
+	for page := 1; page <= maxPages; page++ {
+		values := url.Values{
+			"page":      {fmt.Sprint(page)},
+			"page_size": {fmt.Sprint(pageSize)},
+			"online":    {"1"},
+		}
+		item, ok, done := fetchMatchingDramaManagementItemPage(client, info, values, failure)
+		if ok {
+			cache[failure.DramaID] = item
+			return item, true
+		}
+		if done {
+			break
+		}
+	}
+	return dramaManagementItem{}, false
+}
+
+func fetchMatchingDramaManagementItem(client *http.Client, info dramaInfoFile, values url.Values, failure dramaFailureSummary) (dramaManagementItem, bool) {
+	item, ok, _ := fetchMatchingDramaManagementItemPage(client, info, values, failure)
+	return item, ok
+}
+
+func fetchMatchingDramaManagementItemPage(client *http.Client, info dramaInfoFile, values url.Values, failure dramaFailureSummary) (dramaManagementItem, bool, bool) {
+	endpoint := strings.TrimRight(info.APIBase, "/") + "/api/management/drama/list?" + values.Encode()
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return dramaManagementItem{}, false, true
+	}
+	req.Header.Set("Cookie", "x-token="+info.Auth.XToken)
+	req.Header.Set("Connection", "close")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ScheduledTask] drama metadata lookup failed: %v", err)
+		return dramaManagementItem{}, false, true
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return dramaManagementItem{}, false, true
+	}
+
+	decoder := json.NewDecoder(resp.Body)
+	decoder.UseNumber()
+	var payload dramaManagementListResponse
+	if err := decoder.Decode(&payload); err != nil {
+		return dramaManagementItem{}, false, true
+	}
+	for _, item := range payload.Data {
+		if dramaManagementItemMatches(item, failure) {
+			return item, true, false
+		}
+	}
+	page := parsePositiveInt(values.Get("page"))
+	pageSize := parsePositiveInt(values.Get("page_size"))
+	done := len(payload.Data) == 0 || (payload.Total > 0 && page*pageSize >= payload.Total)
+	return dramaManagementItem{}, false, done
+}
+
+func dramaManagementItemMatches(item dramaManagementItem, failure dramaFailureSummary) bool {
+	if strings.TrimSpace(failure.DramaID) != "" && strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(failure.DramaID)) {
+		return true
+	}
+	if strings.TrimSpace(failure.IntID) != "" && item.IntIDString() == strings.TrimSpace(failure.IntID) {
+		return true
+	}
+	return false
+}
+
+func parsePositiveInt(value string) int {
+	var parsed int
+	if _, err := fmt.Sscanf(value, "%d", &parsed); err != nil || parsed < 0 {
+		return 0
+	}
+	return parsed
+}
+
+func mergeDramaFailureErrorLines(current []string, next []string) []string {
+	seen := make(map[string]bool, len(current)+len(next))
+	merged := make([]string, 0, len(current)+len(next))
+	for _, line := range append(current, next...) {
+		normalized := strings.TrimSpace(line)
+		if normalized == "" || seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		merged = append(merged, normalized)
+	}
+	return merged
+}
+
+func parseLegacyRetryFailures(failures []dramaRetryFailure) []dramaFailureSummary {
+	items := make([]dramaFailureSummary, 0, len(failures))
+	for _, failure := range failures {
+		dramaID := extractDramaIDFromFailureName(failure.Name)
+		if dramaID == "" {
+			continue
+		}
+		items = append(items, dramaFailureSummary{
+			DramaID: dramaID,
+			Errors:  []string{"• [接口抓取失败] 720p 网络请求失败"},
+		})
+	}
+	return items
+}
+
+func extractDramaIDFromFailureName(name string) string {
+	match := regexp.MustCompile(`剧集\s*ID:\s*([0-9a-fA-F]{24})`).FindStringSubmatch(htmlToPlainText(name))
+	if len(match) < 2 {
+		return ""
+	}
+	return match[1]
 }
 
 func appendScheduledTaskAuditLog(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time) {
@@ -499,7 +914,7 @@ func analyzeScheduledTaskReportWithAI(task ScheduledTask, status string, result 
 	httpClient := &http.Client{Timeout: 90 * time.Second}
 	systemPrompt := "你是一名资深测试负责人。请根据用户提供的自动化测试报告内容，生成一段适合飞书机器人私聊发送给任务创建人的中文总结。" +
 		"必须只输出纯文本，不要使用 Markdown，不要使用星号、反引号、井号、表格或项目符号。" +
-		"不要编造报告里没有的数据。重点说明整体结论、失败点、风险影响和下一步建议。控制在 500 字以内。"
+		"不要编造报告里没有的数据。重点说明整体结论、风险影响和下一步建议，不要逐条罗列每部剧的异常明细，明细会由系统结构化附加。控制在 300 字以内。"
 	userPrompt := fmt.Sprintf(
 		"任务名称：%s\n项目：%s\n环境：%s\n执行状态：%s\n执行耗时：%s\n执行错误：%s\n\n报告内容：\n%s",
 		task.Name,
@@ -807,13 +1222,20 @@ func formatDuration(duration time.Duration) string {
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
-func notifyScheduledTaskCreator(username string, text string) error {
+func notifyScheduledTaskCreator(username string, text string, card map[string]any) error {
 	openID := resolveFeishuOpenID(username)
 	if openID == "" {
 		openID = resolveFeishuOpenID("minghong")
 	}
 	if openID == "" {
 		return fmt.Errorf("no feishu open_id found for %s or minghong", username)
+	}
+	if len(card) > 0 {
+		if err := sendFeishuOpenIDInteractiveCard(openID, card); err != nil {
+			log.Printf("[ScheduledTask] interactive card send failed, falling back to text: %v", err)
+		} else {
+			return nil
+		}
 	}
 	return sendFeishuOpenIDText(openID, text)
 }
@@ -827,6 +1249,14 @@ func resolveFeishuOpenID(username string) string {
 }
 
 func sendFeishuOpenIDText(openID string, text string) error {
+	return sendFeishuOpenIDMessage(openID, "text", map[string]string{"text": text})
+}
+
+func sendFeishuOpenIDInteractiveCard(openID string, card map[string]any) error {
+	return sendFeishuOpenIDMessage(openID, "interactive", card)
+}
+
+func sendFeishuOpenIDMessage(openID string, msgType string, content any) error {
 	if feishumodel.GlobalFeishuConfig == nil {
 		config, err := feishumodel.LoadConfig("data/feishu_config.json")
 		if err != nil {
@@ -861,10 +1291,13 @@ func sendFeishuOpenIDText(openID string, text string) error {
 		return fmt.Errorf("feishu auth failed: %s", authResult.Msg)
 	}
 
-	contentBody, _ := json.Marshal(map[string]string{"text": text})
+	contentBody, err := json.Marshal(content)
+	if err != nil {
+		return err
+	}
 	msgPayload, _ := json.Marshal(map[string]string{
 		"receive_id": openID,
-		"msg_type":   "text",
+		"msg_type":   msgType,
 		"content":    string(contentBody),
 	})
 

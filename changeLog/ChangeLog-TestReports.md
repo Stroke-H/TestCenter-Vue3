@@ -8,6 +8,7 @@
 - **Drama HTML Report Layout**: 接口检查 HTML 报告移除 `Checks & Groups` 页签，将 `Other Checks` 移到 `Rates` 与 `Counters` 之间，仅将 `[出错]`、`[转换中]`、`[直接跳集]` 等异常标签用红色高亮，并把顶部 `Total Requests` 改为展示总剧集数与总剧数的 `Total Dramas`。
 - **Drama Metric Card Fit**: `Total Dramas` 卡片将总集数和总剧数拆分为主数字与辅助说明，按卡片宽度自适应字号，避免长文案撑大报告指标卡。
 - **Drama Counter Status Badges**: 剧集播放接口报告 `Counters` 表格为关键计数补充状态底色：异常类计数大于等于 1 显示红色，网络重试大于等于 1 显示橙色，正常或总剧集数显示绿色，帮助快速识别风险指标。
+- **Scheduled Drama Feishu Summary**: 定时剧集播放接口测试的飞书通知升级为 interactive 卡片，新增结构化异常剧集明细；通知阶段会按异常剧 ID 查询后台剧集列表补齐 `int_id`、英文标题和中文标题，查询失败时回退到纯文本通知。
 - **Drama Analytics Labels**: Failed Checks 趋势与失败来源流向同步使用新的错误分类文案，并兼容历史报告中的旧指标名称；历史定时任务报告记录不做回写修改。
 - **Performance Report Viewer**: 压测数据分析报告查看器改为无外边框、无标题栏的全屏显示，HTML 报告从顶部直接铺满浏览器视图，减少弹窗边距和底部留白。
 - **Performance Report Close Action**: 无标题栏报告查看器右上角新增轻量悬浮关闭按钮，保留全屏沉浸显示的同时提供明确退出入口。

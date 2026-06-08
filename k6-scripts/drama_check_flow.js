@@ -30,6 +30,7 @@ const data = new SharedArray('drama_info_loader', function () {
 
 const config = data[0];
 const DRAMA_LIST = retryIds.length > 0 ? retryIds : (config.dramaList || []);
+const DRAMA_META = config.dramaMeta || {};
 const TOKEN = config.auth.x_token;
 const API_BASE = config.apiBase || "http://35.225.224.94:8080";
 
@@ -371,6 +372,7 @@ function reportFaults(dramaId, errors, total, actualLen) {
 export function handleSummary(data) {
     const retryCandidates = collectRetryCandidates(data);
     const failedChecks = collectFailedChecks(data, name => !name.startsWith(RETRY_MARKER_PREFIX));
+    const structuredFailures = collectDramaFailureSummaries(data);
     const totalEpisodes = getMetricCount(data, 'total_drama_episode_count') || totalIds;
     stripRetryCandidateChecks(data, retryCandidates.length);
 
@@ -414,11 +416,17 @@ export function handleSummary(data) {
             phase: 'retry',
             retryIds,
             persistentFailures: failedChecks,
+            structuredFailures,
         }, null, 2);
         return output;
     }
 
     output[`${reportOutputDir}/drama_check_report.html`] = unescapedHtml;
+    output[`${reportOutputDir}/drama_failure_summary.json`] = JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        phase: 'initial',
+        failures: structuredFailures,
+    }, null, 2);
     output[`${reportOutputDir}/drama_retry_candidates.json`] = JSON.stringify({
         generatedAt: new Date().toISOString(),
         phase: 'initial',
@@ -630,6 +638,81 @@ function collectFailedChecks(data, shouldInclude) {
         });
     });
     return failures;
+}
+
+function collectDramaFailureSummaries(data) {
+    const byDrama = {};
+    walkChecks(data.root_group, checkItem => {
+        const name = checkItem.name || '';
+        if (!checkItem.fails || name.startsWith(RETRY_MARKER_PREFIX)) return;
+
+        const dramaId = extractDramaIdFromCheckName(name);
+        if (!dramaId) return;
+
+        if (!byDrama[dramaId]) {
+            const meta = DRAMA_META[dramaId] || {};
+            byDrama[dramaId] = {
+                dramaId,
+                intId: String(meta.int_id || '').trim(),
+                title: String(meta.title || '').trim(),
+                cnTitle: String(meta.cn_title || '').trim(),
+                errors: [],
+            };
+        }
+
+        extractDramaErrorLines(name).forEach(line => {
+            if (!byDrama[dramaId].errors.includes(line)) {
+                byDrama[dramaId].errors.push(line);
+            }
+        });
+    });
+
+    return Object.values(byDrama).filter(item => item.errors.length > 0);
+}
+
+function extractDramaIdFromCheckName(name) {
+    const match = String(name || '').match(/剧集\s*ID:\s*([0-9a-fA-F]{24})/);
+    return match ? match[1] : '';
+}
+
+function extractDramaErrorLines(name) {
+    const plainText = decodeHTMLText(
+        String(name || '')
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/<\/(summary|div|details|b)>/gi, '\n')
+            .replace(/<[^>]+>/g, ' ')
+    );
+    const lines = [];
+    const bulletPattern = /•\s*(\[[^\]]+\][^\n]+)/g;
+    let match;
+    while ((match = bulletPattern.exec(plainText)) !== null) {
+        lines.push(`• ${normalizeWhitespace(match[1])}`);
+    }
+    if (lines.length > 0) return lines;
+
+    const summaryMatch = plainText.match(/剧集\s*ID:\s*[0-9a-fA-F]{24}\s*-\s*(\[[^\]]+\][\s\S]*?)(?:\n|$)/);
+    if (summaryMatch) {
+        return [`• ${normalizeWhitespace(summaryMatch[1])}`];
+    }
+    if (/720p\s*网络请求失败/.test(plainText)) {
+        return ['• [接口抓取失败] 720p 网络请求失败'];
+    }
+    return [];
+}
+
+function decodeHTMLText(text) {
+    return String(text || '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&')
+        .replace(/&#34;/g, '"')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'");
+}
+
+function normalizeWhitespace(text) {
+    return String(text || '').replace(/[ \t\r\f\v]+/g, ' ').trim();
 }
 
 function stripRetryCandidateChecks(data, removedFailCount) {

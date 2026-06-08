@@ -29,7 +29,8 @@ type dramaRetryCandidate struct {
 }
 
 type dramaRetryResultFile struct {
-	PersistentFailures []dramaRetryFailure `json:"persistentFailures"`
+	PersistentFailures []dramaRetryFailure   `json:"persistentFailures"`
+	StructuredFailures []dramaFailureSummary `json:"structuredFailures"`
 }
 
 type dramaRetryFailure struct {
@@ -37,8 +38,31 @@ type dramaRetryFailure struct {
 	Fails int    `json:"fails"`
 }
 
+type dramaFailureSummaryFile struct {
+	Failures []dramaFailureSummary `json:"failures"`
+}
+
+type dramaFailureSummary struct {
+	DramaID string   `json:"dramaId"`
+	IntID   string   `json:"intId"`
+	Title   string   `json:"title"`
+	CNTitle string   `json:"cnTitle"`
+	Errors  []string `json:"errors"`
+}
+
 type dramaInfoFile struct {
-	DramaList []string `json:"dramaList"`
+	DramaList []string                 `json:"dramaList"`
+	DramaMeta map[string]dramaInfoMeta `json:"dramaMeta"`
+	APIBase   string                   `json:"apiBase"`
+	Auth      struct {
+		XToken string `json:"x_token"`
+	} `json:"auth"`
+}
+
+type dramaInfoMeta struct {
+	IntID   string `json:"int_id"`
+	Title   string `json:"title"`
+	CNTitle string `json:"cn_title"`
 }
 
 type StartDramaRunRequest struct {
@@ -820,6 +844,7 @@ func removeDramaRetryArtifacts(rootDir string, reportDir string) {
 	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_candidates.json"))
 	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_result.json"))
 	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_report.html"))
+	_ = os.Remove(filepath.Join(reportsDir, "drama_failure_summary.json"))
 }
 
 func readDramaRetryCandidates(rootDir string, reportDir string) ([]dramaRetryCandidate, error) {
