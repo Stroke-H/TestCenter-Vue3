@@ -9,8 +9,8 @@ import {
   Search,
   DataAnalysis,
   View,
-  FullScreen,
   Delete,
+  Close,
   MagicStick
 } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
@@ -96,10 +96,10 @@ interface FailureCategory {
 const failureCategories: FailureCategory[] = [
   { key: 'fetch', label: '接口抓取失败', color: '#ef4444', aliases: ['Fetch Failures', '接口抓取失败数', 'fetch_fail_count'] },
   { key: 'retry', label: '720p网络失败', color: '#f97316', aliases: ['Retry Candidates', '720p网络失败待复验数', 'retry_candidate_count'] },
-  { key: 'continuity', label: '跳号剧集', color: '#eab308', aliases: ['Continuity Failures', '跳号剧集数', 'continuity_fail_count'] },
-  { key: 'offline', label: '下架/异常章节', color: '#8b5cf6', aliases: ['Unhealthy Chapters', '下架/异常章节总数', 'offline_chapter_count'] },
+  { key: 'continuity', label: '直接跳集', color: '#eab308', aliases: ['Direct Skips', '直接跳集剧集数', '直接跳级剧集数', 'Continuity Failures', '跳号剧集数', 'continuity_fail_count'] },
+  { key: 'offline', label: '出错章节', color: '#8b5cf6', aliases: ['Errored Chapters', '出错章节总数', 'Unhealthy Chapters', '下架/异常章节总数', 'offline_chapter_count'] },
   { key: 'mismatch', label: '计数不符', color: '#06b6d4', aliases: ['Total Mismatch', '计数不符剧集数', 'total_mismatch_count'] },
-  { key: 'conversion', label: '转换失败', color: '#64748b', aliases: ['update_status_fail_count', '转换失败'] }
+  { key: 'conversion', label: '转换中', color: '#64748b', aliases: ['Converting Chapters', '转换中章节总数', 'update_status_fail_count', '转换失败'] }
 ]
 
 const dramaAnalytics = ref<DramaFailedStat[]>([])
@@ -560,10 +560,6 @@ const viewReport = (row: any) => {
   }
 }
 
-const openInNewTab = (url: string) => {
-  window.open(url, '_blank')
-}
-
 // 清分记录确认
 const confirmClear = () => {
   ElMessageBox.confirm(
@@ -817,34 +813,32 @@ watch(activeFilter, async () => {
     <!-- 图表型报告的弹窗 / 抽屉查看器 -->
     <el-dialog
       v-model="dialogVisible"
-      title="压测数据分析报告"
-      width="90%"
-      top="5vh"
+      fullscreen
       custom-class="report-dialog"
+      modal-class="report-dialog-overlay"
       :destroy-on-close="true"
+      :show-close="false"
     >
-      <div class="iframe-container">
-        <iframe v-if="dialogVisible" :src="iframeUrl" frameborder="0" class="report-iframe" />
-      </div>
+      <div class="report-viewer" :class="{ 'report-viewer--with-analysis': Boolean(selectedReport?.analysisResult) }">
+        <button class="report-close-button" type="button" aria-label="关闭报告" @click="dialogVisible = false">
+          <el-icon><Close /></el-icon>
+        </button>
 
-      <!-- AI 智能总结面板 -->
-      <div v-if="selectedReport?.analysisResult" class="ai-analysis-panel">
-        <div class="analysis-header">
-          <el-icon class="magic-icon"><MagicStick /></el-icon>
-          <span class="header-text">AI 智能报告总结</span>
+        <div class="iframe-container">
+          <iframe v-if="dialogVisible" :src="iframeUrl" frameborder="0" class="report-iframe" />
         </div>
-        <div class="analysis-content">
-          {{ selectedReport.analysisResult }}
+
+        <!-- AI 智能总结面板 -->
+        <div v-if="selectedReport?.analysisResult" class="ai-analysis-panel">
+          <div class="analysis-header">
+            <el-icon class="magic-icon"><MagicStick /></el-icon>
+            <span class="header-text">AI 智能报告总结</span>
+          </div>
+          <div class="analysis-content">
+            {{ selectedReport.analysisResult }}
+          </div>
         </div>
       </div>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="dialogVisible = false">关闭</el-button>
-          <el-button type="primary" :icon="FullScreen" @click="openInNewTab(iframeUrl)">
-            全屏另存为
-          </el-button>
-        </span>
-      </template>
     </el-dialog>
 
     <el-dialog
@@ -1097,21 +1091,116 @@ watch(activeFilter, async () => {
 }
 
 /* 报表弹窗 iframe */
-:deep(.el-dialog__body) {
-  padding: 0; 
-  height: 70vh;
+:global(.report-dialog-overlay) {
+  overflow: hidden;
+}
+
+:global(.report-dialog-overlay .el-dialog.is-fullscreen) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+:global(.report-dialog) {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: #ffffff;
+}
+
+:global(.report-dialog .el-dialog__header) {
+  display: none;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+}
+
+:global(.report-dialog .el-dialog__body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100vh;
+  padding: 0;
+  overflow: hidden;
+}
+
+.report-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.report-viewer--with-analysis {
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.report-viewer--with-analysis::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.report-close-button {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 3001;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: #64748b;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(10px);
+  transition: color 0.18s ease, background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.report-close-button:hover {
+  color: #0f172a;
+  background: #ffffff;
+  border-color: rgba(59, 130, 246, 0.35);
+  transform: translateY(-1px);
+}
+
+.report-close-button:active {
+  transform: translateY(0);
+}
+
+.report-close-button :deep(.el-icon) {
+  font-size: 18px;
 }
 
 .iframe-container {
-  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   height: 100%;
-  background: #f8fafc;
+  width: 100%;
+  background: #ffffff;
+}
+
+.report-viewer--with-analysis .iframe-container {
+  min-height: min(72vh, 900px);
 }
 
 .report-iframe {
+  display: block;
   width: 100%;
   height: 100%;
   border: none;
+  outline: none;
 }
 
 :global(.monkey-demo-overlay) {

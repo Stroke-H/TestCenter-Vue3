@@ -1,5 +1,18 @@
 # ChangeLog - Test Reports
 
+## 2026-06-08
+
+### Changed
+- **Drama Failure Classification**: 剧集播放接口检查报告将章节异常明确拆分为“出错”“转换中”“直接跳集”三类；当出错或转换中的章节正好解释了缺失集数时，不再额外重复上报直接跳集或计数不符，避免同一问题被算成多种错误。
+- **Drama Update Status Mapping**: 章节 `online != 1` 或 `update_status > 1` 时明确归为“出错”；在线但 `update_status != 1` 的章节归为“转换中”；`err_count` / `err_msg` 只作为后台返回的历史异常信息，不再单独触发失败判定。
+- **Drama HTML Report Layout**: 接口检查 HTML 报告移除 `Checks & Groups` 页签，将 `Other Checks` 移到 `Rates` 与 `Counters` 之间，仅将 `[出错]`、`[转换中]`、`[直接跳集]` 等异常标签用红色高亮，并把顶部 `Total Requests` 改为展示总剧集数与总剧数的 `Total Dramas`。
+- **Drama Metric Card Fit**: `Total Dramas` 卡片将总集数和总剧数拆分为主数字与辅助说明，按卡片宽度自适应字号，避免长文案撑大报告指标卡。
+- **Drama Counter Status Badges**: 剧集播放接口报告 `Counters` 表格为关键计数补充状态底色：异常类计数大于等于 1 显示红色，网络重试大于等于 1 显示橙色，正常或总剧集数显示绿色，帮助快速识别风险指标。
+- **Drama Analytics Labels**: Failed Checks 趋势与失败来源流向同步使用新的错误分类文案，并兼容历史报告中的旧指标名称；历史定时任务报告记录不做回写修改。
+- **Performance Report Viewer**: 压测数据分析报告查看器改为无外边框、无标题栏的全屏显示，HTML 报告从顶部直接铺满浏览器视图，减少弹窗边距和底部留白。
+- **Performance Report Close Action**: 无标题栏报告查看器右上角新增轻量悬浮关闭按钮，保留全屏沉浸显示的同时提供明确退出入口。
+- **Performance Report Chrome Cleanup**: 报告查看接口在返回 HTML 时动态去除 K6 默认外层容器圆角、阴影和页面滚动条，让历史与新报告都以无边框全屏方式展示。
+
 ## 2026-06-02
 
 ### Added

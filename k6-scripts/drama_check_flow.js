@@ -12,6 +12,7 @@ const fetchErrors = new Counter('fetch_fail_count');
 const updateStatusErrors = new Counter('update_status_fail_count');
 const transportRetryCount = new Counter('transport_retry_count');
 const retryCandidateCount = new Counter('retry_candidate_count');
+const totalDramaEpisodeCount = new Counter('total_drama_episode_count');
 
 // ---------- 2. 加载配置与数据 (Config & Drama Info) ----------
 const k6Config = JSON.parse(open('./k6_config.json'));
@@ -127,28 +128,143 @@ function markDramaCaseDone(dramaId) {
 }
 
 // ---------- 5. 数据校验逻辑 ----------
-function analyzeHealth(items) {
-    const errors = [];
-    const chapterIndexes = items.map(c => c.index);
+function getChapterIndex(item) {
+    return Number(item && item.index);
+}
 
-    if (chapterIndexes.length > 0) {
-        const sortedIndex = [...chapterIndexes].sort((a, b) => a - b);
-        const min = sortedIndex[0];
-        const max = sortedIndex[sortedIndex.length - 1];
-        let missing = [];
-        for (let i = min; i <= max; i++) {
-            if (!chapterIndexes.includes(i)) missing.push(i);
+function isValidChapterIndex(index) {
+    return Number.isFinite(index);
+}
+
+function isChapterOnline(item) {
+    return item && Number(item.online) === 1;
+}
+
+function isChapterErrored(item) {
+    if (!item) return false;
+    if (!isChapterOnline(item)) return true;
+    return Number(item.update_status) > 1;
+}
+
+function isChapterConverted(item) {
+    return item && Number(item.update_status) === 1;
+}
+
+function isHealthyChapter(item) {
+    return isChapterOnline(item) && isChapterConverted(item) && !isChapterErrored(item);
+}
+
+function uniqueSortedIndexes(items) {
+    return Array.from(new Set((items || [])
+        .map(getChapterIndex)
+        .filter(isValidChapterIndex)))
+        .sort((a, b) => a - b);
+}
+
+function findMissingIndexes(indexes) {
+    if (!indexes || indexes.length === 0) return [];
+    const present = new Set(indexes);
+    const min = indexes[0];
+    const max = indexes[indexes.length - 1];
+    const missing = [];
+    for (let i = min; i <= max; i++) {
+        if (!present.has(i)) missing.push(i);
+    }
+    return missing;
+}
+
+function buildItemMap(items) {
+    const map = {};
+    (items || []).forEach(item => {
+        const index = getChapterIndex(item);
+        if (isValidChapterIndex(index)) {
+            map[index] = item;
         }
-        if (missing.length > 0) errors.push({ type: 'continuity', msg: `[跳号] 缺失Index: ${missing.join(', ')}`, count: 1 });
+    });
+    return map;
+}
+
+function analyzeHealth(items, options = {}) {
+    const errors = [];
+    const indexes = uniqueSortedIndexes(items);
+
+    if (options.includeDirectJump) {
+        const missing = findMissingIndexes(indexes);
+        if (missing.length > 0) {
+            errors.push({ type: 'continuity', msg: `[直接跳集] 两个相邻章节之间缺失Index: ${missing.join(', ')}`, count: 1 });
+        }
     }
 
-    const offlineItems = items.filter(c => c.online == 0).map(c => c.index);
-    if (offlineItems.length > 0) errors.push({ type: 'offline', msg: `[下架] Index: ${offlineItems.join(', ')}`, count: offlineItems.length });
+    const erroredItems = items
+        .filter(isChapterErrored)
+        .map(getChapterIndex)
+        .filter(isValidChapterIndex);
+    if (erroredItems.length > 0) {
+        errors.push({ type: 'offline', msg: `[出错] 章节状态异常Index: ${erroredItems.join(', ')}`, count: erroredItems.length });
+    }
 
-    const failedConversionItems = items.filter(c => c.update_status == 0).map(c => c.index);
-    if (failedConversionItems.length > 0) errors.push({ type: 'conversion', msg: `[转换失败] 异常Index: ${failedConversionItems.join(', ')}`, count: failedConversionItems.length });
+    const convertingItems = items
+        .filter(c => isChapterOnline(c) && !isChapterConverted(c) && !isChapterErrored(c))
+        .map(getChapterIndex)
+        .filter(isValidChapterIndex);
+    if (convertingItems.length > 0) {
+        errors.push({ type: 'conversion', msg: `[转换中] 章节尚未完成转换Index: ${convertingItems.join(', ')}`, count: convertingItems.length });
+    }
 
     return { healthy: errors.length === 0, errors: errors };
+}
+
+function explainUnhealthyIndex(index, item720, item540) {
+    const candidates = [item720, item540].filter(Boolean);
+    if (candidates.some(isChapterErrored)) {
+        return 'offline';
+    }
+    if (candidates.some(item => !isChapterConverted(item))) {
+        return 'conversion';
+    }
+    return 'continuity';
+}
+
+function buildUnionErrors(items720, items540) {
+    const map720 = buildItemMap(items720);
+    const map540 = buildItemMap(items540);
+    const allIndexes = uniqueSortedIndexes([...(items720 || []), ...(items540 || [])]);
+    const missingIndexes = findMissingIndexes(allIndexes);
+    const erroredIndexes = [];
+    const convertingIndexes = [];
+
+    allIndexes.forEach(index => {
+        const item720 = map720[index];
+        const item540 = map540[index];
+        const isOk720 = item720 && isHealthyChapter(item720);
+        const isOk540 = item540 && isHealthyChapter(item540);
+        if (isOk720 || isOk540) return;
+
+        const reason = explainUnhealthyIndex(index, item720, item540);
+        if (reason === 'offline') {
+            erroredIndexes.push(index);
+        } else if (reason === 'conversion') {
+            convertingIndexes.push(index);
+        }
+    });
+
+    const errors = [];
+    if (erroredIndexes.length > 0) {
+        errors.push({ type: 'offline', msg: `[出错] 720p/540p 均无法提供健康章节Index: ${erroredIndexes.join(', ')}`, count: erroredIndexes.length });
+    }
+    if (convertingIndexes.length > 0) {
+        errors.push({ type: 'conversion', msg: `[转换中] 720p/540p 均未完成转换Index: ${convertingIndexes.join(', ')}`, count: convertingIndexes.length });
+    }
+    if (missingIndexes.length > 0) {
+        errors.push({ type: 'continuity', msg: `[直接跳集] 720p/540p 均不存在的Index: ${missingIndexes.join(', ')}`, count: 1 });
+    }
+    return errors;
+}
+
+function buildCountMismatchError(total, healthyCount, existingErrors) {
+    if (healthyCount === total) return null;
+    if (existingErrors && existingErrors.length > 0) return null;
+    return { type: 'mismatch', msg: `[计数] 健康集数(${healthyCount}) 与标称总条目(${total}) 对不上`, count: 1 };
 }
 
 function buildDramaSummaryLabel(dramaId, errors, fallback = false) {
@@ -179,15 +295,16 @@ export default function () {
             return;
         }
 
-        const errorMsg = `<details style="cursor: pointer; color: #e74c3c;"><summary><b>剧集 ID: ${dramaId} (720p 网络请求失败)</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">错误原因: ${res720.msg}</div></details>`;
+        const errorMsg = `<details style="cursor: pointer;"><summary><b>剧集 ID: ${dramaId} (720p 网络请求失败)</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">错误原因: ${res720.msg}</div></details>`;
         console.error(`[🔥] 剧集 ${dramaId} 720p 二次尝试仍网络请求失败: ${res720.msg}`);
         check(null, { [errorMsg]: false });
         fetchErrors.add(1);
         markDramaCaseDone(dramaId);
         return;
     }
+    totalDramaEpisodeCount.add(res720.total || res720.items.length || 0);
 
-    const health720 = analyzeHealth(res720.items);
+    const health720 = analyzeHealth(res720.items, { includeDirectJump: true });
     if (health720.healthy && res720.total === res720.items.length) {
         sleep(0.1);
         markDramaCaseDone(dramaId);
@@ -203,43 +320,13 @@ export default function () {
 
     const items720 = res720.items;
     const items540 = res540.items;
-    const allIndexes = Array.from(new Set([...items720.map(c => c.index), ...items540.map(c => c.index)]));
-    const healthyUnion = [];
-    const missingHealthy = [];
-
-    allIndexes.sort((a, b) => a - b).forEach(idx => {
-        const char720 = items720.find(c => c.index === idx);
-        const char540 = items540.find(c => c.index === idx);
-        const isOk720 = char720 && char720.online == 1 && char720.update_status == 1;
-        const isOk540 = char540 && char540.online == 1 && char540.update_status == 1;
-
-        if (isOk720 || isOk540) {
-            healthyUnion.push(idx);
-        } else {
-            missingHealthy.push(idx);
-        }
-    });
-
-    const unionErrors = [];
-    if (healthyUnion.length > 0) {
-        const min = healthyUnion[0];
-        const max = healthyUnion[healthyUnion.length - 1];
-        let missing = [];
-        for (let i = min; i <= max; i++) {
-            if (!healthyUnion.includes(i)) missing.push(i);
-        }
-        if (missing.length > 0) {
-            unionErrors.push({ type: 'continuity', msg: `[跳号] 连续性缺失Index: ${missing.join(', ')} (双分辨率合力仍无解)`, count: 1 });
-        }
-    }
-
-    if (missingHealthy.length > 0) {
-        unionErrors.push({ type: 'unhealthy', msg: `[死锁异常] 这些章节在720p/540p均不健康: ${missingHealthy.join(', ')}`, count: missingHealthy.length });
-    }
+    const healthyUnion = uniqueSortedIndexes([...items720, ...items540].filter(isHealthyChapter));
+    const unionErrors = buildUnionErrors(items720, items540);
 
     const targetTotal = Math.max(res720.total, res540.total);
-    if (healthyUnion.length !== targetTotal) {
-        unionErrors.push({ type: 'mismatch', msg: `[计数] 并集健康集数(${healthyUnion.length}) 与标称总条目(${targetTotal}) 对不上`, count: 1 });
+    const countMismatch = buildCountMismatchError(targetTotal, healthyUnion.length, unionErrors);
+    if (countMismatch) {
+        unionErrors.push(countMismatch);
     }
 
     if (unionErrors.length > 0) {
@@ -247,13 +334,14 @@ export default function () {
         unionErrors.forEach(err => {
             errorDetails.push(`• ${err.msg}`);
             if (err.type === 'continuity') continuityErrors.add(1);
-            if (err.type === 'unhealthy') offlineErrors.add(err.count);
+            if (err.type === 'offline') offlineErrors.add(err.count);
+            if (err.type === 'conversion') updateStatusErrors.add(err.count);
             if (err.type === 'mismatch') totalMismatchErrors.add(1);
         });
 
         const summaryLabel = buildDramaSummaryLabel(dramaId, unionErrors);
         const detailLines = errorDetails.join('<br>');
-        const expandableMsg = `<details style="cursor: pointer; color: #e74c3c;"><summary><b>${summaryLabel}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">${detailLines}</div></details>`;
+        const expandableMsg = `<details style="cursor: pointer;"><summary><b>${summaryLabel}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">${detailLines}</div></details>`;
         console.warn(`[❌ 实锤故障] ${summaryLabel}\n  ${errorDetails.join('\n  ')}`);
         check(null, { [expandableMsg]: false });
     }
@@ -262,7 +350,7 @@ export default function () {
 }
 
 function reportFaults(dramaId, errors, total, actualLen) {
-    if (total !== actualLen) {
+    if (total !== actualLen && errors.length === 0) {
         errors.push({ type: 'mismatch', msg: `[计数] Total(${total}) 与返回长度(${actualLen}) 不符`, count: 1 });
     }
     const errorDetails = [];
@@ -275,7 +363,7 @@ function reportFaults(dramaId, errors, total, actualLen) {
     });
     const summaryLabel = buildDramaSummaryLabel(dramaId, errors, true);
     const detailLines = errorDetails.join('<br>');
-    const expandableMsg = `<details style="cursor: pointer; color: #e74c3c;"><summary><b>${summaryLabel}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">${detailLines}</div></details>`;
+    const expandableMsg = `<details style="cursor: pointer;"><summary><b>${summaryLabel}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">${detailLines}</div></details>`;
     console.warn(`[❌ 实锤故障] ${summaryLabel}\n  ${errorDetails.join('\n  ')}`);
     check(null, { [expandableMsg]: false });
 }
@@ -283,24 +371,29 @@ function reportFaults(dramaId, errors, total, actualLen) {
 export function handleSummary(data) {
     const retryCandidates = collectRetryCandidates(data);
     const failedChecks = collectFailedChecks(data, name => !name.startsWith(RETRY_MARKER_PREFIX));
+    const totalEpisodes = getMetricCount(data, 'total_drama_episode_count') || totalIds;
     stripRetryCandidateChecks(data, retryCandidates.length);
 
     const summaryText = `[📊] 执行完毕。汇总结果: 
         抓取失败数: ${data.metrics.fetch_fail_count ? data.metrics.fetch_fail_count.values.count : 0}
         720p网络失败待复验数: ${data.metrics.retry_candidate_count ? data.metrics.retry_candidate_count.values.count : 0}
-        跳号剧集数: ${data.metrics.continuity_fail_count ? data.metrics.continuity_fail_count.values.count : 0}
-        下架/异常章节总数: ${data.metrics.offline_chapter_count ? data.metrics.offline_chapter_count.values.count : 0}
+        直接跳集剧集数: ${data.metrics.continuity_fail_count ? data.metrics.continuity_fail_count.values.count : 0}
+        出错章节总数: ${data.metrics.offline_chapter_count ? data.metrics.offline_chapter_count.values.count : 0}
+        转换中章节总数: ${data.metrics.update_status_fail_count ? data.metrics.update_status_fail_count.values.count : 0}
+        检查剧集总量: ${totalEpisodes}（${totalIds}部剧）
         计数不符剧集数: ${data.metrics.total_mismatch_count ? data.metrics.total_mismatch_count.values.count : 0}`;
 
     console.log(summaryText);
 
     const nameMap = {
-        'continuity_fail_count': 'Continuity Failures (跳号剧集数)',
-        'offline_chapter_count': 'Unhealthy Chapters (下架/异常章节总数)',
+        'continuity_fail_count': 'Direct Skips (直接跳集剧集数)',
+        'offline_chapter_count': 'Errored Chapters (出错章节总数)',
         'total_mismatch_count': 'Total Mismatch (计数不符剧集数)',
         'fetch_fail_count': 'Fetch Failures (接口抓取失败数)',
+        'update_status_fail_count': 'Converting Chapters (转换中章节总数)',
         'transport_retry_count': 'Transport Retries (网络重试次数)',
         'retry_candidate_count': 'Retry Candidates (720p网络失败待复验数)',
+        'total_drama_episode_count': 'Total Drama Episodes (总剧集数)',
     };
 
     const finalMetrics = {};
@@ -311,16 +404,7 @@ export function handleSummary(data) {
     data.metrics = finalMetrics;
 
     const reportHtml = htmlReport(data, { title: k6Config.reportTitle || "Drama Detection Report (核心剧集章节检测报表)" });
-    const unescapedHtml = reportHtml
-        .replace(/&lt;details/g, '<details')
-        .replace(/&lt;\/details&gt;/g, '</details>')
-        .replace(/&lt;summary/g, '<summary')
-        .replace(/&lt;\/summary&gt;/g, '</summary>')
-        .replace(/&lt;br&gt;/g, '<br>')
-        .replace(/&lt;b&gt;/g, '<b>')
-        .replace(/&lt;\/b&gt;/g, '</b>')
-        .replace(/&lt;div/g, '<div')
-        .replace(/&lt;\/div&gt;/g, '</div>');
+    const unescapedHtml = formatDramaReportHtml(reportHtml, totalEpisodes, totalIds);
 
     const output = {};
     if (isRetryPhase) {
@@ -341,6 +425,178 @@ export function handleSummary(data) {
         candidates: retryCandidates,
     }, null, 2);
     return output;
+}
+
+function formatDramaReportHtml(reportHtml, totalEpisodes, dramaCount) {
+    let html = unescapeDramaReportDetails(reportHtml);
+    html = moveOtherChecksBetweenRatesAndCounters(html);
+    html = removeChecksAndGroupsTab(html);
+    html = updateTotalRequestsCard(html, totalEpisodes, dramaCount);
+    html = decorateCounterCountBadges(html);
+    html = highlightDramaErrorKeywords(html);
+    return html;
+}
+
+function getMetricCount(data, metricName) {
+    const value = data.metrics && data.metrics[metricName] && data.metrics[metricName].values && data.metrics[metricName].values.count;
+    return typeof value === 'number' ? value : 0;
+}
+
+function unescapeDramaReportDetails(reportHtml) {
+    return reportHtml
+        .replace(/&lt;details/g, '<details')
+        .replace(/&lt;\/details&gt;/g, '</details>')
+        .replace(/&lt;summary/g, '<summary')
+        .replace(/&lt;\/summary&gt;/g, '</summary>')
+        .replace(/&lt;br&gt;/g, '<br>')
+        .replace(/&lt;b&gt;/g, '<b>')
+        .replace(/&lt;\/b&gt;/g, '</b>')
+        .replace(/&lt;div/g, '<div')
+        .replace(/&lt;\/div&gt;/g, '</div>')
+        .replace(/&#34;/g, '"')
+        .replace(/&gt;/g, '>');
+}
+
+function moveOtherChecksBetweenRatesAndCounters(reportHtml) {
+    const otherChecksMatch = reportHtml.match(/<h2>Other Checks<\/h2>\s*<table>[\s\S]*?<\/table>/);
+    if (!otherChecksMatch) return reportHtml;
+
+    const otherChecksBlock = `<section class="drama-other-checks">${otherChecksMatch[0]}</section>`;
+    let html = reportHtml.replace(otherChecksMatch[0], '');
+    const ratesBlockPattern = /(<h4><i class="fas fa-percent"><\/i> Rates<\/h4>\s*<table class="pure-table pure-table-striped">[\s\S]*?<\/table>)/;
+    if (ratesBlockPattern.test(html)) {
+        return html.replace(ratesBlockPattern, `$1\n${otherChecksBlock}`);
+    }
+
+    const countersHeading = '<h4><i class="fas fa-calculator"></i> Counters</h4>';
+    return html.replace(countersHeading, `${otherChecksBlock}\n${countersHeading}`);
+}
+
+function removeChecksAndGroupsTab(reportHtml) {
+    return reportHtml.replace(
+        /\s*<input type="radio" name="tabs" id="tabthree">\s*<label for="tabthree">[\s\S]*?Checks &amp; Groups[\s\S]*?<\/label>\s*<div class="tab">[\s\S]*?<\/div>\s*<!-- ---- end tab ---- -->/m,
+        ''
+    ).replace(
+        /\s*<input type="radio" name="tabs" id="tabthree">\s*<label for="tabthree">[\s\S]*?Checks & Groups[\s\S]*?<\/label>\s*<div class="tab">[\s\S]*?<\/div>\s*<!-- ---- end tab ---- -->/m,
+        ''
+    );
+}
+
+function updateTotalRequestsCard(reportHtml, totalEpisodes, dramaCount) {
+    return reportHtml.replace(
+        /(<div class="metric-card primary)(\">\s*<i class="fas fa-globe icon"><\/i>\s*<h4>)Total Requests(<\/h4>\s*<div class="metric-value">)\s*[\s\S]*?(\s*<\/div>\s*<\/div>)/,
+        `$1 drama-total-dramas-card$2Total Dramas$3\n              <span class="drama-total-episodes">${totalEpisodes}</span><span class="drama-total-unit">（${dramaCount}部剧）</span>\n              $4`
+    );
+}
+
+function decorateCounterCountBadges(reportHtml) {
+    const counterRules = [
+        { label: 'Converting Chapters (转换中章节总数)', type: 'errorWhenPositive' },
+        { label: 'Direct Skips (直接跳集剧集数)', type: 'errorWhenPositive' },
+        { label: 'Errored Chapters (出错章节总数)', type: 'errorWhenPositive' },
+        { label: 'Total Drama Episodes (总剧集数)', type: 'alwaysSuccess' },
+        { label: 'Transport Retries (网络重试次数)', type: 'warningWhenPositive' },
+    ];
+
+    return reportHtml.replace(/<tr>[\s\S]*?<\/tr>/g, rowHtml => {
+        const rule = counterRules.find(item => rowHtml.includes(item.label));
+        if (!rule) return rowHtml;
+
+        const cells = [...rowHtml.matchAll(/<td([^>]*)>([\s\S]*?)<\/td>/g)];
+        if (cells.length === 0) return rowHtml;
+
+        const countCell = cells[cells.length - 1];
+        const countValue = parseCounterDisplayValue(countCell[2]);
+        const tone = getCounterBadgeTone(rule.type, countValue);
+        const className = `drama-counter-count drama-counter-count--${tone}`;
+        const decoratedOpenTag = addClassToHtmlTag(`<td${countCell[1]}>`, className);
+        const decoratedCell = `${decoratedOpenTag}${countCell[2]}</td>`;
+
+        return `${rowHtml.slice(0, countCell.index)}${decoratedCell}${rowHtml.slice(countCell.index + countCell[0].length)}`;
+    });
+}
+
+function parseCounterDisplayValue(rawValue) {
+    const textValue = String(rawValue || '').replace(/<[^>]*>/g, '').replace(/,/g, '').trim();
+    const numberValue = Number.parseFloat(textValue);
+    return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
+function getCounterBadgeTone(ruleType, countValue) {
+    if (ruleType === 'alwaysSuccess') return 'success';
+    if (ruleType === 'warningWhenPositive') return countValue >= 1 ? 'warning' : 'success';
+    return countValue >= 1 ? 'danger' : 'success';
+}
+
+function addClassToHtmlTag(openTag, className) {
+    if (/class="/.test(openTag)) {
+        return openTag.replace(/class="([^"]*)"/, `class="$1 ${className}"`);
+    }
+    return openTag.replace(/>$/, ` class="${className}">`);
+}
+
+function highlightDramaErrorKeywords(reportHtml) {
+    return reportHtml
+        .replace(/\[出错\]/g, '<span class="drama-error-keyword">[出错]</span>')
+        .replace(/\[转换中\]/g, '<span class="drama-error-keyword">[转换中]</span>')
+        .replace(/\[直接跳集\]/g, '<span class="drama-error-keyword">[直接跳集]</span>')
+        .replace('</head>', `<style>
+  .drama-error-keyword {
+    color: #dc2626;
+    font-weight: 800;
+  }
+  .drama-total-dramas-card h4 {
+    white-space: nowrap;
+    font-size: clamp(0.78rem, 1.4vw, 1rem);
+  }
+  .drama-total-dramas-card .metric-value {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+    line-height: 1.08;
+    word-break: keep-all;
+  }
+  .drama-total-dramas-card .drama-total-episodes {
+    font-size: clamp(1.55rem, 4vw, 2.35rem);
+    font-weight: 800;
+  }
+  .drama-total-dramas-card .drama-total-unit {
+    font-size: clamp(0.76rem, 1.6vw, 1rem);
+    font-weight: 700;
+    opacity: 0.9;
+    white-space: nowrap;
+  }
+  .drama-other-checks {
+    display: block;
+    margin: 1.5rem 0;
+  }
+  .drama-other-checks h2 {
+    color: #2d3748;
+    font-size: 1.25rem;
+    margin: 0 0 1rem;
+  }
+  td.drama-counter-count {
+    text-align: right;
+    font-weight: 800;
+    border-radius: 10px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+  }
+  td.drama-counter-count--success {
+    color: #166534;
+    background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%) !important;
+  }
+  td.drama-counter-count--warning {
+    color: #9a3412;
+    background: linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%) !important;
+  }
+  td.drama-counter-count--danger {
+    color: #991b1b;
+    background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%) !important;
+  }
+</style>
+</head>`);
 }
 
 function collectRetryCandidates(data) {

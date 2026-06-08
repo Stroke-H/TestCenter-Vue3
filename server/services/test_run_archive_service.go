@@ -240,11 +240,12 @@ func GetTestRunArtifactHandler(c *gin.Context) {
 
 	rootDir := projectRootDir()
 	path := filepath.Join(testRunStorageRoot(rootDir), runID, "artifacts", "report.html")
-	if _, err := os.Stat(path); err != nil {
+	content, err := os.ReadFile(path)
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "artifact not found"})
 		return
 	}
-	c.File(path)
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(applyFullscreenReportPresentation(string(content))))
 }
 
 func GetTestRunLogsHandler(c *gin.Context) {
@@ -257,6 +258,49 @@ func GetTestRunLogsHandler(c *gin.Context) {
 		return
 	}
 	c.Data(http.StatusOK, "application/x-ndjson; charset=utf-8", content)
+}
+
+func applyFullscreenReportPresentation(reportHTML string) string {
+	const styleID = "testcenter-fullscreen-report-presentation"
+	if strings.Contains(reportHTML, styleID) {
+		return reportHTML
+	}
+
+	style := `<style id="` + styleID + `">
+  html,
+  body {
+    width: 100% !important;
+    min-height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    scrollbar-width: none !important;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar,
+  *::-webkit-scrollbar {
+    width: 0 !important;
+    height: 0 !important;
+  }
+  body {
+    overflow: auto !important;
+  }
+  .container {
+    width: 100% !important;
+    max-width: none !important;
+    min-height: 100vh !important;
+    margin: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+</style>`
+
+	if strings.Contains(reportHTML, "</head>") {
+		return strings.Replace(reportHTML, "</head>", style+"\n</head>", 1)
+	}
+	return style + reportHTML
 }
 
 func archiveToDramaAnalyticsPoint(archive TestRunArchive) DramaAnalyticsPoint {
@@ -410,13 +454,16 @@ func parseDramaMetricsFromHTML(content string) DramaRunMetrics {
 		name := normalizeHTMLText(match[1])
 		value := parseMetricInt(match[2])
 		switch {
-		case strings.Contains(name, "Continuity Failures") || strings.Contains(name, "跳号剧集数"):
+		case strings.Contains(name, "Direct Skips") || strings.Contains(name, "直接跳集剧集数") || strings.Contains(name, "直接跳级剧集数") ||
+			strings.Contains(name, "Continuity Failures") || strings.Contains(name, "跳号剧集数"):
 			metrics.ContinuityFailures = value
 		case strings.Contains(name, "Total Mismatch") || strings.Contains(name, "计数不符剧集数"):
 			metrics.TotalMismatch = value
-		case strings.Contains(name, "Unhealthy Chapters") || strings.Contains(name, "下架/异常章节总数"):
+		case strings.Contains(name, "Errored Chapters") || strings.Contains(name, "出错章节总数") ||
+			strings.Contains(name, "Unhealthy Chapters") || strings.Contains(name, "下架/异常章节总数"):
 			metrics.UnhealthyChapters = value
-		case strings.Contains(name, "update_status_fail_count") || strings.Contains(name, "转换失败"):
+		case strings.Contains(name, "Converting Chapters") || strings.Contains(name, "转换中章节总数") ||
+			strings.Contains(name, "update_status_fail_count") || strings.Contains(name, "转换失败"):
 			metrics.UpdateStatusFailCount = value
 		}
 	}
@@ -425,10 +472,10 @@ func parseDramaMetricsFromHTML(content string) DramaRunMetrics {
 
 func dramaMetricsBreakdown(metrics DramaRunMetrics) []FailureBreakdownStat {
 	return []FailureBreakdownStat{
-		{Key: "continuity", Label: "跳号剧集", Value: metrics.ContinuityFailures, Color: "#eab308"},
+		{Key: "continuity", Label: "直接跳集", Value: metrics.ContinuityFailures, Color: "#eab308"},
 		{Key: "mismatch", Label: "计数不符", Value: metrics.TotalMismatch, Color: "#06b6d4"},
-		{Key: "offline", Label: "下架/异常章节", Value: metrics.UnhealthyChapters, Color: "#8b5cf6"},
-		{Key: "conversion", Label: "转换失败", Value: metrics.UpdateStatusFailCount, Color: "#64748b"},
+		{Key: "offline", Label: "出错章节", Value: metrics.UnhealthyChapters, Color: "#8b5cf6"},
+		{Key: "conversion", Label: "转换中", Value: metrics.UpdateStatusFailCount, Color: "#64748b"},
 	}
 }
 
