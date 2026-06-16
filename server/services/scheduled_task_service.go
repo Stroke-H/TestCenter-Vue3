@@ -94,9 +94,15 @@ type scheduledTaskAttemptResult struct {
 	Err       error
 }
 
+type scheduledTaskRunControl struct {
+	cancel context.CancelFunc
+}
+
 var (
 	scheduledTaskMu   sync.Mutex
 	scheduledRunnerOn sync.Once
+	scheduledRunMu    sync.Mutex
+	scheduledRunIDs   = map[string]scheduledTaskRunControl{}
 )
 
 var scheduledTaskRetryDelays = []time.Duration{
@@ -107,11 +113,13 @@ var scheduledTaskRetryDelays = []time.Duration{
 
 func InitScheduledTaskService() {
 	scheduledRunnerOn.Do(func() {
+		recoverAbandonedScheduledTasks()
 		go scheduledTaskLoop()
 	})
 }
 
 func ListScheduledTasksHandler(c *gin.Context) {
+	recoverAbandonedScheduledTasks()
 	tasks, err := loadScheduledTasks()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -135,6 +143,10 @@ func CreateScheduledTaskHandler(c *gin.Context) {
 	nextRunAt, err := parseScheduledTime(req.NextRun)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid next_run, expected YYYY-MM-DD HH:mm:ss"})
+		return
+	}
+	if !isScheduledTimeAllowed(nextRunAt, time.Now()) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "下次执行时间不能早于当前时间"})
 		return
 	}
 
@@ -167,6 +179,7 @@ func CreateScheduledTaskHandler(c *gin.Context) {
 }
 
 func UpdateScheduledTaskHandler(c *gin.Context) {
+	recoverAbandonedScheduledTasks()
 	taskID := c.Param("id")
 	var req UpdateScheduledTaskRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -177,6 +190,10 @@ func UpdateScheduledTaskHandler(c *gin.Context) {
 	nextRunAt, err := parseScheduledTime(req.NextRun)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid next_run, expected YYYY-MM-DD HH:mm:ss"})
+		return
+	}
+	if !isScheduledTimeAllowed(nextRunAt, time.Now()) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "下次执行时间不能早于当前时间"})
 		return
 	}
 
@@ -207,6 +224,89 @@ func UpdateScheduledTaskHandler(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusOK, tasks[i])
+		return
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{"error": "Scheduled task not found"})
+}
+
+func DeleteScheduledTaskHandler(c *gin.Context) {
+	recoverAbandonedScheduledTasks()
+	taskID := c.Param("id")
+	tasks, err := loadScheduledTasks()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	for i := range tasks {
+		if tasks[i].ID != taskID {
+			continue
+		}
+		if tasks[i].Status == "running" && isScheduledTaskActivelyRunning(taskID) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Running scheduled task cannot be deleted"})
+			return
+		}
+		tasks = append(tasks[:i], tasks[i+1:]...)
+		if err := saveScheduledTasks(tasks); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{"error": "Scheduled task not found"})
+}
+
+func PauseScheduledTaskHandler(c *gin.Context) {
+	taskID := c.Param("id")
+	tasks, err := loadScheduledTasks()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	now := time.Now()
+	for i := range tasks {
+		if tasks[i].ID != taskID {
+			continue
+		}
+		if tasks[i].Status == "running" {
+			cancelScheduledTaskRun(taskID)
+		}
+		tasks[i].Status = "paused"
+		tasks[i].LastResult = "任务已手动暂停"
+		tasks[i].UpdatedAt = now.Format(time.RFC3339)
+		if err := saveScheduledTasks(tasks); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, tasks[i])
+		return
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{"error": "Scheduled task not found"})
+}
+
+func StopCurrentScheduledTaskHandler(c *gin.Context) {
+	taskID := c.Param("id")
+	tasks, err := loadScheduledTasks()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	for i := range tasks {
+		if tasks[i].ID != taskID {
+			continue
+		}
+		if tasks[i].Status != "running" || !isScheduledTaskActivelyRunning(taskID) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Scheduled task is not currently running"})
+			return
+		}
+		cancelScheduledTaskRun(taskID)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
 		return
 	}
 
@@ -244,12 +344,16 @@ func runDueScheduledTasks() {
 
 		task.Status = "running"
 		task.UpdatedAt = now.Format(time.RFC3339)
+		runCtx, cancel := context.WithCancel(context.Background())
+		registerScheduledTaskRun(task.ID, cancel)
 		changed = true
 		if err := saveScheduledTasks(tasks); err != nil {
+			unregisterScheduledTaskRun(task.ID)
 			log.Printf("[ScheduledTask] mark running failed: %v", err)
+			continue
 		}
 
-		go executeScheduledTask(*task)
+		go executeScheduledTask(runCtx, *task)
 	}
 
 	if changed {
@@ -257,12 +361,76 @@ func runDueScheduledTasks() {
 	}
 }
 
-func executeScheduledTask(task ScheduledTask) {
+func registerScheduledTaskRun(taskID string, cancel context.CancelFunc) {
+	scheduledRunMu.Lock()
+	defer scheduledRunMu.Unlock()
+	scheduledRunIDs[taskID] = scheduledTaskRunControl{cancel: cancel}
+}
+
+func unregisterScheduledTaskRun(taskID string) {
+	scheduledRunMu.Lock()
+	defer scheduledRunMu.Unlock()
+	delete(scheduledRunIDs, taskID)
+}
+
+func isScheduledTaskActivelyRunning(taskID string) bool {
+	scheduledRunMu.Lock()
+	defer scheduledRunMu.Unlock()
+	_, ok := scheduledRunIDs[taskID]
+	return ok
+}
+
+func cancelScheduledTaskRun(taskID string) bool {
+	scheduledRunMu.Lock()
+	control, ok := scheduledRunIDs[taskID]
+	scheduledRunMu.Unlock()
+	if !ok || control.cancel == nil {
+		return false
+	}
+	control.cancel()
+	return true
+}
+
+func recoverAbandonedScheduledTasks() {
+	tasks, err := loadScheduledTasks()
+	if err != nil {
+		log.Printf("[ScheduledTask] recover abandoned running tasks failed: %v", err)
+		return
+	}
+
+	now := time.Now()
+	changed := false
+	for i := range tasks {
+		if tasks[i].Status != "running" || isScheduledTaskActivelyRunning(tasks[i].ID) {
+			continue
+		}
+		tasks[i].Status = "paused"
+		tasks[i].LastResult = "任务中断：后端服务重启或执行进程已不存在"
+		tasks[i].UpdatedAt = now.Format(time.RFC3339)
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	if err := saveScheduledTasks(tasks); err != nil {
+		log.Printf("[ScheduledTask] save recovered scheduled tasks failed: %v", err)
+	}
+}
+
+func executeScheduledTask(ctx context.Context, task ScheduledTask) {
 	start := time.Now()
 	runID := fmt.Sprintf("ST-%s-%d", sanitizeReportSuffix(task.ID), start.UnixMilli())
 	log.Printf("[ScheduledTask] executing %s (%s)", task.Name, task.ID)
+	defer unregisterScheduledTaskRun(task.ID)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result := fmt.Sprintf("panic recovered: %v", recovered)
+			log.Printf("[ScheduledTask] execute panic recovered for %s (%s): %v", task.Name, task.ID, recovered)
+			updateScheduledTaskAfterRun(task, start, result)
+		}
+	}()
 
-	attempts := runScheduledDramaTaskWithRetries(task, runID)
+	attempts := runScheduledDramaTaskWithRetries(ctx, task, runID)
 	finalAttempt := attempts[len(attempts)-1]
 	duration := time.Since(start)
 	result := "success"
@@ -272,6 +440,9 @@ func executeScheduledTask(task ScheduledTask) {
 		result = buildScheduledTaskAttemptSummary(attempts)
 		status = "Failed"
 		log.Printf("[ScheduledTask] execute failed after %d attempt(s): %v", len(attempts), finalAttempt.Err)
+		if ctx.Err() != nil {
+			result = "任务已手动停止"
+		}
 	} else if len(attempts) > 1 {
 		result = fmt.Sprintf("success after %d attempt(s)", len(attempts))
 	}
@@ -307,6 +478,8 @@ func executeScheduledTask(task ScheduledTask) {
 	noticeText, noticeCard := buildScheduledTaskNotice(task, status, result, formatDuration(duration), reportURL, start, reportDir)
 	if notifyErr := notifyScheduledTaskCreator(task.Creator, noticeText, noticeCard); notifyErr != nil {
 		log.Printf("[ScheduledTask] notify failed: %v", notifyErr)
+	} else {
+		log.Printf("[ScheduledTask] notify sent to %s for run %s", task.Creator, runID)
 	}
 
 	appendScheduledTaskAuditLog(task, status, result, formatDuration(duration), reportURL, start)
@@ -314,7 +487,7 @@ func executeScheduledTask(task ScheduledTask) {
 	updateScheduledTaskAfterRun(task, start, result)
 }
 
-func runScheduledDramaTaskWithRetries(task ScheduledTask, runID string) []scheduledTaskAttemptResult {
+func runScheduledDramaTaskWithRetries(ctx context.Context, task ScheduledTask, runID string) []scheduledTaskAttemptResult {
 	maxAttempts := len(scheduledTaskRetryDelays) + 1
 	attempts := make([]scheduledTaskAttemptResult, 0, maxAttempts)
 
@@ -322,7 +495,26 @@ func runScheduledDramaTaskWithRetries(task ScheduledTask, runID string) []schedu
 		if attempt > 1 {
 			delay := scheduledTaskRetryDelays[attempt-2]
 			log.Printf("[ScheduledTask] retrying %s (%s), attempt %d/%d after %s", task.Name, task.ID, attempt, maxAttempts, delay)
-			time.Sleep(delay)
+			select {
+			case <-ctx.Done():
+				attempts = append(attempts, scheduledTaskAttemptResult{
+					Attempt:   attempt,
+					StartedAt: time.Now(),
+					Duration:  0,
+					Err:       ctx.Err(),
+				})
+				return attempts
+			case <-time.After(delay):
+			}
+		}
+		if ctx.Err() != nil {
+			attempts = append(attempts, scheduledTaskAttemptResult{
+				Attempt:   attempt,
+				StartedAt: time.Now(),
+				Duration:  0,
+				Err:       ctx.Err(),
+			})
+			return attempts
 		}
 
 		attemptStart := time.Now()
@@ -331,7 +523,7 @@ func runScheduledDramaTaskWithRetries(task ScheduledTask, runID string) []schedu
 			attemptRunID = fmt.Sprintf("%s-attempt-%d", runID, attempt)
 		}
 		reportDir := dramaRuntimeReportDir(attemptRunID)
-		err := runDramaPlaybackTask(task.TestEnv, reportDir)
+		err := runDramaPlaybackTask(ctx, task.TestEnv, reportDir)
 		attemptResult := scheduledTaskAttemptResult{
 			Attempt:   attempt,
 			ReportDir: reportDir,
@@ -370,7 +562,7 @@ func buildScheduledTaskAttemptSummary(attempts []scheduledTaskAttemptResult) str
 	return builder.String()
 }
 
-func runDramaPlaybackTask(testEnv string, reportDir string) error {
+func runDramaPlaybackTask(ctx context.Context, testEnv string, reportDir string) error {
 	profile := getDramaProfile(testEnv)
 	rootDir, _ := filepath.Abs("..")
 	env := append(os.Environ(),
@@ -383,11 +575,14 @@ func runDramaPlaybackTask(testEnv string, reportDir string) error {
 
 	_ = os.MkdirAll(filepath.Join(rootDir, reportDir), 0755)
 	removeDramaRetryArtifacts(rootDir, reportDir)
-	if err := runCommand(rootDir, env, "node", filepath.Join("k6-scripts", "prepare_data.js")); err != nil {
+	if err := runCommand(ctx, rootDir, env, "node", filepath.Join("k6-scripts", "prepare_data.js")); err != nil {
 		return fmt.Errorf("prepare data failed: %w", err)
 	}
-	if err := runCommand(rootDir, env, "k6", "run", filepath.Join("k6-scripts", "drama_check_flow.js")); err != nil {
+	if err := runCommand(ctx, rootDir, env, "k6", "run", filepath.Join("k6-scripts", "drama_check_flow.js")); err != nil {
 		return fmt.Errorf("k6 run failed: %w", err)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	if err := rerunDramaRetryCandidates(rootDir, reportDir, env, func(message string) {
 		log.Printf("[ScheduledTask][Retry] %s", message)
@@ -397,13 +592,16 @@ func runDramaPlaybackTask(testEnv string, reportDir string) error {
 	return nil
 }
 
-func runCommand(dir string, env []string, name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+func runCommand(ctx context.Context, dir string, env []string, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	output, err := cmd.CombinedOutput()
 	if len(output) > 0 {
 		log.Printf("[ScheduledTask][%s] %s", name, removeANSI(string(output)))
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	return err
 }
@@ -413,6 +611,8 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 	if err != nil {
 		log.Printf("[ScheduledTask] report analysis skipped: %v", err)
 		analysis = "报告分析暂未生成，请打开平台查看完整报告。"
+	} else {
+		log.Printf("[ScheduledTask] report analysis generated for task %s", task.ID)
 	}
 	failures := loadScheduledDramaFailures(reportDir)
 	failureDetail := formatScheduledDramaFailureDetail(failures)
@@ -634,6 +834,9 @@ func enrichScheduledDramaFailures(rootDir string, failures []dramaFailureSummary
 		log.Printf("[ScheduledTask] read drama metadata config skipped: %v", err)
 		return
 	}
+	for index := range failures {
+		enrichScheduledDramaFailureFromLocalMeta(&failures[index], info)
+	}
 	if strings.TrimSpace(info.APIBase) == "" || strings.TrimSpace(info.Auth.XToken) == "" {
 		return
 	}
@@ -653,6 +856,19 @@ func enrichScheduledDramaFailures(rootDir string, failures []dramaFailureSummary
 		failure.Title = valueOrFallback(failure.Title, item.Title)
 		failure.CNTitle = valueOrFallback(failure.CNTitle, valueOrFallback(item.CNTitle, item.CNName))
 	}
+}
+
+func enrichScheduledDramaFailureFromLocalMeta(failure *dramaFailureSummary, info dramaInfoFile) {
+	if failure == nil || info.DramaMeta == nil {
+		return
+	}
+	meta, ok := info.DramaMeta[strings.TrimSpace(failure.DramaID)]
+	if !ok {
+		return
+	}
+	failure.IntID = valueOrFallback(failure.IntID, meta.IntID)
+	failure.Title = valueOrFallback(failure.Title, meta.Title)
+	failure.CNTitle = valueOrFallback(failure.CNTitle, valueOrFallback(meta.CNTitle, meta.CNName))
 }
 
 func readDramaInfoForMetadata(rootDir string) (dramaInfoFile, error) {
@@ -1141,10 +1357,13 @@ func updateScheduledTaskAfterRun(task ScheduledTask, runAt time.Time, result str
 		tasks[i].LastRunAt = runAt.Format(time.RFC3339)
 		tasks[i].LastResult = result
 		tasks[i].UpdatedAt = time.Now().Format(time.RFC3339)
+		if tasks[i].Status == "paused" {
+			break
+		}
 		nextRunAt, _ := time.Parse(time.RFC3339, task.NextRunAt)
 		switch task.ScheduleType {
 		case "Once":
-			tasks[i].Status = "completed"
+			tasks = append(tasks[:i], tasks[i+1:]...)
 		case "Daily":
 			tasks[i].Status = "active"
 			tasks[i].NextRunAt = nextRunAt.AddDate(0, 0, 1).Format(time.RFC3339)
@@ -1188,6 +1407,10 @@ func parseScheduledTime(value string) (time.Time, error) {
 		loc = shanghai
 	}
 	return time.ParseInLocation("2006-01-02 15:04:05", value, loc)
+}
+
+func isScheduledTimeAllowed(nextRunAt time.Time, now time.Time) bool {
+	return !nextRunAt.Before(now)
 }
 
 func formatScheduleDisplay(rfc3339 string) string {
@@ -1237,7 +1460,11 @@ func notifyScheduledTaskCreator(username string, text string, card map[string]an
 			return nil
 		}
 	}
-	return sendFeishuOpenIDText(openID, text)
+	if err := sendFeishuOpenIDText(openID, text); err != nil {
+		return err
+	}
+	log.Printf("[ScheduledTask] fallback text sent to %s", username)
+	return nil
 }
 
 func resolveFeishuOpenID(username string) string {

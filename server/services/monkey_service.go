@@ -170,6 +170,8 @@ var (
 	archiveActivityPattern = regexp.MustCompile(`originalComponentName\s*=\s*ComponentInfo\{([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)\}`)
 )
 
+const monkeyModulePermissionKey = "dashboard.monkey_test.visible"
+
 type monkeyUIHierarchy struct {
 	Nodes []monkeyUINode `xml:"node"`
 }
@@ -221,7 +223,7 @@ func InitMonkeyWirelessADBService() {
 }
 
 func ListMonkeyDevicesHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	adbPath, err := resolveADBPath()
@@ -243,7 +245,7 @@ func ListMonkeyDevicesHandler(c *gin.Context) {
 }
 
 func ListMonkeyPackagesHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	deviceID := strings.TrimSpace(c.Param("deviceId"))
@@ -270,7 +272,7 @@ func ListMonkeyPackagesHandler(c *gin.Context) {
 }
 
 func PairMonkeyWirelessADBHandler(c *gin.Context) {
-	user, ok := requireMonkeyPermission(c, "monkey.device.wireless_pair")
+	user, ok := requireMonkeyPermission(c)
 	if !ok {
 		return
 	}
@@ -301,7 +303,7 @@ func PairMonkeyWirelessADBHandler(c *gin.Context) {
 }
 
 func ConnectMonkeyWirelessADBHandler(c *gin.Context) {
-	user, ok := requireMonkeyPermission(c, "monkey.device.wireless_connect")
+	user, ok := requireMonkeyPermission(c)
 	if !ok {
 		return
 	}
@@ -309,7 +311,7 @@ func ConnectMonkeyWirelessADBHandler(c *gin.Context) {
 }
 
 func ReconnectMonkeyWirelessADBHandler(c *gin.Context) {
-	user, ok := requireMonkeyPermission(c, "monkey.device.wireless_connect")
+	user, ok := requireMonkeyPermission(c)
 	if !ok {
 		return
 	}
@@ -332,7 +334,7 @@ func handleConnectMonkeyWirelessADB(c *gin.Context, username string) {
 }
 
 func DisconnectMonkeyWirelessADBHandler(c *gin.Context) {
-	user, ok := requireMonkeyPermission(c, "monkey.device.wireless_disconnect")
+	user, ok := requireMonkeyPermission(c)
 	if !ok {
 		return
 	}
@@ -362,7 +364,7 @@ func DisconnectMonkeyWirelessADBHandler(c *gin.Context) {
 }
 
 func ListMonkeyWirelessADBDevicesHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	monkeyWirelessMu.Lock()
@@ -376,7 +378,7 @@ func ListMonkeyWirelessADBDevicesHandler(c *gin.Context) {
 }
 
 func StartMonkeyRunHandler(c *gin.Context) {
-	user, ok := requireMonkeyPermission(c, "monkey.run.start")
+	user, ok := requireMonkeyPermission(c)
 	if !ok {
 		return
 	}
@@ -397,7 +399,7 @@ func StartMonkeyRunHandler(c *gin.Context) {
 }
 
 func ListMonkeyRunsHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	runs, err := listArchivedMonkeyRuns()
@@ -409,7 +411,7 @@ func ListMonkeyRunsHandler(c *gin.Context) {
 }
 
 func GetMonkeyRunHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	runID := c.Param("runId")
@@ -422,7 +424,7 @@ func GetMonkeyRunHandler(c *gin.Context) {
 }
 
 func GetMonkeyRunEventsHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	runID := c.Param("runId")
@@ -435,7 +437,7 @@ func GetMonkeyRunEventsHandler(c *gin.Context) {
 }
 
 func GetMonkeyRunLogsHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	runID := c.Param("runId")
@@ -453,7 +455,7 @@ func GetMonkeyRunLogsHandler(c *gin.Context) {
 }
 
 func SubscribeMonkeyRunHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	runID := c.Param("runId")
@@ -513,7 +515,7 @@ func SubscribeMonkeyRunHandler(c *gin.Context) {
 }
 
 func GetMonkeyRunScreenshotHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.view"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	runID := c.Param("runId")
@@ -523,7 +525,7 @@ func GetMonkeyRunScreenshotHandler(c *gin.Context) {
 }
 
 func StopMonkeyRunHandler(c *gin.Context) {
-	if _, ok := requireMonkeyPermission(c, "monkey.run.stop"); !ok {
+	if _, ok := requireMonkeyPermission(c); !ok {
 		return
 	}
 	runID := c.Param("runId")
@@ -640,7 +642,7 @@ func writeMonkeySSE(writer io.Writer, event MonkeyStreamEvent) {
 	_, _ = fmt.Fprintf(writer, "data: %s\n\n", payload)
 }
 
-func requireMonkeyPermission(c *gin.Context, key string) (*User, bool) {
+func requireMonkeyPermission(c *gin.Context) (*User, bool) {
 	user, err := CurrentUserFromRequest(c)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
@@ -660,7 +662,7 @@ func requireMonkeyPermission(c *gin.Context, key string) (*User, bool) {
 			Permissions: DefaultDashboardPermissions(user.Username),
 		}
 	}
-	if record.Permissions[key] || isPermissionAdminUsername(user.Username) {
+	if record.Permissions[monkeyModulePermissionKey] || isPermissionAdminUsername(user.Username) {
 		return user, true
 	}
 	c.JSON(http.StatusForbidden, gin.H{"error": "Permission denied"})

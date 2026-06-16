@@ -1,5 +1,16 @@
 # ChangeLog - Test Process
 
+## 2026-06-11
+
+### Fixed
+- **Project Memo IME Enter Guard**: 项目树项目配置便签编辑时，Enter 会识别中文输入法组合态；拼音候选词确认不会提前结束编辑，只有非输入法组合状态下才保存便签。
+
+### Added
+- **Project Memo One-click Paste**: 项目树项目配置便签新增“一键黏贴”操作，可选择一个或多个目标项目并批量添加同内容便签；复制时仅带入便签内容和颜色，不携带历史修改记录。
+
+### Changed
+- **Project Memo Paste Dialog Style**: 一键黏贴弹窗改为贴近便利贴的视觉风格，预览区会继承便签颜色，并优化项目选择和确认按钮的排版质感。
+
 ## 2026-06-03
 
 ### Added

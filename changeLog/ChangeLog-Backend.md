@@ -1,5 +1,10 @@
 # ChangeLog - Backend (TestCenter Server)
 
+## 2026-06-09
+
+### Changed
+- **Unified Monkey Permission Guard**: Monkey 测试相关后端接口统一校验“Monkey 测试”入口权限，避免旧的查看、启动、停止和无线 ADB 子权限影响模块开关一致性。
+
 ## 2026-06-02
 
 ### Added

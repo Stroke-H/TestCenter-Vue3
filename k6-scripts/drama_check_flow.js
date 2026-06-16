@@ -269,13 +269,32 @@ function buildCountMismatchError(total, healthyCount, existingErrors) {
 }
 
 function buildDramaSummaryLabel(dramaId, errors, fallback = false) {
-    if (errors.length === 1) {
-        const suffix = fallback ? ' (Fallback)' : '';
-        return `剧集 ID: ${dramaId} - ${errors[0].msg}${suffix}`;
-    }
-
+    const identity = formatDramaIdentity(dramaId);
     const fallbackSuffix = fallback ? ' - Fallback' : '';
-    return `剧集 ID: ${dramaId} (发现 ${errors.length} 项异常${fallbackSuffix})`;
+    return `${identity}${fallbackSuffix}`;
+}
+
+function formatDramaIdentity(dramaId) {
+    const meta = getDramaMeta(dramaId);
+    const titleLine = `${meta.title || '未知标题'}/CnName:${meta.cnTitle || '未知中文名'}`;
+    const idLine = `ID:${dramaId}${meta.intId ? `(${meta.intId})` : ''}`;
+    return `${titleLine}<br>${idLine}`;
+}
+
+function formatDramaIdentityPlain(dramaId) {
+    const meta = getDramaMeta(dramaId);
+    const titleLine = `${meta.title || '未知标题'}/CnName:${meta.cnTitle || '未知中文名'}`;
+    const idLine = `ID:${dramaId}${meta.intId ? `(${meta.intId})` : ''}`;
+    return `${titleLine}\n${idLine}`;
+}
+
+function getDramaMeta(dramaId) {
+    const meta = DRAMA_META[dramaId] || {};
+    return {
+        intId: String(meta.int_id || meta.intId || '').trim(),
+        title: String(meta.title || meta.name || '').trim(),
+        cnTitle: String(meta.cn_title || meta.cnTitle || meta.cn_name || meta.cnName || '').trim(),
+    };
 }
 
 // ---------- 6. 主执行逻辑 ----------
@@ -296,7 +315,7 @@ export default function () {
             return;
         }
 
-        const errorMsg = `<details style="cursor: pointer;"><summary><b>剧集 ID: ${dramaId} (720p 网络请求失败)</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">错误原因: ${res720.msg}</div></details>`;
+        const errorMsg = `<details style="cursor: pointer;"><summary><b>${formatDramaIdentity(dramaId)}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">• [接口抓取失败] 720p 网络请求失败<br>错误原因: ${res720.msg}</div></details>`;
         console.error(`[🔥] 剧集 ${dramaId} 720p 二次尝试仍网络请求失败: ${res720.msg}`);
         check(null, { [errorMsg]: false });
         fetchErrors.add(1);
@@ -343,7 +362,7 @@ export default function () {
         const summaryLabel = buildDramaSummaryLabel(dramaId, unionErrors);
         const detailLines = errorDetails.join('<br>');
         const expandableMsg = `<details style="cursor: pointer;"><summary><b>${summaryLabel}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">${detailLines}</div></details>`;
-        console.warn(`[❌ 实锤故障] ${summaryLabel}\n  ${errorDetails.join('\n  ')}`);
+        console.warn(`[❌ 实锤故障] ${formatDramaIdentityPlain(dramaId)}\n  ${errorDetails.join('\n  ')}`);
         check(null, { [expandableMsg]: false });
     }
     markDramaCaseDone(dramaId);
@@ -365,7 +384,7 @@ function reportFaults(dramaId, errors, total, actualLen) {
     const summaryLabel = buildDramaSummaryLabel(dramaId, errors, true);
     const detailLines = errorDetails.join('<br>');
     const expandableMsg = `<details style="cursor: pointer;"><summary><b>${summaryLabel}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">${detailLines}</div></details>`;
-    console.warn(`[❌ 实锤故障] ${summaryLabel}\n  ${errorDetails.join('\n  ')}`);
+    console.warn(`[❌ 实锤故障] ${formatDramaIdentityPlain(dramaId)}\n  ${errorDetails.join('\n  ')}`);
     check(null, { [expandableMsg]: false });
 }
 
@@ -456,7 +475,7 @@ function unescapeDramaReportDetails(reportHtml) {
         .replace(/&lt;\/details&gt;/g, '</details>')
         .replace(/&lt;summary/g, '<summary')
         .replace(/&lt;\/summary&gt;/g, '</summary>')
-        .replace(/&lt;br&gt;/g, '<br>')
+        .replace(/&lt;br\s*\/?&gt;/g, '<br>')
         .replace(/&lt;b&gt;/g, '<b>')
         .replace(/&lt;\/b&gt;/g, '</b>')
         .replace(/&lt;div/g, '<div')
@@ -650,12 +669,12 @@ function collectDramaFailureSummaries(data) {
         if (!dramaId) return;
 
         if (!byDrama[dramaId]) {
-            const meta = DRAMA_META[dramaId] || {};
+            const meta = getDramaMeta(dramaId);
             byDrama[dramaId] = {
                 dramaId,
-                intId: String(meta.int_id || '').trim(),
-                title: String(meta.title || '').trim(),
-                cnTitle: String(meta.cn_title || '').trim(),
+                intId: meta.intId,
+                title: meta.title,
+                cnTitle: meta.cnTitle,
                 errors: [],
             };
         }
@@ -671,7 +690,7 @@ function collectDramaFailureSummaries(data) {
 }
 
 function extractDramaIdFromCheckName(name) {
-    const match = String(name || '').match(/剧集\s*ID:\s*([0-9a-fA-F]{24})/);
+    const match = String(name || '').match(/(?:剧集\s*)?ID:\s*([0-9a-fA-F]{24})/);
     return match ? match[1] : '';
 }
 
@@ -690,7 +709,7 @@ function extractDramaErrorLines(name) {
     }
     if (lines.length > 0) return lines;
 
-    const summaryMatch = plainText.match(/剧集\s*ID:\s*[0-9a-fA-F]{24}\s*-\s*(\[[^\]]+\][\s\S]*?)(?:\n|$)/);
+    const summaryMatch = plainText.match(/(?:剧集\s*)?ID:\s*[0-9a-fA-F]{24}[^\n]*?\s-\s*(\[[^\]]+\][\s\S]*?)(?:\n|$)/);
     if (summaryMatch) {
         return [`• ${normalizeWhitespace(summaryMatch[1])}`];
     }

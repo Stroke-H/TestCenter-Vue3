@@ -63,6 +63,7 @@ type dramaInfoMeta struct {
 	IntID   string `json:"int_id"`
 	Title   string `json:"title"`
 	CNTitle string `json:"cn_title"`
+	CNName  string `json:"cn_name"`
 }
 
 type StartDramaRunRequest struct {

@@ -1,5 +1,22 @@
 # ChangeLog - Test Reports
 
+## 2026-06-15
+
+### Changed
+- **Acceptance Report Feishu Rich Text**: 验收报告发送到飞书群时改为富文本卡片消息，飞书标题使用“项目名 + 版本号 + 验收报告”，正文继续保留原验收报告内容与提交人信息。
+- **Acceptance Report Feishu Layout**: 验收报告飞书卡片正文改为字段级排版，基础信息标签加粗展示，将“项目名称”调整为“项目编号”，并把缺陷修复、缺陷提交和需求点拆分为独立模块。
+
+### Fixed
+- **Acceptance Report Feishu Content Validation**: 验收报告富文本发送复用平台已验证的飞书卡片结构，并拆分过长正文段落，避免飞书拒绝 `post` 内容导致发送失败。
+
+## 2026-06-11
+
+### Added
+- **Drama Failure Metadata Labels**: 剧集播放接口检查会在前置数据阶段补全 `title` / `cn_name`，并在 K6 HTML 报告的错误信息和结构化失败摘要中展示剧集 `int_id`、英文标题与中文标题，方便从报告直接定位异常剧。
+
+### Changed
+- **Drama Check Name Layout**: 剧集播放接口报告的 Failed Checks 改为标题/中文名、ID/IntID、异常 bullet 三行展示，避免单异常同时出现在 summary 和详情中导致重复显示。
+
 ## 2026-06-08
 
 ### Changed

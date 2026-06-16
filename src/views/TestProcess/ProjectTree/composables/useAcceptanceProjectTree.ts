@@ -430,6 +430,41 @@ export function useAcceptanceProjectTree() {
     saveProjectMemos(next)
   }
 
+  const pasteProjectMemoItem = (sourceItem: Pick<ProjectMemoItem, 'content' | 'color'>, targetProjectCodes: string[]) => {
+    const content = normalizeText(sourceItem.content)
+    if (!content) return 0
+
+    const uniqueTargetCodes = Array.from(new Set(
+      targetProjectCodes
+        .map((projectCode) => normalizeText(projectCode))
+        .filter((projectCode) => projectCode && projectCode !== selectedProjectCode.value)
+    ))
+    if (!uniqueTargetCodes.length) return 0
+
+    const now = new Date().toISOString()
+    const next = { ...projectMemos.value }
+
+    uniqueTargetCodes.forEach((projectCode, index) => {
+      const currentRecord = next[projectCode] || { items: [], updatedAt: '' }
+      const newItem: ProjectMemoItem = {
+        id: `memo-${Date.now()}-${projectCode}-${index}-${Math.random().toString(36).substring(2, 8)}`,
+        content,
+        color: sourceItem.color,
+        updatedAt: now,
+        history: []
+      }
+
+      next[projectCode] = {
+        items: [...(currentRecord.items || []), newItem],
+        updatedAt: now
+      }
+    })
+
+    projectMemos.value = next
+    saveProjectMemos(next)
+    return uniqueTargetCodes.length
+  }
+
   const fetchReports = async () => {
     if (loading.value) return
     loading.value = true
@@ -480,6 +515,7 @@ export function useAcceptanceProjectTree() {
     updateProjectMemoItem,
     reorderProjectMemoItems,
     deleteProjectMemoItem,
+    pasteProjectMemoItem,
     fetchReports
   }
 }

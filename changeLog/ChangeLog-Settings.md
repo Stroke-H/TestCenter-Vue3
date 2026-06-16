@@ -1,5 +1,10 @@
 # ChangeLog - Settings (配置中心)
 
+## 2026-06-09
+
+### Changed
+- **Unified Monkey Permission**: 权限管理中的 Monkey 测试收束为一个卡片，统一控制入口、执行、结果查看和无线 ADB 操作，不再单独展示 Monkey 子动作权限。
+
 ## 2026-06-02
 
 ### Added

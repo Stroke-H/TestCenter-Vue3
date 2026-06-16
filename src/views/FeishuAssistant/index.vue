@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 
 // --- Types ---
@@ -149,6 +149,7 @@ const scheduledTaskForm = ref<ScheduledTaskForm>({
 
 const scheduleTypeOptions: ScheduleType[] = ['Once', 'Daily', 'weekly']
 const testEnvOptions = ['测试服务器', '正式服务器']
+const scheduledTaskPastTimeMessage = '定时任务执行时间不能早于当前时间'
 
 const currentOperator = computed(() => {
   return authStore.user?.username || authStore.user?.nickname || 'TesterByClaw'
@@ -160,6 +161,75 @@ const nextRunPreview = computed(() => {
   if (!form.startDate || !form.executionTime) return ''
   return `${form.startDate} ${form.executionTime}`
 })
+
+const padTimeUnit = (value: number) => String(value).padStart(2, '0')
+
+const formatLocalDate = (date: Date) => {
+  return `${date.getFullYear()}-${padTimeUnit(date.getMonth() + 1)}-${padTimeUnit(date.getDate())}`
+}
+
+const parseScheduledDateTime = (dateText: string, timeText: string) => {
+  const [year, month, day] = dateText.split('-').map(Number)
+  const [hour = 0, minute = 0, second = 0] = timeText.split(':').map(Number)
+  if (!year || !month || !day) return null
+  return new Date(year, month - 1, day, hour, minute, second)
+}
+
+const isScheduledTimeBeforeNow = () => {
+  const form = scheduledTaskForm.value
+  const scheduledAt = parseScheduledDateTime(form.startDate, form.executionTime)
+  if (!scheduledAt) return false
+  return scheduledAt.getTime() < Date.now()
+}
+
+const validateScheduledTime = () => {
+  if (!scheduledTaskForm.value.startDate || !scheduledTaskForm.value.executionTime) {
+    ElMessage.warning('请选择定时任务的执行日期和执行时间')
+    return false
+  }
+  if (isScheduledTimeBeforeNow()) {
+    ElMessage.warning(scheduledTaskPastTimeMessage)
+    return false
+  }
+  return true
+}
+
+const isSelectedStartDateToday = () => {
+  return scheduledTaskForm.value.startDate === formatLocalDate(new Date())
+}
+
+const disabledScheduledDate = (date: Date) => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return date.getTime() < today.getTime()
+}
+
+const disabledScheduledHours = () => {
+  if (!isSelectedStartDateToday()) return []
+  const now = new Date()
+  return Array.from({ length: now.getHours() }, (_, index) => index)
+}
+
+const disabledScheduledMinutes = (hour: number) => {
+  if (!isSelectedStartDateToday()) return []
+  const now = new Date()
+  if (hour < now.getHours()) {
+    return Array.from({ length: 60 }, (_, index) => index)
+  }
+  if (hour === now.getHours()) {
+    return Array.from({ length: now.getMinutes() + 1 }, (_, index) => index)
+  }
+  return []
+}
+
+const disabledScheduledSeconds = (hour: number, minute: number) => {
+  if (!isSelectedStartDateToday()) return []
+  const now = new Date()
+  if (hour < now.getHours() || (hour === now.getHours() && minute <= now.getMinutes())) {
+    return Array.from({ length: 60 }, (_, index) => index)
+  }
+  return []
+}
 
 const scheduledTaskDialogTitle = computed(() => {
   return scheduledTaskDialogMode.value === 'edit' ? '编辑定时任务' : '新建定时任务'
@@ -320,8 +390,7 @@ const createScheduledTask = async () => {
     ElMessage.warning('请完整填写功能、执行频率、创建人、测试项目和测试环境')
     return
   }
-  if (!form.startDate || !form.executionTime) {
-    ElMessage.warning('请选择定时任务的执行日期和执行时间')
+  if (!validateScheduledTime()) {
     return
   }
 
@@ -354,8 +423,7 @@ const updateScheduledTask = async () => {
     ElMessage.warning('请选择需要修改的定时任务和执行频率')
     return
   }
-  if (!form.startDate || !form.executionTime) {
-    ElMessage.warning('请选择定时任务的执行日期和执行时间')
+  if (!validateScheduledTime()) {
     return
   }
 
@@ -375,6 +443,54 @@ const updateScheduledTask = async () => {
     ElMessage.success('定时任务更新成功')
   } catch (e: any) {
     ElMessage.error(e?.message || '定时任务修改失败')
+  }
+}
+
+const pauseScheduledTask = async (task: ScheduledTask) => {
+  try {
+    const res = await fetch(`${API_BASE}/scheduled-tasks/${task.id}/pause`, {
+      method: 'POST'
+    })
+    const data = await parseApiResponse(res)
+    const updated = normalizeScheduledTask(data)
+    scheduledTasks.value = scheduledTasks.value.map(item => item.id === updated.id ? updated : item)
+    ElMessage.success('定时任务已暂停')
+  } catch (e: any) {
+    ElMessage.error(e?.message || '定时任务暂停失败')
+  }
+}
+
+const stopCurrentScheduledTask = async (task: ScheduledTask) => {
+  try {
+    const res = await fetch(`${API_BASE}/scheduled-tasks/${task.id}/stop-current`, {
+      method: 'POST'
+    })
+    await parseApiResponse(res)
+    ElMessage.success('已停止本次执行，后续触发时间保持正常')
+    fetchScheduledTasks()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '停止本次任务失败')
+  }
+}
+
+const handleRunningStatusClick = async (task: ScheduledTask) => {
+  if (task.status !== 'running') return
+  try {
+    await ElMessageBox.confirm(
+      '请选择要对当前 RUNNING 定时任务执行的操作。',
+      '处理运行中的定时任务',
+      {
+        confirmButtonText: '暂停任务',
+        cancelButtonText: '停止当次任务',
+        distinguishCancelAndClose: true,
+        type: 'warning'
+      }
+    )
+    pauseScheduledTask(task)
+  } catch (action) {
+    if (action === 'cancel') {
+      stopCurrentScheduledTask(task)
+    }
   }
 }
 
@@ -566,7 +682,13 @@ const formatTime = (ts: string) => {
 
           <el-table-column prop="status" label="状态" width="120" align="center">
             <template #default="scope">
-              <el-tag :type="getStatusType(scope.row.status)" size="small" round>
+              <el-tag
+                :type="getStatusType(scope.row.status)"
+                :class="{ 'scheduled-task-status--clickable': scope.row.status === 'running' }"
+                size="small"
+                round
+                @click.stop="handleRunningStatusClick(scope.row)"
+              >
                 {{ scope.row.status.toUpperCase() }}
               </el-tag>
             </template>
@@ -745,6 +867,7 @@ const formatTime = (ts: string) => {
               placeholder="请选择开始日期"
               value-format="YYYY-MM-DD"
               format="YYYY-MM-DD"
+              :disabled-date="disabledScheduledDate"
               class="next-run-picker__date"
             />
             <el-time-picker
@@ -752,6 +875,9 @@ const formatTime = (ts: string) => {
               placeholder="请选择执行时间"
               value-format="HH:mm:ss"
               format="HH:mm"
+              :disabled-hours="disabledScheduledHours"
+              :disabled-minutes="disabledScheduledMinutes"
+              :disabled-seconds="disabledScheduledSeconds"
               class="next-run-picker__time"
             />
           </div>
@@ -948,6 +1074,17 @@ const formatTime = (ts: string) => {
 .scheduled-task__code {
   color: #94a3b8;
   font-size: 12px;
+}
+
+.scheduled-task-status--clickable {
+  cursor: pointer;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.18);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.scheduled-task-status--clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(245, 158, 11, 0.18);
 }
 
 .scheduled-task-form {

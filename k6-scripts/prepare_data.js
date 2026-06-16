@@ -7,6 +7,7 @@ const PASSWORD = process.env.PASSWORD || "test123456";
 const LOGIN_URL = process.env.LOGIN_URL || "http://35.225.224.94:8080/api/pwd_login";
 const DRAMA_LIST_URL = process.env.DRAMA_LIST_URL || "http://35.225.224.94:8080/api/management/drama/all_online_ids";
 const FETCH_RETRY_ATTEMPTS = Number(process.env.PREPARE_FETCH_RETRY_ATTEMPTS || 3);
+const DRAMA_META_PAGE_SIZE = Number(process.env.DRAMA_META_PAGE_SIZE || 200);
 
 // 定义最终落盘的存储文件路径 (锁定在项目根目录)
 const OUTPUT_FILE = path.join(import.meta.dirname, '..', 'drama_info.json');
@@ -159,7 +160,8 @@ async function main() {
             dramaMeta[id] = normalizeDramaMeta({
               int_id: item?.int_id,
               title: item?.title,
-              cn_title: item?.cn_title
+              cn_title: item?.cn_title,
+              cn_name: item?.cn_name
             });
             return id;
           }
@@ -172,6 +174,22 @@ async function main() {
   }
   
   console.log(`✅ 成功获取全部剧集信息，有效 Hex _id 条数: ${dramaIds.length}`);
+
+  // -------------------------------------------------------------
+  // Step 2.5: 补全剧集标题元信息，供 K6 报告和飞书总结直接复用
+  // -------------------------------------------------------------
+  const apiBase = DRAMA_LIST_URL.split('/api/')[0];
+  console.log(`\n🏷️ Step 2.5: 补全剧集 title / cn_name 元信息`);
+  const extraMeta = await fetchDramaMetadata(apiBase, xToken);
+  let enrichedCount = 0;
+  dramaIds.forEach(dramaId => {
+    const merged = mergeDramaMeta(dramaMeta[dramaId], extraMeta[dramaId]);
+    dramaMeta[dramaId] = merged;
+    if (hasReadableDramaMeta(merged)) {
+      enrichedCount++;
+    }
+  });
+  console.log(`✅ 已补全剧集标题元信息: ${enrichedCount}/${dramaIds.length}`);
 
   // -------------------------------------------------------------
   // Step 3: 格式化包裹并持久化落盘
@@ -187,7 +205,7 @@ async function main() {
       x_token: xToken
     },
     // 将 API 基础路径透传给 K6 脚本，避免硬编码
-    apiBase: DRAMA_LIST_URL.split('/api/')[0],
+    apiBase,
     dramaList: dramaIds,
     dramaMeta
   };
@@ -241,7 +259,8 @@ function buildDramaMetaFromRecord(headers, row) {
   return normalizeDramaMeta({
     int_id: firstRecordValue(record, ['int_id', 'intId']),
     title: firstRecordValue(record, ['title', 'name']),
-    cn_title: firstRecordValue(record, ['cn_title', 'cnTitle', '中文标题'])
+    cn_title: firstRecordValue(record, ['cn_title', 'cnTitle', 'cn_name', 'cnName', '中文标题', '中文名']),
+    cn_name: firstRecordValue(record, ['cn_name', 'cnName', 'cn_title', 'cnTitle', '中文名', '中文标题'])
   });
 }
 
@@ -255,9 +274,76 @@ function firstRecordValue(record, keys) {
 }
 
 function normalizeDramaMeta(meta) {
+  const cnTitle = String(meta.cn_title ?? meta.cnTitle ?? meta.cn_name ?? meta.cnName ?? '').trim();
   return {
-    int_id: String(meta.int_id ?? '').trim(),
-    title: String(meta.title ?? '').trim(),
-    cn_title: String(meta.cn_title ?? '').trim()
+    int_id: String(meta.int_id ?? meta.intId ?? '').trim(),
+    title: String(meta.title ?? meta.name ?? '').trim(),
+    cn_title: cnTitle,
+    cn_name: String(meta.cn_name ?? meta.cnName ?? cnTitle).trim()
   };
+}
+
+async function fetchDramaMetadata(apiBase, xToken) {
+  const metadata = {};
+  const base = String(apiBase || '').replace(/\/+$/, '');
+  if (!base || !xToken) {
+    return metadata;
+  }
+
+  let page = 1;
+  let total = 0;
+  while (true) {
+    const url = `${base}/api/management/drama/list?online=1&page=${page}&page_size=${DRAMA_META_PAGE_SIZE}`;
+    let response;
+    try {
+      response = await fetchWithRetry(url, {
+        method: 'GET',
+        headers: {
+          'Cookie': `x-token=${xToken}`,
+          'Connection': 'close'
+        }
+      }, `剧集元信息接口 page=${page}`);
+    } catch (error) {
+      console.warn(`⚠️ 剧集元信息接口 page=${page} 请求异常，保留已获取标题并继续主检查: ${formatFetchError(error)}`);
+      break;
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.warn(`⚠️ 剧集元信息接口返回 HTTP ${response.status}，跳过标题补全。响应: ${errorText}`);
+      break;
+    }
+
+    const payload = await response.json();
+    const list = Array.isArray(payload?.data) ? payload.data : [];
+    total = Number(payload?.total || total || 0);
+    list.forEach(item => {
+      const id = String(item?._id || item?.id || item?.drama_id || '').trim();
+      if (/^[0-9a-fA-F]{24}$/.test(id)) {
+        metadata[id] = normalizeDramaMeta(item);
+      }
+    });
+
+    if (list.length === 0 || (total > 0 && page * DRAMA_META_PAGE_SIZE >= total)) {
+      break;
+    }
+    page++;
+  }
+
+  return metadata;
+}
+
+function mergeDramaMeta(primary, secondary) {
+  const left = normalizeDramaMeta(primary || {});
+  const right = normalizeDramaMeta(secondary || {});
+  return normalizeDramaMeta({
+    int_id: left.int_id || right.int_id,
+    title: left.title || right.title,
+    cn_title: left.cn_title || right.cn_title,
+    cn_name: left.cn_name || right.cn_name
+  });
+}
+
+function hasReadableDramaMeta(meta) {
+  return Boolean(String(meta?.title || '').trim() || String(meta?.cn_title || meta?.cn_name || '').trim());
 }

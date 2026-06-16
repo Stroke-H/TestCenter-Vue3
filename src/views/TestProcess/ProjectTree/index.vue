@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, onBeforeUnmount, onMounted } from 'vue'
+import { computed, ref, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, CollectionTag, Refresh, Search, Plus, Delete, Edit, Check, Close } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { ArrowLeft, CollectionTag, Refresh, Search, Plus, Delete, Edit, Check, Close, DocumentCopy } from '@element-plus/icons-vue'
 import ProjectTreeBoard from './components/ProjectTreeBoard.vue'
 import { useAcceptanceProjectTree } from './composables/useAcceptanceProjectTree'
 import type { ProjectMemoItem } from './types'
@@ -25,6 +26,7 @@ const {
   updateProjectMemoItem,
   reorderProjectMemoItems,
   deleteProjectMemoItem,
+  pasteProjectMemoItem,
   fetchReports
 } = useAcceptanceProjectTree()
 
@@ -57,6 +59,13 @@ interface NoteDraft {
 const editingNotes = ref<Record<string, NoteDraft>>({})
 const draggingNoteId = ref('')
 const dragOverNoteId = ref('')
+const pasteDialogVisible = ref(false)
+const pasteSourceNote = ref<ProjectMemoItem | null>(null)
+const pasteTargetProjectCodes = ref<string[]>([])
+
+const pasteTargetProjectOptions = computed(() => {
+  return projectOptions.value.filter((project) => project.value !== selectedProjectCode.value)
+})
 
 const startEditNote = (note: ProjectMemoItem) => {
   editingNotes.value[note.id] = {
@@ -90,6 +99,14 @@ const saveEditNote = (noteId: string) => {
     })
   }
   delete editingNotes.value[noteId]
+}
+
+const handleNoteEnter = (event: KeyboardEvent, noteId: string) => {
+  if (event.isComposing || event.keyCode === 229) {
+    return
+  }
+  event.preventDefault()
+  saveEditNote(noteId)
 }
 
 const handleAddNewNote = (color: 'green' | 'red' | 'orange' = 'green') => {
@@ -153,6 +170,32 @@ const handleNoteDrop = (event: DragEvent, targetNoteId: string) => {
 const handleNoteDragEnd = () => {
   draggingNoteId.value = ''
   dragOverNoteId.value = ''
+}
+
+const openPasteNoteDialog = (note: ProjectMemoItem) => {
+  pasteSourceNote.value = note
+  pasteTargetProjectCodes.value = []
+  pasteDialogVisible.value = true
+}
+
+const confirmPasteNote = () => {
+  const sourceNote = pasteSourceNote.value
+  if (!sourceNote) return
+  if (!pasteTargetProjectCodes.value.length) {
+    ElMessage.warning('请选择至少一个目标项目')
+    return
+  }
+
+  const pastedCount = pasteProjectMemoItem(sourceNote, pasteTargetProjectCodes.value)
+  if (pastedCount <= 0) {
+    ElMessage.warning('没有可粘贴的目标项目')
+    return
+  }
+
+  ElMessage.success(`已粘贴到 ${pastedCount} 个项目`)
+  pasteDialogVisible.value = false
+  pasteSourceNote.value = null
+  pasteTargetProjectCodes.value = []
 }
 
 onMounted(() => {
@@ -305,7 +348,7 @@ onBeforeUnmount(() => {
                 type="text"
                 placeholder="输入配置记录内容（按Enter键保存，Esc键取消）"
                 class="memo-sticky-note__input"
-                @keydown.enter="saveEditNote(note.id)"
+                @keydown.enter="handleNoteEnter($event, note.id)"
                 @keydown.esc="cancelEditNote(note.id)"
               />
               <div class="memo-sticky-note__edit-actions">
@@ -354,6 +397,13 @@ onBeforeUnmount(() => {
                     @click="startEditNote(note)"
                   />
                   <el-button
+                    type="success"
+                    link
+                    :icon="DocumentCopy"
+                    title="一键黏贴"
+                    @click="openPasteNoteDialog(note)"
+                  />
+                  <el-button
                     type="danger"
                     link
                     :icon="Delete"
@@ -373,6 +423,59 @@ onBeforeUnmount(() => {
       :projects="projectTree"
       :loading="loading"
     />
+
+    <el-dialog
+      v-model="pasteDialogVisible"
+      width="520px"
+      class="memo-paste-dialog"
+      align-center
+    >
+      <template #header>
+        <div class="memo-paste-dialog__header">
+          <span class="memo-paste-dialog__pin" />
+          <div>
+            <h3>一键黏贴</h3>
+            <p>把这张便签复制到其他项目</p>
+          </div>
+        </div>
+      </template>
+      <div class="memo-paste-dialog__body">
+        <div
+          class="memo-paste-dialog__preview"
+          :class="`memo-paste-dialog__preview--${pasteSourceNote?.color || 'green'}`"
+        >
+          <span class="memo-paste-dialog__label">将要黏贴的便签</span>
+          <p>{{ pasteSourceNote?.content }}</p>
+        </div>
+        <label class="memo-paste-dialog__field">
+          <span>目标项目</span>
+          <el-select
+            v-model="pasteTargetProjectCodes"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="搜索并选择一个或多个项目"
+            class="memo-paste-dialog__select"
+          >
+            <el-option
+              v-for="project in pasteTargetProjectOptions"
+              :key="project.value"
+              :label="`${project.label}（${project.reportCount}）`"
+              :value="project.value"
+            />
+          </el-select>
+        </label>
+      </div>
+      <template #footer>
+        <div class="memo-paste-dialog__footer">
+          <el-button plain @click="pasteDialogVisible = false">取消</el-button>
+          <el-button type="success" :icon="DocumentCopy" @click="confirmPasteNote">
+            黏贴到选中项目
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -681,6 +784,139 @@ onBeforeUnmount(() => {
   max-width: min(520px, calc(100vw - 48px));
   white-space: pre-line;
   line-height: 1.55;
+}
+
+:deep(.memo-paste-dialog.el-dialog) {
+  overflow: hidden;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  background: linear-gradient(145deg, #fffdf7 0%, #f8fafc 100%);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18), 0 8px 24px rgba(15, 23, 42, 0.1);
+}
+
+:deep(.memo-paste-dialog .el-dialog__header) {
+  padding: 18px 22px 12px;
+  margin: 0;
+}
+
+:deep(.memo-paste-dialog .el-dialog__body) {
+  padding: 0 22px 18px;
+}
+
+:deep(.memo-paste-dialog .el-dialog__footer) {
+  padding: 0 22px 20px;
+}
+
+:deep(.memo-paste-dialog .el-dialog__headerbtn) {
+  top: 16px;
+  right: 16px;
+}
+
+.memo-paste-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-right: 30px;
+}
+
+.memo-paste-dialog__pin {
+  width: 12px;
+  height: 12px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: #10b981;
+  box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.12), 0 7px 14px rgba(16, 185, 129, 0.25);
+}
+
+.memo-paste-dialog__header h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.memo-paste-dialog__header p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.memo-paste-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.memo-paste-dialog__preview {
+  position: relative;
+  padding: 13px 16px 13px 18px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-left: 6px solid #10b981;
+  border-radius: 8px;
+  background: #f0fdf4;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.memo-paste-dialog__preview--orange {
+  border-left-color: #f97316;
+  background: #fff7ed;
+}
+
+.memo-paste-dialog__preview--red {
+  border-left-color: #ef4444;
+  background: #fef2f2;
+}
+
+.memo-paste-dialog__label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.memo-paste-dialog__preview p {
+  margin: 0;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.memo-paste-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memo-paste-dialog__field > span {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.memo-paste-dialog__select {
+  width: 100%;
+}
+
+:deep(.memo-paste-dialog__select .el-select__wrapper) {
+  min-height: 42px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.26) inset;
+}
+
+.memo-paste-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.memo-paste-dialog__footer :deep(.el-button) {
+  min-width: 104px;
+  border-radius: 10px;
 }
 
 @media (max-width: 900px) {

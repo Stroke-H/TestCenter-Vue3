@@ -170,6 +170,9 @@ func main() {
 			scheduledTasks.GET("", services.ListScheduledTasksHandler)
 			scheduledTasks.POST("", services.CreateScheduledTaskHandler)
 			scheduledTasks.PUT("/:id", services.UpdateScheduledTaskHandler)
+			scheduledTasks.DELETE("/:id", services.DeleteScheduledTaskHandler)
+			scheduledTasks.POST("/:id/pause", services.PauseScheduledTaskHandler)
+			scheduledTasks.POST("/:id/stop-current", services.StopCurrentScheduledTaskHandler)
 		}
 
 		// Playwright UI Automation

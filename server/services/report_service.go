@@ -155,6 +155,143 @@ func formatAcceptanceReportSection(content string) string {
 }
 
 func sendFeishuGroupText(text string) error {
+	return sendFeishuGroupMessage("text", map[string]string{"text": text})
+}
+
+func sendFeishuGroupInteractiveCard(card map[string]any) error {
+	return sendFeishuGroupMessage("interactive", card)
+}
+
+func chunkRunes(text string, limit int) []string {
+	if limit <= 0 {
+		return []string{text}
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+
+	chunks := make([]string, 0, (len(runes)/limit)+1)
+	for start := 0; start < len(runes); start += limit {
+		end := start + limit
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[start:end]))
+	}
+	return chunks
+}
+
+func truncateRunes(text string, limit int) string {
+	if limit <= 0 {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit])
+}
+
+func buildAcceptanceReportFeishuCard(report AcceptanceReport, senderName string) map[string]any {
+	elements := []map[string]any{
+		{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": buildAcceptanceReportSummaryBlock(report, senderName),
+			},
+		},
+	}
+
+	appendAcceptanceCardSection(&elements, "正式版本缺陷修复验证情况", report.BugFixStatus)
+	appendAcceptanceCardSection(&elements, "本次预提审版本缺陷提交情况", report.BugSubmissionStatus)
+	appendAcceptanceCardSection(&elements, "版本更新测试需求点", report.UpdateRequirements)
+
+	return map[string]any{
+		"config": map[string]any{
+			"wide_screen_mode": true,
+		},
+		"header": map[string]any{
+			"template": "blue",
+			"title": map[string]any{
+				"tag":     "plain_text",
+				"content": truncateRunes(formatAcceptanceReportFeishuTitle(report), 80),
+			},
+		},
+		"elements": elements,
+	}
+}
+
+func buildAcceptanceReportSummaryBlock(report AcceptanceReport, senderName string) string {
+	conclusion := strings.TrimSpace(report.TestConclusion)
+	if conclusion == "" {
+		conclusion = "Pass"
+	}
+
+	lines := []string{
+		formatAcceptanceCardField("提交人", senderName),
+		formatAcceptanceCardField("项目编号", valueOrFallback(report.ProjectCode, report.ProjectName)),
+		formatAcceptanceCardField("版本号", report.Version),
+		formatAcceptanceCardField("测试负责人", report.TestOwner),
+		formatAcceptanceCardField("测试时间", report.TestTime),
+		formatAcceptanceCardField("测试环境", report.TestEnv),
+	}
+	if strings.TrimSpace(report.TestDevices) != "" {
+		lines = append(lines, formatAcceptanceCardField("测试设备", report.TestDevices))
+	}
+	lines = append(lines,
+		formatAcceptanceCardField("本次测试覆盖率", "100%"),
+		fmt.Sprintf("**测试结论：** 当前版本%s！", escapeLarkMarkdown(conclusion)),
+	)
+	return strings.Join(lines, "\n")
+}
+
+func formatAcceptanceCardField(label string, value string) string {
+	return fmt.Sprintf("**%s：** %s", label, escapeLarkMarkdown(valueOrFallback(value, "无")))
+}
+
+func appendAcceptanceCardSection(elements *[]map[string]any, title string, content string) {
+	*elements = append(*elements, map[string]any{"tag": "hr"})
+
+	sectionText := escapeLarkMarkdown(strings.TrimSpace(content))
+	if sectionText == "" {
+		sectionText = "无"
+	}
+
+	chunks := chunkRunes(sectionText, 2500)
+	for index, chunk := range chunks {
+		blockContent := chunk
+		if index == 0 {
+			blockContent = fmt.Sprintf("**%s**\n%s", escapeLarkMarkdown(title), chunk)
+		}
+		*elements = append(*elements, map[string]any{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": blockContent,
+			},
+		})
+	}
+}
+
+func formatAcceptanceReportFeishuTitle(report AcceptanceReport) string {
+	projectName := strings.TrimSpace(report.ProjectName)
+	if projectName == "" {
+		projectName = strings.TrimSpace(report.ProjectCode)
+	}
+	if projectName == "" {
+		projectName = "未命名项目"
+	}
+
+	version := strings.TrimSpace(report.Version)
+	if version == "" {
+		return projectName + " 验收报告"
+	}
+	return projectName + " " + version + " 验收报告"
+}
+
+func sendFeishuGroupMessage(msgType string, content any) error {
 	if feishumodel.GlobalFeishuConfig == nil {
 		config, err := feishumodel.LoadConfig("data/feishu_config.json")
 		if err != nil {
@@ -190,16 +327,14 @@ func sendFeishuGroupText(text string) error {
 		return fmt.Errorf("feishu auth failed: %s", authResult.Msg)
 	}
 
-	contentBody, err := json.Marshal(map[string]string{
-		"text": text,
-	})
+	contentBody, err := json.Marshal(content)
 	if err != nil {
 		return err
 	}
 
 	msgPayload, err := json.Marshal(map[string]string{
 		"receive_id": config.GroupID,
-		"msg_type":   "text",
+		"msg_type":   msgType,
 		"content":    string(contentBody),
 	})
 	if err != nil {
@@ -1027,9 +1162,8 @@ func SendAcceptanceReportToFeishuHandler(c *gin.Context) {
 		return
 	}
 
-	reportText := FormatAcceptanceReportText(*report)
-	messageText := fmt.Sprintf("【%s 提交的验收报告】\n\n%s", currentUser.Username, reportText)
-	if err := sendFeishuGroupText(messageText); err != nil {
+	card := buildAcceptanceReportFeishuCard(*report, currentUser.Username)
+	if err := sendFeishuGroupInteractiveCard(card); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
