@@ -675,23 +675,24 @@ const serverOptions = [
   { label: '灰度服', value: 'gray' }
 ]
 const testServer = ref<ApiEnvironment>(loadSavedShortDramaEnvironment() || 'test')
+const getViteEnv = (key: string) => String((import.meta.env as Record<string, string | undefined>)[key] || '')
 
 const serverProfiles = {
   test: {
-    email: "test_super_001@shortswave.com",
-    password: "test123456",
+    email: getViteEnv('VITE_DRAMA_TEST_EMAIL'),
+    password: getViteEnv('VITE_DRAMA_TEST_PASSWORD'),
     loginUrl: "http://35.225.224.94:8080/api/pwd_login",
     dramaListUrl: "http://35.225.224.94:8080/api/management/drama/all_online_ids"
   },
   prod: {
-    email: "test001@wedrama.com",
-    password: "fb3b2e9961b58",
+    email: getViteEnv('VITE_DRAMA_PROD_EMAIL'),
+    password: getViteEnv('VITE_DRAMA_PROD_PASSWORD'),
     loginUrl: "https://admin.shortswave.com/api/pwd_login", // 假设路径对标
     dramaListUrl: "https://admin.shortswave.com/api/management/drama/all_online_ids"
   },
   gray: {
-    email: "test_super_001@shortswave.com",
-    password: "test123456",
+    email: getViteEnv('VITE_DRAMA_GRAY_EMAIL'),
+    password: getViteEnv('VITE_DRAMA_GRAY_PASSWORD'),
     loginUrl: "http://35.193.183.77:8080/api/pwd_login",
     dramaListUrl: "http://35.193.183.77:8080/api/management/drama/all_online_ids"
   }

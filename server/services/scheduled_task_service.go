@@ -1593,17 +1593,17 @@ func valueOrFallback(value string, fallback string) string {
 func getDramaProfile(testEnv string) dramaProfile {
 	if strings.Contains(testEnv, "正式") || strings.EqualFold(testEnv, "prod") {
 		return dramaProfile{
-			Email:        "test001@wedrama.com",
-			Password:     "fb3b2e9961b58",
-			LoginURL:     "https://admin.shortswave.com/api/pwd_login",
-			DramaListURL: "https://admin.shortswave.com/api/management/drama/all_online_ids",
+			Email:        os.Getenv("DRAMA_PROD_EMAIL"),
+			Password:     os.Getenv("DRAMA_PROD_PASSWORD"),
+			LoginURL:     valueOrFallback(os.Getenv("DRAMA_PROD_LOGIN_URL"), "https://admin.shortswave.com/api/pwd_login"),
+			DramaListURL: valueOrFallback(os.Getenv("DRAMA_PROD_LIST_URL"), "https://admin.shortswave.com/api/management/drama/all_online_ids"),
 		}
 	}
 	return dramaProfile{
-		Email:        "test_super_001@shortswave.com",
-		Password:     "test123456",
-		LoginURL:     "http://35.225.224.94:8080/api/pwd_login",
-		DramaListURL: "http://35.225.224.94:8080/api/management/drama/all_online_ids",
+		Email:        os.Getenv("DRAMA_TEST_EMAIL"),
+		Password:     os.Getenv("DRAMA_TEST_PASSWORD"),
+		LoginURL:     valueOrFallback(os.Getenv("DRAMA_TEST_LOGIN_URL"), "http://35.225.224.94:8080/api/pwd_login"),
+		DramaListURL: valueOrFallback(os.Getenv("DRAMA_TEST_LIST_URL"), "http://35.225.224.94:8080/api/management/drama/all_online_ids"),
 	}
 }
 

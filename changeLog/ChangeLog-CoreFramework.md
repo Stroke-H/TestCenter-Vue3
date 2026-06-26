@@ -1,5 +1,11 @@
 # ChangeLog - CoreFramework
 
+## 2026-06-26
+
+### Changed
+- **Repository Branch Governance**: 明确仓库后续只维护 `master` 与 `main` 两条分支，日常更新以 `master` 为主线并同步到 `main`，不再默认创建临时开发分支。
+- **Runtime Secret Sanitization**: 清理源码中的默认账号密码，飞书、AI、数据库、剧集登录等真实运行配置统一保留在本地忽略文件或环境变量中，避免推送到 GitHub。
+
 ## 2026-06-05
 
 ### Changed

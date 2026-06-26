@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 
-// 从环境变量读取配置，提供默认值进行单侧兼容
-const EMAIL = process.env.EMAIL || "test_super_001@shortswave.com";
-const PASSWORD = process.env.PASSWORD || "test123456";
+// 从环境变量读取账号配置，避免在仓库中保留真实登录信息
+const EMAIL = process.env.EMAIL || "";
+const PASSWORD = process.env.PASSWORD || "";
 const LOGIN_URL = process.env.LOGIN_URL || "http://35.225.224.94:8080/api/pwd_login";
 const DRAMA_LIST_URL = process.env.DRAMA_LIST_URL || "http://35.225.224.94:8080/api/management/drama/all_online_ids";
 const APP_GROUP_LIST_URL = process.env.APP_GROUP_LIST_URL || "https://admin.shortswave.com/api/management/app/group/list";

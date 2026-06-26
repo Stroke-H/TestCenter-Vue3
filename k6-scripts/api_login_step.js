@@ -3,8 +3,8 @@ import { check } from 'k6';
 import { htmlReport } from "https://raw.githubusercontent.com/benc-uk/k6-reporter/main/dist/bundle.js";
 
 // 全局配置参数 (优先从 Go 引擎注入的环境变量 __ENV 读取，以便后续平台化配置)
-const EMAIL = __ENV.EMAIL || "test_super_001@shortswave.com";
-const PASSWORD = __ENV.PASSWORD || "test123456";
+const EMAIL = __ENV.EMAIL || "";
+const PASSWORD = __ENV.PASSWORD || "";
 const LOGIN_URL = __ENV.LOGIN_URL || "http://35.225.224.94:8080/api/pwd_login";
 
 // 基础执行配置
