@@ -176,6 +176,15 @@ var sqlJSONTables = map[string]sqlJSONTable{
 			{Column: "status", Field: "status"},
 		},
 	},
+	"project_config_records": {
+		Table:      "project_config_records",
+		PrimaryKey: "project_code",
+		Columns: []sqlJSONColumn{
+			{Column: "project_code", Field: "project_code"},
+			{Column: "items", Field: "items", JSON: true},
+			{Column: "updated_at", Field: "updated_at"},
+		},
+	},
 	"execution_reports": {
 		Table:      "execution_reports",
 		PrimaryKey: "id",

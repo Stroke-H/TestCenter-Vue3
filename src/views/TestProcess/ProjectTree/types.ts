@@ -31,14 +31,20 @@ export interface ProjectTreeNode {
 export interface ProjectMemoItem {
   id: string
   content: string
-  color: 'green' | 'red' | 'orange'
+  color: ProjectMemoColor
   updatedAt: string
   history?: ProjectMemoHistoryItem[]
+  kind?: 'manual' | 'ai'
+  configKey?: string
+  sourceReportId?: string
+  sourceHash?: string
 }
+
+export type ProjectMemoColor = 'green' | 'red' | 'orange' | 'blue'
 
 export interface ProjectMemoHistoryItem {
   content: string
-  color: 'green' | 'red' | 'orange'
+  color: ProjectMemoColor
   modifiedAt: string
 }
 

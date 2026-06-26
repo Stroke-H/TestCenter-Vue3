@@ -137,6 +137,15 @@ const apiTools = ref<ToolDef[]>([
     statusIndicator: 'ready'
   },
   {
+    id: 'short-drama-api-test',
+    name: '短剧类接口测试',
+    description: '聚合短剧项目的登录、剧集、章节与播放链路接口测试',
+    iconName: 'VideoCamera',
+    iconColor: '#0ea5e9',
+    iconBg: 'rgba(14, 165, 233, 0.12)',
+    statusIndicator: 'on-hold'
+  },
+  {
     id: 'delete-account',
     name: '删除账号',
     description: '删除指定账号数据',

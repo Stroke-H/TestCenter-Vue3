@@ -1,8 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, shallowRef } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import * as Icons from '@element-plus/icons-vue'
 import { Refresh, Lock, User } from '@element-plus/icons-vue'
 import { PERMISSION_MODULES, usePermissionStore } from '@/stores/modules/permissions'
+import {
+  ASSISTANT_QUICK_ENTRIES,
+  ASSISTANT_QUICK_ENTRY_LIMIT,
+  getAssistantQuickEntryIds,
+  saveAssistantQuickEntryIds
+} from '@/config/assistantQuickEntries'
 
 defineOptions({ name: 'PermissionManagement' })
 
@@ -11,6 +18,7 @@ const loading = shallowRef(false)
 const selectedUserId = shallowRef('')
 const draftPermissions = shallowRef<Record<string, boolean>>({})
 const savingPermissionKey = shallowRef('')
+const selectedQuickEntryIds = shallowRef<string[]>(getAssistantQuickEntryIds())
 
 const users = computed(() => permissionStore.permissionList)
 const selectedUser = computed(() => {
@@ -23,6 +31,13 @@ const groupedModules = computed(() => {
   }))
 })
 const selectedUserIsPermissionAdmin = computed(() => selectedUser.value?.username?.trim().toLowerCase() === 'minghong')
+const groupedQuickEntries = computed(() => {
+  const groupOrder = ['API 工具', '测试流程工具', 'UI 自动化', '性能测试', '其他拓展']
+  return groupOrder.map((group) => ({
+    group,
+    items: ASSISTANT_QUICK_ENTRIES.filter((entry) => entry.group === group)
+  })).filter((group) => group.items.length)
+})
 
 function syncDraftPermissions() {
   draftPermissions.value = { ...(selectedUser.value?.permissions || {}) }
@@ -104,6 +119,23 @@ async function resetCurrentUserPermissions() {
   }
 }
 
+function toggleQuickEntry(entryId: string) {
+  const exists = selectedQuickEntryIds.value.includes(entryId)
+  if (exists) {
+    selectedQuickEntryIds.value = selectedQuickEntryIds.value.filter((id) => id !== entryId)
+    saveAssistantQuickEntryIds(selectedQuickEntryIds.value)
+    ElMessage.success('已更新智能助手快捷入口')
+    return
+  }
+  if (selectedQuickEntryIds.value.length >= ASSISTANT_QUICK_ENTRY_LIMIT) {
+    ElMessage.warning(`最多选择 ${ASSISTANT_QUICK_ENTRY_LIMIT} 个快捷入口`)
+    return
+  }
+  selectedQuickEntryIds.value = [...selectedQuickEntryIds.value, entryId]
+  saveAssistantQuickEntryIds(selectedQuickEntryIds.value)
+  ElMessage.success('已更新智能助手快捷入口')
+}
+
 onMounted(fetchData)
 </script>
 
@@ -181,6 +213,44 @@ onMounted(fetchData)
                       : draftPermissions[item.key] !== false ? '已开启' : '已关闭'
                   }}</em>
                 </button>
+              </div>
+            </section>
+
+            <section class="permission-group quick-entry-config">
+              <div class="quick-entry-config__header">
+                <div>
+                  <h2>快捷入口配置</h2>
+                  <p>选择展示在智能助手对话框底部的入口，最多选择四个。</p>
+                </div>
+                <span>{{ selectedQuickEntryIds.length }}/{{ ASSISTANT_QUICK_ENTRY_LIMIT }}</span>
+              </div>
+              <div class="quick-entry-groups">
+                <section
+                  v-for="group in groupedQuickEntries"
+                  :key="group.group"
+                  class="quick-entry-group"
+                >
+                  <h3>{{ group.group }}</h3>
+                  <div class="quick-entry-grid">
+                    <button
+                      v-for="entry in group.items"
+                      :key="entry.id"
+                      type="button"
+                      class="quick-entry-item"
+                      :class="{ 'is-selected': selectedQuickEntryIds.includes(entry.id) }"
+                      @click="toggleQuickEntry(entry.id)"
+                    >
+                      <span class="quick-entry-item__icon" :style="{ background: entry.iconBg, color: entry.iconColor }">
+                        <el-icon><component :is="Icons[entry.iconName as keyof typeof Icons]" /></el-icon>
+                      </span>
+                      <span class="quick-entry-item__content">
+                        <strong>{{ entry.name }}</strong>
+                        <span>{{ entry.description }}</span>
+                      </span>
+                      <em>{{ selectedQuickEntryIds.includes(entry.id) ? '已选择' : '可选择' }}</em>
+                    </button>
+                  </div>
+                </section>
               </div>
             </section>
           </div>
@@ -401,6 +471,118 @@ onMounted(fetchData)
   font-weight: 700;
 }
 
+.quick-entry-config {
+  padding-top: 6px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.quick-entry-config__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.quick-entry-config__header p {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.quick-entry-config__header span {
+  min-width: 44px;
+  padding: 5px 9px;
+  color: #2563eb;
+  text-align: center;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.quick-entry-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.quick-entry-group {
+  display: grid;
+  gap: 10px;
+}
+
+.quick-entry-group h3 {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+}
+
+.quick-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.quick-entry-item {
+  min-height: 88px;
+  padding: 11px;
+  text-align: left;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+  gap: 8px 10px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.quick-entry-item:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.08);
+}
+
+.quick-entry-item.is-selected {
+  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
+  border-color: #60a5fa;
+}
+
+.quick-entry-item__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+}
+
+.quick-entry-item__content {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.quick-entry-item__content strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.quick-entry-item__content span {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.quick-entry-item em {
+  grid-column: 2;
+  color: #2563eb;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
 @media (max-width: 1080px) {
   .permission-layout {
     grid-template-columns: 1fr;
@@ -415,7 +597,8 @@ onMounted(fetchData)
   }
 
   .permission-page__header,
-  .permission-editor__top {
+  .permission-editor__top,
+  .quick-entry-config__header {
     align-items: flex-start;
     flex-direction: column;
   }

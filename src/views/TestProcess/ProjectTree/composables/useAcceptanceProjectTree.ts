@@ -5,6 +5,7 @@ import { buildBackendUrl } from '@/utils/runtimeUrl'
 import { retryFetch } from '@/utils/retryFetch'
 import type {
   AcceptanceReportRecord,
+  ProjectMemoColor,
   ProjectMemoItem,
   ProjectMemoRecord,
   ProjectTreeNode,
@@ -184,6 +185,39 @@ const saveProjectMemos = (memos: Record<string, ProjectMemoRecord>) => {
   window.localStorage.setItem(PROJECT_MEMOS_STORAGE_KEY, JSON.stringify(memos))
 }
 
+const mergeProjectMemoRecords = (
+  remoteRecords: Record<string, ProjectMemoRecord>,
+  localRecords: Record<string, ProjectMemoRecord>
+) => {
+  const merged = { ...remoteRecords }
+  const migratedProjectCodes: string[] = []
+
+  Object.entries(localRecords).forEach(([projectCode, localRecord]) => {
+    const remoteRecord = merged[projectCode]
+    if (!remoteRecord) {
+      merged[projectCode] = localRecord
+      migratedProjectCodes.push(projectCode)
+      return
+    }
+
+    const existingIDs = new Set(remoteRecord.items.map((item) => item.id))
+    const existingContents = new Set(remoteRecord.items.map((item) => `${normalizeText(item.content)}::${item.color}`))
+    const missingItems = localRecord.items.filter((item) => (
+      !existingIDs.has(item.id) &&
+      !existingContents.has(`${normalizeText(item.content)}::${item.color}`)
+    ))
+    if (!missingItems.length) return
+
+    merged[projectCode] = {
+      items: [...remoteRecord.items, ...missingItems],
+      updatedAt: new Date().toISOString()
+    }
+    migratedProjectCodes.push(projectCode)
+  })
+
+  return { merged, migratedProjectCodes }
+}
+
 const isTTminsProject = (project: ProjectTreeNode) => {
   const projectText = `${project.projectCode} ${project.projectName}`.toLowerCase()
   return projectText.includes('ttmins')
@@ -227,7 +261,11 @@ const copyA1160MemosToTTminsProjects = (
             content: item.content,
             color: item.color,
             updatedAt: now,
-            history: []
+            history: [],
+            kind: item.kind || (item.color === 'blue' ? 'ai' : 'manual'),
+            configKey: item.configKey,
+            sourceReportId: item.sourceReportId,
+            sourceHash: item.sourceHash
           }))
         ],
         updatedAt: now
@@ -319,7 +357,35 @@ export function useAcceptanceProjectTree() {
     return projectMemos.value[selectedProjectCode.value] || null
   })
 
-  const addProjectMemoItem = (content = '', color: 'green' | 'red' | 'orange' = 'green') => {
+  const persistProjectMemoRecord = async (projectCode: string, record?: ProjectMemoRecord) => {
+    const targetRecord = record || projectMemos.value[projectCode] || {
+      items: [],
+      updatedAt: new Date().toISOString()
+    }
+    try {
+      const response = await retryFetch(buildBackendUrl('/api/acceptance-reports/project-configs'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: authStore.token
+        },
+        body: JSON.stringify({
+          project_code: projectCode,
+          items: targetRecord.items,
+          updated_at: targetRecord.updatedAt
+        })
+      })
+      if (!response.ok) {
+        throw new Error(await response.text())
+      }
+    } catch (error) {
+      console.error('Failed to persist project config record', error)
+      ElMessage.error('项目配置记录同步失败，请稍后重试')
+    }
+  }
+
+  const addProjectMemoItem = (content = '', color: Exclude<ProjectMemoColor, 'blue'> = 'green') => {
     if (!selectedProjectCode.value) return null
 
     const next = { ...projectMemos.value }
@@ -329,7 +395,8 @@ export function useAcceptanceProjectTree() {
       content,
       color,
       updatedAt: new Date().toISOString(),
-      history: []
+      history: [],
+      kind: 'manual'
     }
 
     next[selectedProjectCode.value] = {
@@ -339,6 +406,7 @@ export function useAcceptanceProjectTree() {
 
     projectMemos.value = next
     saveProjectMemos(next)
+    void persistProjectMemoRecord(selectedProjectCode.value, next[selectedProjectCode.value])
     return newItem
   }
 
@@ -352,7 +420,7 @@ export function useAcceptanceProjectTree() {
     const updatedItems = currentRecord.items.map((item) => {
       if (item.id === itemId) {
         const nextContent = typeof updates.content === 'string' ? updates.content : item.content
-        const nextColor = updates.color || item.color
+        const nextColor = item.kind === 'ai' ? 'blue' : updates.color || item.color
         const modifiedAt = new Date().toISOString()
         const contentChanged = nextContent !== item.content || nextColor !== item.color
         return {
@@ -381,6 +449,7 @@ export function useAcceptanceProjectTree() {
 
     projectMemos.value = next
     saveProjectMemos(next)
+    void persistProjectMemoRecord(selectedProjectCode.value, next[selectedProjectCode.value])
   }
 
   const reorderProjectMemoItems = (sourceItemId: string, targetItemId: string) => {
@@ -406,6 +475,7 @@ export function useAcceptanceProjectTree() {
 
     projectMemos.value = next
     saveProjectMemos(next)
+    void persistProjectMemoRecord(selectedProjectCode.value, next[selectedProjectCode.value])
   }
 
   const deleteProjectMemoItem = (itemId: string) => {
@@ -428,6 +498,10 @@ export function useAcceptanceProjectTree() {
 
     projectMemos.value = next
     saveProjectMemos(next)
+    void persistProjectMemoRecord(
+      selectedProjectCode.value,
+      next[selectedProjectCode.value] || { items: [], updatedAt: new Date().toISOString() }
+    )
   }
 
   const pasteProjectMemoItem = (sourceItem: Pick<ProjectMemoItem, 'content' | 'color'>, targetProjectCodes: string[]) => {
@@ -451,7 +525,8 @@ export function useAcceptanceProjectTree() {
         content,
         color: sourceItem.color,
         updatedAt: now,
-        history: []
+        history: [],
+        kind: sourceItem.color === 'blue' ? 'ai' : 'manual'
       }
 
       next[projectCode] = {
@@ -462,7 +537,46 @@ export function useAcceptanceProjectTree() {
 
     projectMemos.value = next
     saveProjectMemos(next)
+    uniqueTargetCodes.forEach((projectCode) => {
+      void persistProjectMemoRecord(projectCode, next[projectCode])
+    })
     return uniqueTargetCodes.length
+  }
+
+  const fetchProjectMemos = async () => {
+    try {
+      const response = await retryFetch(buildBackendUrl('/api/acceptance-reports/project-configs'), {
+        credentials: 'include',
+        headers: {
+          Authorization: authStore.token
+        }
+      })
+      if (!response.ok) {
+        throw new Error(await response.text())
+      }
+
+      const data = await response.json()
+      const remoteRecords: Record<string, ProjectMemoRecord> = {}
+      if (Array.isArray(data)) {
+        data.forEach((record) => {
+          const projectCode = normalizeText(record?.project_code)
+          if (!projectCode) return
+          remoteRecords[projectCode] = {
+            items: Array.isArray(record.items) ? record.items : [],
+            updatedAt: record.updated_at || new Date().toISOString()
+          }
+        })
+      }
+
+      const { merged, migratedProjectCodes } = mergeProjectMemoRecords(remoteRecords, projectMemos.value)
+      projectMemos.value = merged
+      saveProjectMemos(merged)
+      migratedProjectCodes.forEach((projectCode) => {
+        void persistProjectMemoRecord(projectCode, merged[projectCode])
+      })
+    } catch (error) {
+      console.warn('Project config API unavailable, using local memo cache', error)
+    }
   }
 
   const fetchReports = async () => {
@@ -483,6 +597,7 @@ export function useAcceptanceProjectTree() {
 
       const data = await response.json()
       reports.value = Array.isArray(data) ? data : []
+      void fetchProjectMemos()
       const nextProjectTree = buildProjectTree(reports.value)
       const syncedProjectMemos = copyA1160MemosToTTminsProjects(nextProjectTree, projectMemos.value)
       if (syncedProjectMemos !== projectMemos.value) {
@@ -507,6 +622,7 @@ export function useAcceptanceProjectTree() {
     reports,
     projectMemos,
     projectOptions,
+    allProjects: projectTree,
     projectTree: filteredProjectTree,
     selectedProject,
     selectedProjectMemo,

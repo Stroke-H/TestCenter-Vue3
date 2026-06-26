@@ -11,7 +11,8 @@ import {
   View,
   Delete,
   Close,
-  MagicStick
+  MagicStick,
+  Promotion
 } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 
@@ -46,7 +47,8 @@ const monkeyDemoEdges = ref<Array<{ source: string; target: string; event: strin
 const selectedMonkeyDemoNode = ref<MonkeyAtomicNode | null>(null)
 const monkeyViewerLoading = ref(false)
 const monkeyViewerTargetApp = ref('com.company.shortsdrama.wave')
-const selectedAnalyticsId = ref('')
+const selectedAnalyticsDate = ref('')
+const sendingDramaFeishu = ref(false)
 const trendChartRef = ref<HTMLElement>()
 const stackChartRef = ref<HTMLElement>()
 const sankeyChartRef = ref<HTMLElement>()
@@ -86,6 +88,10 @@ interface DramaFailedStat {
   breakdown: FailureBreakdownItem[]
 }
 
+interface DramaAnalyticsSummary extends DramaFailedStat {
+  reportCount: number
+}
+
 interface FailureCategory {
   key: string
   label: string
@@ -112,6 +118,16 @@ const normalizeReportType = (type: string) => {
 
 const isMonkeyAtomicDemoReport = (row: any) => row?.id === MONKEY_ATOMIC_DEMO_REPORT_ID
 const isMonkeyReport = (row: any) => normalizeReportType(row?.type || '') === 'Monkey 测试'
+const isDramaPlaybackReport = (row: any) => {
+  if (!row) return false
+  const runId = String(row.runId || row.id || '')
+  const name = String(row.name || '')
+  const reportUrl = String(row.reportUrl || '')
+  return normalizeReportType(row.type || '') === 'K6 压测' &&
+    (runId.startsWith('DRAMA-') || runId.startsWith('ST-') || name.includes('剧集播放接口测试') || reportUrl.includes('/api/test-runs/'))
+}
+
+const canSendSelectedDramaFeishu = computed(() => isDramaPlaybackReport(selectedReport.value) && !!selectedReport.value?.runId)
 
 const allReportsForDisplay = computed(() => {
   const hasDemoReport = reports.value.some(item => item.id === MONKEY_ATOMIC_DEMO_REPORT_ID)
@@ -189,14 +205,64 @@ const fetchDramaRunAnalytics = async () => {
   return data
 }
 
-const selectedAnalytics = computed<DramaFailedStat | null>(() => {
-  return dramaAnalytics.value.find(item => item.id === selectedAnalyticsId.value) ||
-    dramaAnalytics.value[dramaAnalytics.value.length - 1] ||
-    null
+const getAnalyticsDateKey = (item: Pick<DramaFailedStat, 'createdAt'>) => {
+  return item.createdAt?.slice(0, 10) || '未知日期'
+}
+
+const aggregateBreakdown = (items: DramaFailedStat[]) => {
+  return failureCategories.map(category => ({
+    key: category.key,
+    label: category.label,
+    color: category.color,
+    value: items.reduce((sum, item) => {
+      return sum + (item.breakdown.find(part => part.key === category.key)?.value || 0)
+    }, 0)
+  }))
+}
+
+const createAnalyticsSummary = (
+  id: string,
+  name: string,
+  createdAt: string,
+  items: DramaFailedStat[]
+): DramaAnalyticsSummary => ({
+  id,
+  name,
+  createdAt,
+  reportUrl: '',
+  failedChecks: items.reduce((sum, item) => sum + item.failedChecks, 0),
+  failedRequests: items.reduce((sum, item) => sum + item.failedRequests, 0),
+  breakdown: aggregateBreakdown(items),
+  reportCount: items.length
+})
+
+const dailyAnalytics = computed<DramaAnalyticsSummary[]>(() => {
+  const grouped = new Map<string, DramaFailedStat[]>()
+  dramaAnalytics.value.forEach(item => {
+    const dateKey = getAnalyticsDateKey(item)
+    const nextItems = grouped.get(dateKey) || []
+    nextItems.push(item)
+    grouped.set(dateKey, nextItems)
+  })
+
+  return Array.from(grouped.entries())
+    .map(([dateKey, items]) => createAnalyticsSummary(dateKey, dateKey, dateKey, items))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+})
+
+const allAnalyticsSummary = computed<DramaAnalyticsSummary | null>(() => {
+  if (dramaAnalytics.value.length === 0) return null
+  const latestCreatedAt = dramaAnalytics.value[dramaAnalytics.value.length - 1]?.createdAt || ''
+  return createAnalyticsSummary('all', '全部数据集合', latestCreatedAt, dramaAnalytics.value)
+})
+
+const selectedAnalytics = computed<DramaAnalyticsSummary | null>(() => {
+  if (!selectedAnalyticsDate.value) return allAnalyticsSummary.value
+  return dailyAnalytics.value.find(item => item.id === selectedAnalyticsDate.value) || allAnalyticsSummary.value
 })
 
 const maxFailedChecks = computed(() => {
-  return Math.max(1, ...dramaAnalytics.value.map(item => item.failedChecks))
+  return Math.max(1, ...dailyAnalytics.value.map(item => item.failedChecks))
 })
 
 const getBreakdownTotal = (item: DramaFailedStat | null) => {
@@ -211,6 +277,12 @@ const estimateSankeyLabelWidth = (label: string) => {
 const selectedSankeyItems = computed<FailureBreakdownItem[]>(() => {
   if (!selectedAnalytics.value) return []
   return selectedAnalytics.value.breakdown.filter(item => item.value > 0)
+})
+
+const selectedAnalyticsRangeLabel = computed(() => {
+  if (!selectedAnalytics.value) return '-'
+  if (!selectedAnalyticsDate.value) return `全部数据 · ${selectedAnalytics.value.reportCount} 份报告`
+  return `${selectedAnalytics.value.name} · ${selectedAnalytics.value.reportCount} 份报告`
 })
 
 const sankeyLabelLayout = computed(() => {
@@ -249,11 +321,7 @@ const loadDramaAnalytics = async () => {
     }))
 
     dramaAnalytics.value = stats.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
-    const peak = dramaAnalytics.value.reduce<DramaFailedStat | null>((current, item) => {
-      if (!current || item.failedChecks >= current.failedChecks) return item
-      return current
-    }, null)
-    selectedAnalyticsId.value = peak?.id || dramaAnalytics.value[dramaAnalytics.value.length - 1]?.id || ''
+    selectedAnalyticsDate.value = ''
     shouldRenderCharts = true
   } catch (error: any) {
     analyticsError.value = error?.message || 'Failed Checks 视图加载失败'
@@ -266,12 +334,12 @@ const loadDramaAnalytics = async () => {
   }
 }
 
-const getReportShortLabel = (item: DramaFailedStat) => {
-  return item.createdAt?.slice(5, 16) || item.id
+const getDailyAnalyticsLabel = (item: DramaAnalyticsSummary) => {
+  return item.createdAt?.slice(5, 10) || item.id
 }
 
 const getTrendOption = (): EChartsOption => {
-  const labels = dramaAnalytics.value.map(getReportShortLabel)
+  const labels = dailyAnalytics.value.map(getDailyAnalyticsLabel)
   return {
     color: ['#2563eb'],
     tooltip: {
@@ -281,9 +349,9 @@ const getTrendOption = (): EChartsOption => {
       textStyle: { color: '#fff' },
       formatter: (params: any) => {
         const point = Array.isArray(params) ? params[0] : params
-        const item = dramaAnalytics.value[point.dataIndex]
+        const item = dailyAnalytics.value[point.dataIndex]
         if (!item) return ''
-        return `${item.name}<br/>Failed Checks: <b>${item.failedChecks}</b><br/>Failed Requests: ${item.failedRequests}`
+        return `${item.name}<br/>报告数: ${item.reportCount}<br/>Failed Checks: <b>${item.failedChecks}</b><br/>Failed Requests: ${item.failedRequests}`
       }
     },
     grid: { left: 44, right: 24, top: 38, bottom: 44 },
@@ -305,7 +373,7 @@ const getTrendOption = (): EChartsOption => {
       {
         name: 'Failed Checks',
         type: 'line',
-        data: dramaAnalytics.value.map(item => item.failedChecks),
+        data: dailyAnalytics.value.map(item => item.failedChecks),
         smooth: true,
         symbol: 'circle',
         symbolSize: 10,
@@ -342,7 +410,7 @@ const getStackOption = (): EChartsOption => {
     grid: { left: 44, right: 20, top: 54, bottom: 44 },
     xAxis: {
       type: 'category',
-      data: dramaAnalytics.value.map(getReportShortLabel),
+      data: dailyAnalytics.value.map(getDailyAnalyticsLabel),
       axisLine: { lineStyle: { color: '#cbd5e1' } },
       axisTick: { show: false },
       axisLabel: { color: '#64748b', fontSize: 11 }
@@ -359,7 +427,7 @@ const getStackOption = (): EChartsOption => {
       stack: 'failure',
       barMaxWidth: 34,
       emphasis: { focus: 'series' },
-      data: dramaAnalytics.value.map(item => item.breakdown.find(part => part.key === category.key)?.value || 0)
+      data: dailyAnalytics.value.map(item => item.breakdown.find(part => part.key === category.key)?.value || 0)
     }))
   }
 }
@@ -418,7 +486,7 @@ const getSankeyOption = (): EChartsOption => {
 }
 
 const renderAnalyticsCharts = async () => {
-  if (!showDramaAnalytics.value || analyticsLoading.value || dramaAnalytics.value.length === 0) return
+  if (!showDramaAnalytics.value || analyticsLoading.value || dailyAnalytics.value.length === 0) return
   await nextTick()
 
   if (trendChartRef.value) {
@@ -430,8 +498,8 @@ const renderAnalyticsCharts = async () => {
     trendChart.setOption(getTrendOption(), true)
     trendChart.off('click')
     trendChart.on('click', (params: any) => {
-      const item = dramaAnalytics.value[params.dataIndex]
-      if (item) selectedAnalyticsId.value = item.id
+      const item = dailyAnalytics.value[params.dataIndex]
+      if (item) selectedAnalyticsDate.value = item.id
     })
   }
 
@@ -444,8 +512,8 @@ const renderAnalyticsCharts = async () => {
     stackChart.setOption(getStackOption(), true)
     stackChart.off('click')
     stackChart.on('click', (params: any) => {
-      const item = dramaAnalytics.value[params.dataIndex]
-      if (item) selectedAnalyticsId.value = item.id
+      const item = dailyAnalytics.value[params.dataIndex]
+      if (item) selectedAnalyticsDate.value = item.id
     })
   }
 
@@ -474,6 +542,10 @@ const resizeAnalyticsCharts = () => {
   trendChart?.resize()
   stackChart?.resize()
   sankeyChart?.resize()
+}
+
+const clearAnalyticsDateSelection = () => {
+  selectedAnalyticsDate.value = ''
 }
 
 // 根据不同状态返回徽章对应的 Element-Plus type
@@ -560,6 +632,29 @@ const viewReport = (row: any) => {
   }
 }
 
+const sendSelectedDramaReportToFeishu = async () => {
+  if (!canSendSelectedDramaFeishu.value || sendingDramaFeishu.value) return
+  sendingDramaFeishu.value = true
+  try {
+    const runId = encodeURIComponent(String(selectedReport.value.runId))
+    const response = await retryFetch(buildBackendUrl(`/api/test-runs/${runId}/send-feishu`), {
+      method: 'POST',
+      headers: {
+        Authorization: authStore.token || ''
+      }
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(payload?.error || '发送到飞书失败')
+    }
+    ElMessage.success(payload?.message || '已发送到飞书')
+  } catch (error: any) {
+    ElMessage.error(error?.message || '发送到飞书失败')
+  } finally {
+    sendingDramaFeishu.value = false
+  }
+}
+
 // 清分记录确认
 const confirmClear = () => {
   ElMessageBox.confirm(
@@ -588,7 +683,7 @@ onBeforeUnmount(() => {
   disposeAnalyticsCharts()
 })
 
-watch(selectedAnalyticsId, () => {
+watch(selectedAnalyticsDate, () => {
   renderSankeyChart()
 })
 
@@ -682,8 +777,8 @@ watch(activeFilter, async () => {
               <strong>{{ getBreakdownTotal(selectedAnalytics) }}</strong>
             </div>
             <div class="summary-card">
-              <span class="summary-label">桑基图选中报告</span>
-              <strong>{{ selectedAnalytics ? getReportShortLabel(selectedAnalytics) : '-' }}</strong>
+              <span class="summary-label">失败流向范围</span>
+              <strong>{{ selectedAnalyticsRangeLabel }}</strong>
             </div>
           </div>
 
@@ -691,13 +786,13 @@ watch(activeFilter, async () => {
             <div class="trend-panel">
               <div class="panel-title">
                 <span>Failed Checks 数值变化</span>
-                <small>点击峰值或任意节点查看失败来源</small>
+                <small>按天聚合，点击节点查看当天失败来源</small>
               </div>
               <div ref="trendChartRef" class="echart-panel echart-panel--trend" />
 
               <div class="panel-title panel-title--stack">
                 <span>失败类型构成</span>
-                <small>堆叠柱用于比较每次测试的失败来源</small>
+                <small>堆叠柱用于比较每天的失败来源</small>
               </div>
               <div ref="stackChartRef" class="echart-panel echart-panel--stack" />
             </div>
@@ -705,12 +800,22 @@ watch(activeFilter, async () => {
             <div class="sankey-panel">
               <div class="panel-title">
                 <span>失败来源流向</span>
-                <small>{{ selectedAnalytics?.name || '选择一份报告' }}</small>
+                <small>{{ selectedAnalyticsRangeLabel }}</small>
+                <el-button
+                  v-if="selectedAnalyticsDate"
+                  size="small"
+                  text
+                  bg
+                  class="analytics-reset-btn"
+                  @click="clearAnalyticsDateSelection"
+                >
+                  查看全部
+                </el-button>
               </div>
 
               <div v-if="selectedSankeyItems.length === 0" class="sankey-empty">
                 <strong>没有失败流向</strong>
-                <span>当前报告没有可拆分的异常分类计数。</span>
+                <span>当前范围没有可拆分的异常分类计数。</span>
               </div>
 
               <div v-else ref="sankeyChartRef" class="echart-panel echart-panel--sankey" />
@@ -820,6 +925,16 @@ watch(activeFilter, async () => {
       :show-close="false"
     >
       <div class="report-viewer" :class="{ 'report-viewer--with-analysis': Boolean(selectedReport?.analysisResult) }">
+        <el-button
+          v-if="canSendSelectedDramaFeishu"
+          class="report-feishu-button"
+          type="primary"
+          :icon="Promotion"
+          :loading="sendingDramaFeishu"
+          @click="sendSelectedDramaReportToFeishu"
+        >
+          发送到飞书
+        </el-button>
         <button class="report-close-button" type="button" aria-label="关闭报告" @click="dialogVisible = false">
           <el-icon><Close /></el-icon>
         </button>
@@ -1183,6 +1298,17 @@ watch(activeFilter, async () => {
   font-size: 18px;
 }
 
+.report-feishu-button {
+  position: fixed;
+  top: 14px;
+  right: 62px;
+  z-index: 3001;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(37, 99, 235, 0.18);
+}
+
 .iframe-container {
   flex: 1 1 auto;
   min-height: 0;
@@ -1516,6 +1642,12 @@ watch(activeFilter, async () => {
 .panel-title small {
   color: #64748b;
   font-size: 12px;
+}
+
+.analytics-reset-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-weight: 700;
 }
 
 .panel-title--stack {

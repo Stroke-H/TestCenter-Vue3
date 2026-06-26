@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,7 +27,8 @@ func RunLighthouseHandler(c *gin.Context) {
 
 	targetURL := c.Query("url")
 	if targetURL == "" {
-		ws.WriteMessage(websocket.TextMessage, []byte("Error: No URL provided"))
+		ws.WriteMessage(websocket.TextMessage, []byte("[ERROR] No URL provided"))
+		ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:no url"))
 		return
 	}
 
@@ -73,7 +75,7 @@ func RunLighthouseHandler(c *gin.Context) {
 
 	// Execute Lighthouse command with HTML and JSON outputs
 	// Lighthouse will append '.report.html' and '.report.json' to the output-path
-	cmd := exec.Command("lighthouse",
+	cmd := exec.Command(resolveLighthouseCommand(),
 		targetURL,
 		"--output", "html",
 		"--output", "json",
@@ -87,6 +89,8 @@ func RunLighthouseHandler(c *gin.Context) {
 
 	if err := cmd.Start(); err != nil {
 		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\n[ERROR] 启动 Lighthouse 失败: %v", err)))
+		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("[DEBUG] 当前后端 PATH: %s", os.Getenv("PATH"))))
+		ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:lighthouse start failed"))
 		return
 	}
 
@@ -105,13 +109,35 @@ func RunLighthouseHandler(c *gin.Context) {
 
 	if err := cmd.Wait(); err != nil {
 		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("\n[WARN] Lighthouse 执行过程中出现警告或错误: %v", err)))
+		ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:lighthouse command failed"))
+		return
 	}
 
 	ws.WriteMessage(websocket.TextMessage, []byte("\n--------------------------------------------------"))
 	ws.WriteMessage(websocket.TextMessage, []byte("[SUCCESS] Lighthouse 分析任务执行完成。"))
+	ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:success"))
 
 	// Notification for frontend with the dynamic filename
 	// Lighthouse adds .report.html
 	finalHtmlReport := fmt.Sprintf("%s.report.html", reportBaseName)
 	ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("REPORT_READY:%s", finalHtmlReport)))
+}
+
+func resolveLighthouseCommand() string {
+	if commandPath, err := exec.LookPath("lighthouse"); err == nil {
+		return commandPath
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "lighthouse"
+	}
+
+	matches, err := filepath.Glob(filepath.Join(homeDir, ".nvm", "versions", "node", "v*", "bin", "lighthouse"))
+	if err != nil || len(matches) == 0 {
+		return "lighthouse"
+	}
+
+	sort.Strings(matches)
+	return matches[len(matches)-1]
 }

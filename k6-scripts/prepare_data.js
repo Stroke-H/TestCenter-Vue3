@@ -6,6 +6,7 @@ const EMAIL = process.env.EMAIL || "test_super_001@shortswave.com";
 const PASSWORD = process.env.PASSWORD || "test123456";
 const LOGIN_URL = process.env.LOGIN_URL || "http://35.225.224.94:8080/api/pwd_login";
 const DRAMA_LIST_URL = process.env.DRAMA_LIST_URL || "http://35.225.224.94:8080/api/management/drama/all_online_ids";
+const APP_GROUP_LIST_URL = process.env.APP_GROUP_LIST_URL || "https://admin.shortswave.com/api/management/app/group/list";
 const FETCH_RETRY_ATTEMPTS = Number(process.env.PREPARE_FETCH_RETRY_ATTEMPTS || 3);
 const DRAMA_META_PAGE_SIZE = Number(process.env.DRAMA_META_PAGE_SIZE || 200);
 
@@ -161,7 +162,9 @@ async function main() {
               int_id: item?.int_id,
               title: item?.title,
               cn_title: item?.cn_title,
-              cn_name: item?.cn_name
+              cn_name: item?.cn_name,
+              unlock_type: item?.unlock_type,
+              app_groups: item?.app_groups
             });
             return id;
           }
@@ -192,6 +195,13 @@ async function main() {
   console.log(`✅ 已补全剧集标题元信息: ${enrichedCount}/${dramaIds.length}`);
 
   // -------------------------------------------------------------
+  // Step 2.6: 拉取 App Group 列表，供 unlock_type / 投放组规则校验复用
+  // -------------------------------------------------------------
+  console.log(`\n🧩 Step 2.6: 请求 App Group 列表 [${APP_GROUP_LIST_URL}]`);
+  const appGroups = await fetchAppGroups(xToken);
+  console.log(`✅ App Group 数据准备完成: ${appGroups.length} 条`);
+
+  // -------------------------------------------------------------
   // Step 3: 格式化包裹并持久化落盘
   // -------------------------------------------------------------
   console.log(`\n💾 Step 3: 持久化运行数据到本地 JSON 文件`);
@@ -207,7 +217,8 @@ async function main() {
     // 将 API 基础路径透传给 K6 脚本，避免硬编码
     apiBase,
     dramaList: dramaIds,
-    dramaMeta
+    dramaMeta,
+    appGroups
   };
 
   fs.writeFileSync(OUTPUT_FILE, JSON.stringify(targetOutput, null, 2), 'utf8');
@@ -260,7 +271,9 @@ function buildDramaMetaFromRecord(headers, row) {
     int_id: firstRecordValue(record, ['int_id', 'intId']),
     title: firstRecordValue(record, ['title', 'name']),
     cn_title: firstRecordValue(record, ['cn_title', 'cnTitle', 'cn_name', 'cnName', '中文标题', '中文名']),
-    cn_name: firstRecordValue(record, ['cn_name', 'cnName', 'cn_title', 'cnTitle', '中文名', '中文标题'])
+    cn_name: firstRecordValue(record, ['cn_name', 'cnName', 'cn_title', 'cnTitle', '中文名', '中文标题']),
+    unlock_type: firstRecordValue(record, ['unlock_type', 'unlockType']),
+    app_groups: firstRecordValue(record, ['app_groups', 'appGroups', 'app_group_ids', 'appGroupIds'])
   });
 }
 
@@ -279,8 +292,27 @@ function normalizeDramaMeta(meta) {
     int_id: String(meta.int_id ?? meta.intId ?? '').trim(),
     title: String(meta.title ?? meta.name ?? '').trim(),
     cn_title: cnTitle,
-    cn_name: String(meta.cn_name ?? meta.cnName ?? cnTitle).trim()
+    cn_name: String(meta.cn_name ?? meta.cnName ?? cnTitle).trim(),
+    unlock_type: String(meta.unlock_type ?? meta.unlockType ?? '').trim(),
+    app_groups: normalizeAppGroupsValue(meta.app_groups ?? meta.appGroups ?? meta.app_group_ids ?? meta.appGroupIds)
   };
+}
+
+function normalizeAppGroupsValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item?._id ?? item?.id ?? item?.group_id ?? item?.groupId ?? item?.value ?? item?.key ?? item).trim()).filter(Boolean);
+  }
+  if (value && typeof value === 'object') {
+    return [String(value._id ?? value.id ?? value.group_id ?? value.groupId ?? value.value ?? value.key ?? '').trim()].filter(Boolean);
+  }
+  const text = String(value ?? '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    return normalizeAppGroupsValue(parsed);
+  } catch (error) {
+    return text.split(/[,\s|;]+/).map(item => item.trim()).filter(Boolean);
+  }
 }
 
 async function fetchDramaMetadata(apiBase, xToken) {
@@ -340,10 +372,58 @@ function mergeDramaMeta(primary, secondary) {
     int_id: left.int_id || right.int_id,
     title: left.title || right.title,
     cn_title: left.cn_title || right.cn_title,
-    cn_name: left.cn_name || right.cn_name
+    cn_name: left.cn_name || right.cn_name,
+    unlock_type: left.unlock_type || right.unlock_type,
+    app_groups: left.app_groups.length ? left.app_groups : right.app_groups
   });
 }
 
 function hasReadableDramaMeta(meta) {
   return Boolean(String(meta?.title || '').trim() || String(meta?.cn_title || meta?.cn_name || '').trim());
+}
+
+async function fetchAppGroups(xToken) {
+  if (!xToken) return [];
+  try {
+    const response = await fetchWithRetry(APP_GROUP_LIST_URL, {
+      method: 'GET',
+      headers: {
+        'Cookie': `x-token=${xToken}`,
+        'Connection': 'close'
+      }
+    }, 'App Group 列表接口');
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.warn(`⚠️ App Group 列表接口返回 HTTP ${response.status}，将继续执行主检查。响应: ${errorText}`);
+      return [];
+    }
+
+    const payload = await response.json();
+    const list = extractListPayload(payload);
+    return list.map(normalizeAppGroup).filter(group => group.id || group.name);
+  } catch (error) {
+    console.warn(`⚠️ App Group 列表接口请求异常，将继续执行主检查: ${formatFetchError(error)}`);
+    return [];
+  }
+}
+
+function extractListPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.data?.data)) return payload.data.data;
+  if (Array.isArray(payload?.data?.list)) return payload.data.list;
+  if (Array.isArray(payload?.data?.items)) return payload.data.items;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.list)) return payload.list;
+  if (Array.isArray(payload?.rows)) return payload.rows;
+  return [];
+}
+
+function normalizeAppGroup(item) {
+  return {
+    id: String(item?._id ?? item?.id ?? item?.group_id ?? item?.groupId ?? item?.value ?? item?.key ?? '').trim(),
+    name: String(item?.name ?? item?.group_name ?? item?.groupName ?? item?.title ?? item?.label ?? '').trim(),
+    raw: item
+  };
 }

@@ -97,6 +97,7 @@ func CreateDramaTestRunArchive(rootDir string, job *dramaRunJob, reportFile stri
 	if err := os.WriteFile(artifactPath, content, 0644); err != nil {
 		return TestRunArchive{}, err
 	}
+	copyDramaRunDiagnosticArtifacts(filepath.Dir(sourcePath), artifactDir)
 	if err := ensureLogsFile(filepath.Join(runDir, "logs.ndjson"), logs); err != nil {
 		return TestRunArchive{}, err
 	}
@@ -181,6 +182,7 @@ func CreateScheduledDramaArchive(rootDir string, runID string, task ScheduledTas
 	if err := os.WriteFile(filepath.Join(artifactDir, "report.html"), content, 0644); err != nil {
 		return TestRunArchive{}, err
 	}
+	copyDramaRunDiagnosticArtifacts(filepath.Dir(sourcePath), artifactDir)
 
 	metrics := parseDramaMetricsFromHTML(string(content))
 	archive := TestRunArchive{
@@ -210,6 +212,20 @@ func CreateScheduledDramaArchive(rootDir string, runID string, task ScheduledTas
 		return TestRunArchive{}, err
 	}
 	return archive, nil
+}
+
+func copyDramaRunDiagnosticArtifacts(reportDir string, artifactDir string) {
+	for _, fileName := range []string{
+		"drama_failure_summary.json",
+		"drama_retry_result.json",
+		"drama_retry_candidates.json",
+	} {
+		content, err := os.ReadFile(filepath.Join(reportDir, fileName))
+		if err != nil {
+			continue
+		}
+		_ = os.WriteFile(filepath.Join(artifactDir, fileName), content, 0644)
+	}
 }
 
 func ListDramaRunAnalyticsHandler(c *gin.Context) {

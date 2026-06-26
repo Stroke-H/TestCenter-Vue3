@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, onBeforeUnmount, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref, shallowRef, onBeforeUnmount, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, CollectionTag, Refresh, Search, Plus, Delete, Edit, Check, Close, DocumentCopy } from '@element-plus/icons-vue'
+import { CollectionTag, Refresh, Search, Plus, Delete, Edit, Check, Close, DocumentCopy } from '@element-plus/icons-vue'
 import ProjectTreeBoard from './components/ProjectTreeBoard.vue'
+import ProjectConfigRecordsDialog from './components/ProjectConfigRecordsDialog.vue'
 import { useAcceptanceProjectTree } from './composables/useAcceptanceProjectTree'
-import type { ProjectMemoItem } from './types'
+import type { ProjectMemoColor, ProjectMemoItem } from './types'
 import {
   ACCEPTANCE_REPORTS_CHANGED_EVENT,
   isAcceptanceReportsChangedStorageKey
@@ -13,12 +13,13 @@ import {
 
 defineOptions({ name: 'ProjectTree' })
 
-const router = useRouter()
 const {
   keyword,
   selectedProjectCode,
   loading,
   projectOptions,
+  allProjects,
+  projectMemos,
   projectTree,
   selectedProject,
   selectedProjectMemo,
@@ -51,10 +52,16 @@ const handleStorageChange = (event: StorageEvent) => {
   }
 }
 
+const scheduleAIConfigRefresh = () => {
+  refreshProjectTree()
+  window.setTimeout(refreshProjectTree, 4000)
+  window.setTimeout(refreshProjectTree, 12000)
+}
+
 // Keep track of editing notes: record of itemId -> draft state
 interface NoteDraft {
   content: string
-  color: 'green' | 'red' | 'orange'
+  color: ProjectMemoColor
 }
 const editingNotes = ref<Record<string, NoteDraft>>({})
 const draggingNoteId = ref('')
@@ -62,6 +69,7 @@ const dragOverNoteId = ref('')
 const pasteDialogVisible = ref(false)
 const pasteSourceNote = ref<ProjectMemoItem | null>(null)
 const pasteTargetProjectCodes = ref<string[]>([])
+const configRecordsDialogVisible = shallowRef(false)
 
 const pasteTargetProjectOptions = computed(() => {
   return projectOptions.value.filter((project) => project.value !== selectedProjectCode.value)
@@ -70,7 +78,7 @@ const pasteTargetProjectOptions = computed(() => {
 const startEditNote = (note: ProjectMemoItem) => {
   editingNotes.value[note.id] = {
     content: note.content,
-    color: note.color
+    color: note.kind === 'ai' ? 'blue' : note.color
   }
 }
 
@@ -118,7 +126,8 @@ const handleAddNewNote = (color: 'green' | 'red' | 'orange' = 'green') => {
 
 const setDraftColor = (noteId: string, color: 'green' | 'red' | 'orange') => {
   const draft = editingNotes.value[noteId]
-  if (draft) {
+  const note = selectedProjectMemo.value?.items.find((item) => item.id === noteId)
+  if (draft && note?.kind !== 'ai') {
     draft.color = color
   }
 }
@@ -200,14 +209,14 @@ const confirmPasteNote = () => {
 
 onMounted(() => {
   fetchReports()
-  window.addEventListener(ACCEPTANCE_REPORTS_CHANGED_EVENT, refreshProjectTree)
+  window.addEventListener(ACCEPTANCE_REPORTS_CHANGED_EVENT, scheduleAIConfigRefresh)
   window.addEventListener('storage', handleStorageChange)
   window.addEventListener('focus', refreshProjectTree)
   document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener(ACCEPTANCE_REPORTS_CHANGED_EVENT, refreshProjectTree)
+  window.removeEventListener(ACCEPTANCE_REPORTS_CHANGED_EVENT, scheduleAIConfigRefresh)
   window.removeEventListener('storage', handleStorageChange)
   window.removeEventListener('focus', refreshProjectTree)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
@@ -217,8 +226,13 @@ onBeforeUnmount(() => {
 <template>
   <div class="project-tree-page">
     <div class="project-tree-page__header">
-      <el-button text :icon="ArrowLeft" @click="router.push('/dashboard')">
-        返回仪表盘
+      <el-button
+        type="primary"
+        plain
+        :icon="CollectionTag"
+        @click="configRecordsDialogVisible = true"
+      >
+        全部项目配置
       </el-button>
 
       <div class="project-tree-page__actions">
@@ -320,7 +334,7 @@ onBeforeUnmount(() => {
           <!-- Editing state -->
           <template v-if="editingNotes[note.id]">
             <div class="memo-sticky-note__edit">
-              <div class="memo-sticky-note__squares">
+              <div v-if="note.kind !== 'ai'" class="memo-sticky-note__squares">
                 <button
                   type="button"
                   class="color-square color-square--green"
@@ -422,6 +436,12 @@ onBeforeUnmount(() => {
     <ProjectTreeBoard
       :projects="projectTree"
       :loading="loading"
+    />
+
+    <ProjectConfigRecordsDialog
+      v-model="configRecordsDialogVisible"
+      :projects="allProjects"
+      :project-memos="projectMemos"
     />
 
     <el-dialog
@@ -597,6 +617,11 @@ onBeforeUnmount(() => {
   border-left: 6px solid #ef4444;
 }
 
+.memo-sticky-note--blue {
+  background: #eff6ff;
+  border-left: 6px solid #2563eb;
+}
+
 /* View Mode Styling - Compact Row */
 .memo-sticky-note__view {
   display: flex;
@@ -635,6 +660,9 @@ onBeforeUnmount(() => {
 .memo-sticky-note--red .memo-sticky-note__text {
   color: #991b1b;
 }
+.memo-sticky-note--blue .memo-sticky-note__text {
+  color: #1e40af;
+}
 
 .memo-sticky-note__time {
   font-size: 10px;
@@ -652,6 +680,10 @@ onBeforeUnmount(() => {
 }
 .memo-sticky-note--red .memo-sticky-note__time {
   color: #b91c1c;
+  opacity: 0.7;
+}
+.memo-sticky-note--blue .memo-sticky-note__time {
+  color: #1d4ed8;
   opacity: 0.7;
 }
 
@@ -766,6 +798,13 @@ onBeforeUnmount(() => {
 }
 .memo-sticky-note--red .memo-sticky-note__input :deep(.el-input__inner::placeholder) {
   color: #fca5a5;
+}
+
+.memo-sticky-note--blue .memo-sticky-note__input :deep(.el-input__inner) {
+  color: #1e40af;
+}
+.memo-sticky-note--blue .memo-sticky-note__input :deep(.el-input__inner::placeholder) {
+  color: #93c5fd;
 }
 
 .memo-sticky-note__edit-actions {

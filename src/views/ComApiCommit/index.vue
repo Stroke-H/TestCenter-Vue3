@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { useDramaRunStore, usePermissionStore, useReportStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -16,7 +16,14 @@ import {
   Close,
   VideoPlay,
   VideoPause,
-  Delete
+  Delete,
+  Tickets,
+  Document as DocumentIcon,
+  Odometer,
+  Cpu,
+  Check,
+  Edit,
+  ArrowRight
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -27,24 +34,623 @@ const dramaRunStore = useDramaRunStore()
 const permissionStore = usePermissionStore()
 
 // 从路由参数获取工具信息
-const toolName = ref((route.query.name as string) || '测试剧集是否重复')
+const toolTypeName = (route.query.name as string) || '测试剧集是否重复'
+const toolName = ref(toolTypeName)
 const toolDesc = ref((route.query.desc as string) || '检测剧集数据中是否存在重复的drama_intid')
 const projectName = ref('ShortsWave')
 
 // 对于 Web前端压测，重置 projectName 为空，方便输入 URL
-if (toolName.value === 'Web前端压测') {
+if (toolTypeName === 'Web前端压测') {
   projectName.value = ''
 }
 
 // 是否是剧集播放自检工具
-const isDramaCheck = toolName.value.includes('播放')
+const isDramaCheck = toolTypeName.includes('播放')
 // 是否是Web前端压测
-const isWebFrontendStressTest = toolName.value === 'WebFrontend性能' || toolName.value === 'Web前端压测'
+const isWebFrontendStressTest = toolTypeName === 'WebFrontend性能' || toolTypeName === 'Web前端压测'
 // 是否是 Monkey 稳定性测试 demo
-const isMonkeyTest = toolName.value === 'Monkey测试'
+const isMonkeyTest = toolTypeName === 'Monkey测试'
 // 是否是删除账号工具
-const isDeleteAccount = toolName.value === '删除账号'
+const isDeleteAccount = toolTypeName === '删除账号'
 const deleteAccountParam = ref('')
+
+// ===== 短剧类接口测试专属状态 =====
+const isShortDramaApiTest = computed(() => toolTypeName === '短剧类接口测试')
+const shortDramaActiveTab = ref('pipeline')
+// ===== 通用接口测试：类型定义与状态管理 =====
+// ApiInterface 描述一个可测试的 HTTP 接口条目
+interface ApiInterface {
+  id: number          // 唯一标识
+  name: string        // 接口名称（用户自定义）
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'  // HTTP 方法
+  url: string         // 请求接口路径
+  headers: string     // JSON 格式的请求头
+  body: string        // JSON 格式的请求体
+  status: 'pending' | 'running' | 'success' | 'failed'  // 执行状态
+  code?: number       // HTTP 响应状态码
+  latency?: number    // 响应耗时（毫秒）
+  errorMsg?: string   // 错误信息
+  requestData?: any   // 发送的请求数据（用于 Payload 展示）
+  responseData?: any  // 接收的响应数据（用于 Payload 展示）
+}
+
+interface ApiTestSuite {
+  id: number
+  name: string
+  interfaces: ApiInterface[]
+  isExpanded: boolean
+  isNameEditing: boolean
+}
+
+type ApiEnvironment = 'test' | 'prod' | 'gray'
+type ApiJsonField = 'headers' | 'body'
+
+const SHORT_DRAMA_API_CONFIG_STORAGE_KEY = 'testcenter.shortDramaApi.interfaces.v1'
+
+// 自增 ID 计数器，确保每个接口条目有唯一标识
+let apiInterfaceIdCounter = 1
+let apiTestSuiteIdCounter = 1
+
+const shortDramaAnonymousLoginHeaders = {
+  contype: '2',
+  afid: '1732255304101-8624506',
+  'advertising-id': '1337CC3C-3A4F-455B-A138-87B234B2D9F4',
+  'User-Agent': 'ShortsWave/2.48.0.2507 (iOS; iPhone16,1; Version 26.2 (Build 23C55)) CFNetwork/1.0 Darwin/25.2.0',
+  attribution_type: 'af',
+  os: '2',
+  os_ver: '26.0',
+  build: '10',
+  lang: 'us',
+  'mobile-brand': 'apple',
+  model: 'iPhone16,1',
+  idfv: 'BF14B9E4-D63E-4882-A5A5-57B710A63D64',
+  attribution_id: '',
+  'device-uuid': '127ACC18-6EB4-4101-928E-43FD1D05617D+3996E782AA3D2A1D5477EA8ABA7539F5',
+  carrier: '',
+  app: 'com.company.shortsdrama.wave',
+  'Content-Type': 'application/json',
+  width: '390',
+  timezone: 'America/Los_Angeles',
+  height: '844',
+  region: 'us',
+  'X-SESSION-TOKEN': ''
+}
+
+// 创建一个空白接口条目的工厂函数
+const createEmptyInterface = (): ApiInterface => ({
+  id: apiInterfaceIdCounter++,
+  name: `接口 ${apiInterfaceIdCounter - 1}`,
+  method: 'GET',
+  url: '',
+  headers: '',
+  body: '',
+  status: 'pending'
+})
+
+// 创建短剧匿名登录接口，用于获取 session_token
+const createShortDramaAnonymousLoginInterface = (): ApiInterface => ({
+  id: apiInterfaceIdCounter++,
+  name: '匿名登录获取 session_token',
+  method: 'POST',
+  url: '/login/anonymous',
+  headers: JSON.stringify(shortDramaAnonymousLoginHeaders, null, 2),
+  body: '{}',
+  status: 'pending'
+})
+
+const createApiTestSuite = (name: string, interfaces: ApiInterface[], isNameEditing = false, isExpanded = true): ApiTestSuite => ({
+  id: apiTestSuiteIdCounter++,
+  name,
+  interfaces,
+  isExpanded,
+  isNameEditing
+})
+
+const normalizeInterfacePath = (value: string) => {
+  const rawValue = value.trim()
+  if (!rawValue) return ''
+
+  try {
+    const parsed = new URL(rawValue)
+    return `${parsed.pathname}${parsed.search}${parsed.hash}` || '/'
+  } catch {
+    const withoutDomain = rawValue.replace(/^https?:\/\/[^/]+/i, '')
+    return withoutDomain.startsWith('/') ? withoutDomain : `/${withoutDomain}`
+  }
+}
+
+const resetApiRuntimeState = (item: ApiInterface): ApiInterface => ({
+  ...item,
+  url: normalizeInterfacePath(item.url),
+  status: 'pending',
+  code: undefined,
+  latency: undefined,
+  errorMsg: undefined,
+  requestData: undefined,
+  responseData: undefined
+})
+
+const loadSavedShortDramaEnvironment = (): ApiEnvironment | null => {
+  if (typeof window === 'undefined') return null
+  try {
+    const rawData = window.localStorage.getItem(SHORT_DRAMA_API_CONFIG_STORAGE_KEY)
+    if (!rawData) return null
+    const parsed = JSON.parse(rawData)
+    return ['test', 'prod', 'gray'].includes(parsed?.environment) ? parsed.environment : null
+  } catch {
+    return null
+  }
+}
+
+const loadSavedShortDramaInterfaces = (): ApiInterface[] => {
+  if (typeof window === 'undefined') return []
+  try {
+    const rawData = window.localStorage.getItem(SHORT_DRAMA_API_CONFIG_STORAGE_KEY)
+    if (!rawData) return []
+    const parsed = JSON.parse(rawData)
+    if (!Array.isArray(parsed?.interfaces)) return []
+
+    const savedItems = parsed.interfaces
+      .filter((item: Partial<ApiInterface>) => item?.name && item?.method)
+      .map((item: Partial<ApiInterface>, index: number) => resetApiRuntimeState({
+        id: typeof item.id === 'number' ? item.id : apiInterfaceIdCounter + index,
+        name: item.name || `接口 ${index + 1}`,
+        method: item.method || 'GET',
+        url: item.url || '',
+        headers: item.headers || '',
+        body: item.body || '',
+        status: 'pending'
+      }))
+
+    const maxId = savedItems.reduce((max: number, item: ApiInterface) => Math.max(max, item.id), 0)
+    apiInterfaceIdCounter = Math.max(apiInterfaceIdCounter, maxId + 1)
+    return savedItems
+  } catch {
+    return []
+  }
+}
+
+const loadSavedShortDramaTestName = () => {
+  if (typeof window === 'undefined') return ''
+  try {
+    const rawData = window.localStorage.getItem(SHORT_DRAMA_API_CONFIG_STORAGE_KEY)
+    if (!rawData) return ''
+    const parsed = JSON.parse(rawData)
+    return typeof parsed?.testName === 'string' ? parsed.testName.trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+const loadSavedShortDramaTestSuites = (): ApiTestSuite[] => {
+  if (typeof window === 'undefined') return []
+  try {
+    const rawData = window.localStorage.getItem(SHORT_DRAMA_API_CONFIG_STORAGE_KEY)
+    if (!rawData) return []
+    const parsed = JSON.parse(rawData)
+    if (!Array.isArray(parsed?.testSuites)) return []
+
+    const savedSuites: ApiTestSuite[] = parsed.testSuites
+      .filter((suite: Partial<ApiTestSuite>) => typeof suite?.name === 'string')
+      .map((suite: Partial<ApiTestSuite>, suiteIndex: number) => {
+        const interfaces = Array.isArray(suite.interfaces)
+          ? suite.interfaces
+            .filter((item: Partial<ApiInterface>) => item?.name && item?.method)
+            .map((item: Partial<ApiInterface>, index: number) => resetApiRuntimeState({
+              id: typeof item.id === 'number' ? item.id : apiInterfaceIdCounter + index,
+              name: item.name || `接口 ${index + 1}`,
+              method: item.method || 'GET',
+              url: item.url || '',
+              headers: item.headers || '',
+              body: item.body || '',
+              status: 'pending'
+            }))
+          : []
+
+        return createApiTestSuite(
+          suite.name?.trim() || `接口测试 ${suiteIndex + 1}`,
+          interfaces,
+          false,
+          typeof suite.isExpanded === 'boolean' ? suite.isExpanded : true
+        )
+      })
+
+    const maxInterfaceId = savedSuites
+      .flatMap(suite => suite.interfaces)
+      .reduce((max: number, item: ApiInterface) => Math.max(max, item.id), 0)
+    apiInterfaceIdCounter = Math.max(apiInterfaceIdCounter, maxInterfaceId + 1)
+    return savedSuites
+  } catch {
+    return []
+  }
+}
+
+// 接口列表（替代原先固定的 shortDramaPipeline）
+const savedShortDramaTestSuites = loadSavedShortDramaTestSuites()
+const savedShortDramaInterfaces = savedShortDramaTestSuites.length > 0 ? [] : loadSavedShortDramaInterfaces()
+const savedShortDramaTestName = loadSavedShortDramaTestName()
+if (savedShortDramaTestName) {
+  toolName.value = savedShortDramaTestName
+}
+const apiInterfaces = ref<ApiInterface[]>(savedShortDramaInterfaces.length > 0 ? savedShortDramaInterfaces : [createShortDramaAnonymousLoginInterface()])
+const apiTestSuites = ref<ApiTestSuite[]>(
+  savedShortDramaTestSuites.length > 0
+    ? savedShortDramaTestSuites
+    : [createApiTestSuite(toolName.value, apiInterfaces.value, !savedShortDramaTestName)]
+)
+// 当前展开编辑的接口 ID
+const expandedInterfaceId = ref<number | null>(apiTestSuites.value[0]?.interfaces[0]?.id ?? null)
+const editingJsonBlock = ref<string | null>(null)
+const editingInterfaceNameId = ref<number | null>(null)
+const selectedApiTestSuiteId = ref<number | null>(apiTestSuites.value[0]?.id ?? null)
+const selectedApiInterfaceId = ref<number | null>(apiTestSuites.value[0]?.interfaces[0]?.id ?? null)
+let lastSavedShortDramaConfigSnapshot = ''
+// 新增一个空白接口条目到列表末尾
+const addApiInterface = (suite: ApiTestSuite = apiTestSuites.value[0]!) => {
+  const newItem = createEmptyInterface()
+  suite.interfaces.push(newItem)
+  selectedApiTestSuiteId.value = suite.id
+  selectedApiInterfaceId.value = newItem.id
+  expandedInterfaceId.value = newItem.id
+  editingInterfaceNameId.value = newItem.id
+}
+
+const addApiTestSuite = () => {
+  const defaultInterface = createShortDramaAnonymousLoginInterface()
+  const newSuite = createApiTestSuite(`接口测试 ${apiTestSuiteIdCounter}`, [defaultInterface], true, true)
+  apiTestSuites.value.push(newSuite)
+  selectedApiTestSuiteId.value = newSuite.id
+  selectedApiInterfaceId.value = defaultInterface.id
+  expandedInterfaceId.value = defaultInterface.id
+}
+
+// 删除指定接口条目（至少保留一个）
+const removeApiInterface = (id: number) => {
+  const targetSuite = apiTestSuites.value.find(suite => suite.interfaces.some(item => item.id === id))
+  if (!targetSuite) return
+  if (targetSuite.interfaces.length <= 1) {
+    ElMessage.warning('至少保留一个接口')
+    return
+  }
+  const targetIndex = targetSuite.interfaces.findIndex(item => item.id === id)
+  if (targetIndex >= 0) {
+    targetSuite.interfaces.splice(targetIndex, 1)
+  }
+  if (selectedApiInterfaceId.value === id) {
+    selectedApiInterfaceId.value = targetSuite.interfaces[0]?.id ?? null
+  }
+  if (expandedInterfaceId.value === id) {
+    expandedInterfaceId.value = targetSuite.interfaces[0]?.id ?? null
+  }
+}
+
+const buildShortDramaApiConfigSnapshot = () => JSON.stringify({
+  environment: testServer.value,
+  project: projectName.value,
+  testName: apiTestSuites.value[0]?.name.trim() || toolName.value.trim() || toolTypeName,
+  interfaces: apiTestSuites.value[0]?.interfaces.map(({ id, name, method, url, headers, body }) => ({
+    id,
+    name,
+    method,
+    url: normalizeInterfacePath(url),
+    headers,
+    body
+  })) || [],
+  testSuites: apiTestSuites.value.map(suite => ({
+    id: suite.id,
+    name: suite.name.trim() || `接口测试 ${suite.id}`,
+    isExpanded: suite.isExpanded,
+    interfaces: suite.interfaces.map(({ id, name, method, url, headers, body }) => ({
+      id,
+      name,
+      method,
+      url: normalizeInterfacePath(url),
+      headers,
+      body
+    }))
+  }))
+})
+
+const persistShortDramaApiConfig = () => {
+  if (!isShortDramaApiTest.value) return
+  if (typeof window !== 'undefined') {
+    const snapshot = buildShortDramaApiConfigSnapshot()
+    if (snapshot === lastSavedShortDramaConfigSnapshot) return
+    window.localStorage.setItem(SHORT_DRAMA_API_CONFIG_STORAGE_KEY, snapshot)
+    lastSavedShortDramaConfigSnapshot = snapshot
+  }
+}
+
+const startApiTestSuiteNameEditing = (suite: ApiTestSuite) => {
+  suite.isNameEditing = true
+}
+
+const finishApiTestSuiteNameEditing = (suite: ApiTestSuite) => {
+  suite.name = suite.name.trim() || `接口测试 ${suite.id}`
+  suite.isNameEditing = false
+  if (suite.id === apiTestSuites.value[0]?.id) {
+    toolName.value = suite.name
+  }
+  persistShortDramaApiConfig()
+}
+
+const toggleApiTestSuite = (suite: ApiTestSuite) => {
+  suite.isExpanded = !suite.isExpanded
+  if (suite.isExpanded) {
+    expandedInterfaceId.value = suite.interfaces[0]?.id ?? null
+  }
+  persistShortDramaApiConfig()
+}
+
+const selectApiTestSuite = (suite: ApiTestSuite) => {
+  selectedApiTestSuiteId.value = suite.id
+  if (!suite.interfaces.some(item => item.id === selectedApiInterfaceId.value)) {
+    selectedApiInterfaceId.value = suite.interfaces[0]?.id ?? null
+  }
+  const selectedIndex = suite.interfaces.findIndex(item => item.id === selectedApiInterfaceId.value)
+  selectedPipelineStepIndex.value = selectedIndex >= 0 ? selectedIndex : null
+}
+
+const selectApiInterface = (suite: ApiTestSuite, item: ApiInterface) => {
+  selectedApiTestSuiteId.value = suite.id
+  selectedApiInterfaceId.value = item.id
+  selectedPipelineStepIndex.value = suite.interfaces.findIndex(step => step.id === item.id)
+}
+
+const startInterfaceNameEditing = (id: number) => {
+  editingInterfaceNameId.value = id
+}
+
+const finishInterfaceNameEditing = (item: ApiInterface) => {
+  item.name = item.name.trim() || `接口 ${item.id}`
+  editingInterfaceNameId.value = null
+  persistShortDramaApiConfig()
+}
+
+// 切换接口卡片的展开/折叠状态
+const toggleInterfaceExpand = (id: number) => {
+  expandedInterfaceId.value = expandedInterfaceId.value === id ? null : id
+}
+
+const selectedPipelineStepIndex = ref<number | null>(null)
+
+const selectedApiTestSuite = computed(() => {
+  return apiTestSuites.value.find(suite => suite.id === selectedApiTestSuiteId.value) || apiTestSuites.value[0] || null
+})
+
+// 右侧运行状态详情只展示当前选中的接口测试
+const activePipelineSteps = computed<ApiInterface[]>(() => selectedApiTestSuite.value?.interfaces || [])
+
+const selectedStepForPayload = computed(() => {
+  return activePipelineSteps.value.find(step => step.id === selectedApiInterfaceId.value) || activePipelineSteps.value[0] || null
+})
+
+const selectPipelineStep = (index: number) => {
+  selectedPipelineStepIndex.value = index
+  selectedApiInterfaceId.value = activePipelineSteps.value[index]?.id ?? null
+  shortDramaActiveTab.value = 'payload'
+}
+
+const formatJSON = (val: any) => {
+  if (!val) return '暂无数据'
+  return JSON.stringify(val, null, 2)
+}
+
+const getJsonBlockKey = (id: number, field: ApiJsonField) => `${id}:${field}`
+
+const isJsonBlockEditing = (id: number, field: ApiJsonField) => editingJsonBlock.value === getJsonBlockKey(id, field)
+
+const startJsonBlockEditing = (id: number, field: ApiJsonField) => {
+  editingJsonBlock.value = getJsonBlockKey(id, field)
+}
+
+const stopJsonBlockEditing = () => {
+  editingJsonBlock.value = null
+  persistShortDramaApiConfig()
+}
+
+const getJsonPreviewText = (value: string, emptyLabel: string) => {
+  const trimmedValue = value.trim()
+  return trimmedValue || emptyLabel
+}
+
+const getJsonPreviewLines = (value: string, emptyLabel: string) => {
+  return getJsonPreviewText(value, emptyLabel).split('\n')
+}
+
+const getJsonEditorRows = (value: string, minRows: number) => {
+  return Math.max(minRows, getJsonPreviewText(value, '').split('\n').length)
+}
+
+const getInterfaceDisplayUrl = (item?: Pick<ApiInterface, 'url'> | null) => {
+  const path = normalizeInterfacePath(item?.url || '')
+  return path || '未填写接口'
+}
+
+const getCurrentApiBaseDomain = () => {
+  const projectDomains = domainMappings[projectName.value as keyof typeof domainMappings]
+  return projectDomains?.[testServer.value] || domainMappings.ShortsWave[testServer.value]
+}
+
+const getFullInterfaceUrl = (item?: Pick<ApiInterface, 'url'> | null) => {
+  const path = normalizeInterfacePath(item?.url || '')
+  if (!path) return ''
+  return `${getCurrentApiBaseDomain().replace(/\/$/, '')}${path}`
+}
+
+const getInterfaceStatusText = (status: ApiInterface['status']) => {
+  const statusMap: Record<ApiInterface['status'], string> = {
+    pending: '待执行',
+    running: '执行中',
+    success: '通过',
+    failed: '失败'
+  }
+  return statusMap[status]
+}
+
+const getLatencyClass = (latency?: number) => {
+  if (!latency) return 'latency-ok'
+  if (latency < 200) return 'latency-ok'
+  if (latency < 500) return 'latency-warn'
+  return 'latency-error'
+}
+
+const runShortDramaApiTest = async () => {
+  currentStatus.value = 'Executing'
+  logs.value = [`[${new Date().toLocaleTimeString()}] 开始接口链路测试...`]
+  uptime.value = 0
+  duration.value = 0
+  if (timer) clearInterval(timer)
+  timer = setInterval(() => {
+    uptime.value++
+    duration.value++
+  }, 1000)
+
+  // 重置所有接口的状态
+  activePipelineSteps.value.forEach(s => {
+    s.status = 'pending'
+    s.code = undefined
+    s.latency = undefined
+    s.errorMsg = undefined
+    s.requestData = undefined
+    s.responseData = undefined
+  })
+
+  logs.value.push(`[INFO] 真实请求模式，接口数: ${activePipelineSteps.value.length}`)
+  scrollToBottom()
+
+  let hasFailed = false
+
+  for (let index = 0; index < activePipelineSteps.value.length; index++) {
+    const step = activePipelineSteps.value[index]
+    if (!step) continue
+    step.url = normalizeInterfacePath(step.url)
+    const fullInterfaceUrl = getFullInterfaceUrl(step)
+    step.status = 'running'
+    shortDramaActiveTab.value = 'pipeline'
+    selectedPipelineStepIndex.value = index
+    selectedApiInterfaceId.value = step.id
+    logs.value.push(`[${new Date().toLocaleTimeString()}] 正在执行: ${step.name} (${step.method} ${step.url || '未填写接口'})...`)
+    scrollToBottom()
+
+    const startTime = Date.now()
+
+    if (!fullInterfaceUrl) {
+      step.status = 'failed'
+      step.code = 400
+      step.errorMsg = '请求接口不能为空'
+      logs.value.push(`[ERROR] 接口 [${step.name}] 执行失败: 请求接口不能为空`)
+      hasFailed = true
+      scrollToBottom()
+      continue
+    }
+
+    let parsedHeaders = {}
+    try {
+      if (step.headers) parsedHeaders = JSON.parse(step.headers)
+    } catch (e: any) {
+      step.status = 'failed'
+      step.errorMsg = `请求头 JSON 格式错误: ${e.message}`
+      logs.value.push(`[ERROR] 接口 [${step.name}] 执行失败: 请求头 JSON 格式错误`)
+      hasFailed = true
+      scrollToBottom()
+      continue
+    }
+
+    let parsedBody = {}
+    try {
+      if (step.body && step.method !== 'GET') parsedBody = JSON.parse(step.body)
+    } catch (e: any) {
+      step.status = 'failed'
+      step.errorMsg = `请求体 JSON 格式错误: ${e.message}`
+      logs.value.push(`[ERROR] 接口 [${step.name}] 执行失败: 请求体 JSON 格式错误`)
+      hasFailed = true
+      scrollToBottom()
+      continue
+    }
+
+    // 合并 headers 和 body 作为 proxy data
+    const mergedData = { ...parsedHeaders, ...parsedBody }
+
+    step.requestData = {
+      url: fullInterfaceUrl,
+      method: step.method,
+      headers: parsedHeaders,
+      body: parsedBody
+    }
+
+    try {
+      const response = await fetch(buildBackendUrl('/api/proxy'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          method: step.method,
+          url: fullInterfaceUrl,
+          data: mergedData
+        })
+      })
+
+      const endTime = Date.now()
+      step.latency = endTime - startTime
+      step.code = response.status
+
+      const contentType = response.headers.get('content-type') || ''
+      let resData: any
+      if (contentType.includes('application/json')) {
+        resData = await response.json()
+      } else {
+        resData = await response.text()
+        try {
+          resData = JSON.parse(resData)
+        } catch (e) {
+          resData = { rawResponse: resData }
+        }
+      }
+      step.responseData = resData
+
+      if (response.ok) {
+        step.status = 'success'
+        logs.value.push(`[SUCCESS] 接口 [${step.name}] 执行成功，HTTP ${response.status}`)
+      } else {
+        step.status = 'failed'
+        step.errorMsg = resData?.msg || resData?.error || '接口返回异常状态'
+        logs.value.push(`[ERROR] 接口 [${step.name}] 执行失败: ${step.errorMsg}`)
+        hasFailed = true
+      }
+    } catch (err: any) {
+      const endTime = Date.now()
+      step.latency = endTime - startTime
+      step.code = 500
+      step.status = 'failed'
+      step.errorMsg = err.message || '网络连接异常'
+      step.responseData = { error: step.errorMsg }
+      logs.value.push(`[ERROR] 接口 [${step.name}] 网络请求异常: ${step.errorMsg}`)
+      hasFailed = true
+    }
+
+    scrollToBottom()
+    // 每个步骤之间稍微有一点停顿，体验更好
+    await new Promise(r => setTimeout(r, 400))
+  }
+
+  if (timer) clearInterval(timer)
+  currentStatus.value = hasFailed ? 'Failed' : 'Finished'
+  logs.value.push(`\n[${new Date().toLocaleTimeString()}] 测试完成。`)
+  scrollToBottom()
+
+  await reportStore.addReport({
+    name: toolName.value,
+    type: '短剧类接口测试',
+    status: hasFailed ? 'Failed' : 'Passed',
+    duration: formatTime(duration.value),
+    author: authStore.user?.username || 'tester',
+    reportUrl: '',
+    analysisResult: hasFailed ? '测试未通过：存在失败的接口' : '接口测试完成，时延和状态符合预期。',
+    environment: testServer.value
+  })
+}
 
 // 自动解析参数并匹配项目
 watch(deleteAccountParam, (newVal) => {
@@ -65,9 +671,10 @@ watch(deleteAccountParam, (newVal) => {
 // 服务器配置档
 const serverOptions = [
   { label: '测试服', value: 'test' },
-  { label: '正式服', value: 'prod' }
+  { label: '正式服', value: 'prod' },
+  { label: '灰度服', value: 'gray' }
 ]
-const testServer = ref('test')
+const testServer = ref<ApiEnvironment>(loadSavedShortDramaEnvironment() || 'test')
 
 const serverProfiles = {
   test: {
@@ -81,6 +688,12 @@ const serverProfiles = {
     password: "fb3b2e9961b58",
     loginUrl: "https://admin.shortswave.com/api/pwd_login", // 假设路径对标
     dramaListUrl: "https://admin.shortswave.com/api/management/drama/all_online_ids"
+  },
+  gray: {
+    email: "test_super_001@shortswave.com",
+    password: "test123456",
+    loginUrl: "http://35.193.183.77:8080/api/pwd_login",
+    dramaListUrl: "http://35.193.183.77:8080/api/management/drama/all_online_ids"
   }
 }
 
@@ -88,13 +701,23 @@ const serverProfiles = {
 const domainMappings = {
   ShortsWave: {
     prod: 'https://api.shortswave.com',
-    test: 'http://35.225.224.94'
+    test: 'http://35.225.224.94',
+    gray: 'http://35.193.183.77'
   },
   NovelNova: {
     prod: 'https://api.novelnovastory.com',
-    test: 'http://34.10.7.187'
+    test: 'http://34.10.7.187',
+    gray: 'http://34.10.7.187'
   }
 }
+
+watch([toolName, projectName, testServer], () => {
+  persistShortDramaApiConfig()
+}, { flush: 'post' })
+
+watch(apiTestSuites, () => {
+  persistShortDramaApiConfig()
+}, { deep: true, flush: 'post' })
 
 // 辅助函数：解析参数对
 const parseParams = (str: string) => {
@@ -111,7 +734,7 @@ const parseParams = (str: string) => {
 
 // 辅助函数：执行具体的获取账号删除操作
 const handleAccountDelete = async (token: string, originalHeaders: Record<string, string>) => {
-  const baseDomain = domainMappings[projectName.value as keyof typeof domainMappings][testServer.value as 'prod' | 'test']
+  const baseDomain = domainMappings[projectName.value as keyof typeof domainMappings][testServer.value]
   const deleteUrl = `${baseDomain}/user/delete`
   
   // 准备删除请求的 Headers，替换 X-SESSION-TOKEN
@@ -942,6 +1565,11 @@ const startMonkeyRun = async () => {
 const startExecution = async () => {
   if (currentStatus.value === 'Executing') return
 
+  if (isShortDramaApiTest.value) {
+    await runShortDramaApiTest()
+    return
+  }
+
   if (isMonkeyTest) {
     await startMonkeyRun()
     return
@@ -963,7 +1591,7 @@ const startExecution = async () => {
     }
 
     const params = parseParams(deleteAccountParam.value)
-    const baseDomain = domainMappings[projectName.value as keyof typeof domainMappings][testServer.value as 'prod' | 'test']
+    const baseDomain = domainMappings[projectName.value as keyof typeof domainMappings][testServer.value]
     const loginUrl = `${baseDomain}/login/anonymous`
 
     currentStatus.value = 'Executing'
@@ -1147,8 +1775,10 @@ const startExecution = async () => {
       if (timer) clearInterval(timer)
       if (currentStatus.value === 'Executing') {
         // K6 类任务必须等后端明确返回成功信号，避免异常关闭时展示旧报告。
+        // Web 性能分析收到后端失败事件时也直接进入失败态，避免空报告被误展示为完成。
         const reportType = isWebFrontendStressTest ? 'Web 性能分析' : 'K6 压测'
-        if (!isWebFrontendStressTest && (!executionSucceeded.value || executionFailed.value)) {
+        const hasExecutionFailure = executionFailed.value || (!isWebFrontendStressTest && !executionSucceeded.value)
+        if (hasExecutionFailure) {
           currentStatus.value = 'Failed'
           logs.value.push(`[${new Date().toLocaleTimeString()}] 任务执行失败，未生成新报告。`)
           await reportStore.addReport({
@@ -1214,6 +1844,9 @@ const startExecution = async () => {
             logs.value.push(`[ERROR] AI 分析失败: ${e}`)
           }
           scrollToBottom()
+        } else if (isWebFrontendStressTest) {
+          currentStatus.value = 'Failed'
+          logs.value.push(`[${new Date().toLocaleTimeString()}] 未收到 Lighthouse 报告文件，任务标记为失败。`)
         }
 
         // 同步到后端执行记录
@@ -1233,6 +1866,13 @@ const startExecution = async () => {
 
 const stopExecution = async () => {
   if (visibleStatus.value !== 'Executing') return
+
+  if (isShortDramaApiTest.value) {
+    if (timer) clearInterval(timer)
+    currentStatus.value = 'Stopped'
+    logs.value.push(`[${new Date().toLocaleTimeString()}] 测试被手动终止。`)
+    return
+  }
 
   if (isDramaCheck) {
     await dramaRunStore.stop()
@@ -1301,6 +1941,7 @@ const clearLogs = () => {
 }
 
 const closePage = () => {
+  persistShortDramaApiConfig()
   if (isDramaCheck && visibleStatus.value === 'Executing') {
     dramaRunStore.markBackground()
   } else if (currentStatus.value === 'Executing') {
@@ -1309,12 +1950,19 @@ const closePage = () => {
   router.push('/')
 }
 
+const persistShortDramaApiConfigBeforeUnload = () => {
+  persistShortDramaApiConfig()
+}
+
 onMounted(() => {
   reportStore.fetchReports()
   fetchMonkeyDevices()
+  window.addEventListener('beforeunload', persistShortDramaApiConfigBeforeUnload)
 })
 
 onUnmounted(() => {
+  persistShortDramaApiConfig()
+  window.removeEventListener('beforeunload', persistShortDramaApiConfigBeforeUnload)
   if (timer) clearInterval(timer)
   if (monkeyTimer) clearInterval(monkeyTimer)
   if (monkeyReconcileTimer) clearInterval(monkeyReconcileTimer)
@@ -1325,6 +1973,10 @@ onUnmounted(() => {
   }
   if (ws) ws.close()
 })
+
+onBeforeRouteLeave(() => {
+  persistShortDramaApiConfig()
+})
 </script>
 
 <template>
@@ -1332,13 +1984,24 @@ onUnmounted(() => {
     <div class="main-content">
       
       <!-- 左侧信息区 -->
-      <div class="sidebar-panel">
+      <div class="sidebar-panel" :class="{ 'sidebar-panel--short-drama': isShortDramaApiTest }">
         <div class="status-badge-row">
-          <span class="badge-ready">READY</span>
-          <el-icon class="info-icon" color="#9ca3af"><Warning /></el-icon>
+          <span class="badge-ready" :class="{ 'badge-ready--short-drama': isShortDramaApiTest }">
+            {{ isShortDramaApiTest ? '接口配置列表' : 'READY' }}
+          </span>
+            <el-button
+              v-if="isShortDramaApiTest"
+              type="primary"
+              size="small"
+              class="add-api-test-btn"
+              @click="addApiTestSuite"
+            >
+              新增接口测试
+            </el-button>
+          <el-icon v-else class="info-icon"><Warning /></el-icon>
         </div>
-        
-        <div class="tool-title-section">
+
+        <div v-if="!isShortDramaApiTest" class="tool-title-section">
           <h1 class="tool-title">{{ toolName }}</h1>
           <p class="tool-desc">{{ toolDesc }}</p>
         </div>
@@ -1385,14 +2048,14 @@ onUnmounted(() => {
               </div>
               <div class="monkey-wireless-actions">
                 <el-button
-                  v-if="permissionStore.canAccess('monkey.device.wireless_pair') || permissionStore.canAccess('monkey.device.wireless_connect')"
+                  v-if="permissionStore.canAccess('dashboard.monkey_test.visible')"
                   size="small"
                   @click="monkeyWirelessDialogVisible = true"
                 >
                   无线连接设备
                 </el-button>
                 <el-button
-                  v-if="permissionStore.canAccess('monkey.device.wireless_disconnect')"
+                  v-if="permissionStore.canAccess('dashboard.monkey_test.visible')"
                   size="small"
                   :disabled="!monkeyDevices.some(device => device.id === monkeyDevice && device.source === 'wifi')"
                   @click="disconnectSelectedMonkeyWirelessADB"
@@ -1489,8 +2152,244 @@ onUnmounted(() => {
             </div>
           </template>
 
+          <!-- 针对短剧类接口测试，展示专属参数设置 -->
+          <template v-if="isShortDramaApiTest">
+            <div
+              v-for="suite in apiTestSuites"
+              :key="suite.id"
+              class="short-drama-config-panel"
+              :class="{
+                'short-drama-config-panel--collapsed': !suite.isExpanded,
+                'short-drama-config-panel--selected': selectedApiTestSuiteId === suite.id
+              }"
+            >
+              <div class="short-drama-config-panel__header" @click="selectApiTestSuite(suite)">
+                <div class="short-drama-test-name">
+                  <el-input
+                    v-if="suite.isNameEditing"
+                    v-model="suite.name"
+                    size="small"
+                    placeholder="请输入接口测试名称"
+                    class="short-drama-test-name-input"
+                    @click.stop
+                    @blur="finishApiTestSuiteNameEditing(suite)"
+                    @keyup.enter="finishApiTestSuiteNameEditing(suite)"
+                  />
+                  <template v-else>
+                    <span class="short-drama-test-name__text">{{ suite.name }}</span>
+                    <el-button
+                      class="short-drama-test-name__edit"
+                      link
+                      type="primary"
+                      :icon="Edit"
+                      @click.stop="startApiTestSuiteNameEditing(suite)"
+                    />
+                  </template>
+                </div>
+                <div class="short-drama-config-panel__actions">
+                  <el-button v-if="suite.isExpanded" type="primary" size="small" @click.stop="addApiInterface(suite)" class="add-api-btn">
+                    新增接口
+                  </el-button>
+                  <el-button
+                    size="small"
+                    text
+                    bg
+                    class="suite-toggle-btn"
+                    @click.stop="toggleApiTestSuite(suite)"
+                  >
+                    {{ suite.isExpanded ? '收起' : '展开' }}
+                    <el-icon class="suite-toggle-btn__icon" :class="{ 'suite-toggle-btn__icon--expanded': suite.isExpanded }">
+                      <ArrowRight />
+                    </el-icon>
+                  </el-button>
+                </div>
+              </div>
+
+              <template v-if="suite.isExpanded">
+              <div class="short-drama-settings-grid">
+                <label class="short-drama-setting">
+                  <span class="short-drama-setting__label">执行环境</span>
+                  <el-select v-model="testServer" placeholder="选择服务器" size="small" class="short-drama-setting__control">
+                    <el-option
+                      v-for="item in serverOptions"
+                      :key="item.value"
+                      :label="item.label"
+                      :value="item.value"
+                    />
+                  </el-select>
+                </label>
+                <label class="short-drama-setting">
+                  <span class="short-drama-setting__label">项目</span>
+                  <el-select v-model="projectName" placeholder="选择项目" size="small" class="short-drama-setting__control">
+                    <el-option label="ShortsWave" value="ShortsWave" />
+                    <el-option label="NovelNova" value="NovelNova" />
+                  </el-select>
+                </label>
+              </div>
+
+              <!-- 接口卡片列表 -->
+              <div class="api-interface-list">
+                <div
+                  v-for="item in suite.interfaces"
+                  :key="item.id"
+                  class="api-interface-card"
+                  :class="{
+                    'api-interface-card--active': expandedInterfaceId === item.id,
+                    'api-interface-card--selected': selectedApiInterfaceId === item.id,
+                    'card-status--success': item.status === 'success',
+                    'card-status--failed': item.status === 'failed',
+                    'card-status--running': item.status === 'running'
+                  }"
+                >
+                  <!-- 卡片头部：折叠点击区、方法、名称、快捷操作 -->
+                  <div class="api-card-header" @click="selectApiInterface(suite, item)">
+                    <div class="api-header-left">
+                      <span class="method-badge" :class="item.method">{{ item.method }}</span>
+                      <div class="api-name-editor">
+                        <el-input
+                          v-if="editingInterfaceNameId === item.id"
+                          v-model="item.name"
+                          size="small"
+                          placeholder="请输入接口名称"
+                          class="api-name-input"
+                          autofocus
+                          @click.stop
+                          @blur="finishInterfaceNameEditing(item)"
+                          @keyup.enter="finishInterfaceNameEditing(item)"
+                        />
+                        <template v-else>
+                          <span class="api-name-text" :title="item.name">{{ item.name }}</span>
+                          <el-button
+                            class="api-name-edit-btn"
+                            link
+                            type="primary"
+                            :icon="Edit"
+                            @click.stop="startInterfaceNameEditing(item.id)"
+                          />
+                        </template>
+                      </div>
+                    </div>
+                    <div class="api-header-right">
+                      <span class="api-status-chip" :class="`api-status-chip--${item.status}`">
+                        {{ getInterfaceStatusText(item.status) }}
+                      </span>
+                      <el-icon class="action-icon delete-icon" title="删除" @click.stop="removeApiInterface(item.id)"><Delete /></el-icon>
+                      <el-icon
+                        class="arrow-icon"
+                        :class="{ 'arrow-rotated': expandedInterfaceId === item.id }"
+                        title="展开/收起"
+                        @click.stop="toggleInterfaceExpand(item.id)"
+                      ><ArrowRight /></el-icon>
+                    </div>
+                  </div>
+
+                  <!-- 卡片主体：折叠展开编辑区 -->
+                  <div v-show="expandedInterfaceId === item.id" class="api-card-body">
+                    <div class="form-row method-url-row">
+                      <div class="form-item method-col">
+                        <label class="inner-label">请求方法</label>
+                        <el-select v-model="item.method" size="small" class="method-select">
+                          <el-option label="GET" value="GET" />
+                          <el-option label="POST" value="POST" />
+                          <el-option label="PUT" value="PUT" />
+                          <el-option label="DELETE" value="DELETE" />
+                          <el-option label="PATCH" value="PATCH" />
+                        </el-select>
+                      </div>
+                      <div class="form-item url-col">
+                        <label class="inner-label">请求接口</label>
+                        <el-input
+                          v-model="item.url"
+                          size="small"
+                          placeholder="/login/anonymous"
+                          @blur="item.url = normalizeInterfacePath(item.url); persistShortDramaApiConfig()"
+                        />
+                      </div>
+                    </div>
+
+                    <div class="form-row">
+                      <div class="form-item">
+                        <label class="inner-label">请求头</label>
+                        <div
+                          class="json-command-preview"
+                          :class="{ 'json-command-preview--editing': isJsonBlockEditing(item.id, 'headers') }"
+                          title="双击修改请求头"
+                          @dblclick="startJsonBlockEditing(item.id, 'headers')"
+                        >
+                          <span class="json-command-preview__label">
+                            {{ isJsonBlockEditing(item.id, 'headers') ? '请求头编辑' : '请求头预览' }}
+                          </span>
+                          <el-input
+                            v-if="isJsonBlockEditing(item.id, 'headers')"
+                            v-model="item.headers"
+                            type="textarea"
+                            :rows="getJsonEditorRows(item.headers, 10)"
+                            resize="none"
+                            wrap="off"
+                            size="small"
+                            placeholder='{"Content-Type": "application/json", "X-Token": "xxx"}'
+                            class="monospace-textarea json-command-editor"
+                            autofocus
+                            @blur="stopJsonBlockEditing"
+                          />
+                          <pre v-else class="json-command-preview__lines">
+                            <span
+                              v-for="(line, lineIndex) in getJsonPreviewLines(item.headers, '未配置请求头')"
+                              :key="lineIndex"
+                              class="json-command-preview__line"
+                            >{{ line || ' ' }}</span>
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="form-row" v-if="item.method !== 'GET'">
+                      <div class="form-item">
+                        <label class="inner-label">请求体</label>
+                        <div
+                          class="json-command-preview"
+                          :class="{ 'json-command-preview--editing': isJsonBlockEditing(item.id, 'body') }"
+                          title="双击修改请求体"
+                          @dblclick="startJsonBlockEditing(item.id, 'body')"
+                        >
+                          <span class="json-command-preview__label">
+                            {{ isJsonBlockEditing(item.id, 'body') ? '请求体编辑' : '请求体预览' }}
+                          </span>
+                          <el-input
+                            v-if="isJsonBlockEditing(item.id, 'body')"
+                            v-model="item.body"
+                            type="textarea"
+                            :rows="getJsonEditorRows(item.body, 6)"
+                            resize="none"
+                            wrap="off"
+                            size="small"
+                            placeholder='{"key": "value"}'
+                            class="monospace-textarea json-command-editor"
+                            autofocus
+                            @blur="stopJsonBlockEditing"
+                          />
+                          <pre v-else class="json-command-preview__lines">
+                            <span
+                              v-for="(line, lineIndex) in getJsonPreviewLines(item.body, '未配置请求体')"
+                              :key="lineIndex"
+                              class="json-command-preview__line"
+                            >{{ line || ' ' }}</span>
+                          </pre>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="suite.interfaces.length === 0" class="api-interface-empty">
+                  暂无接口，点击右上角新增接口开始配置
+                </div>
+              </div>
+              </template>
+            </div>
+          </template>
+
           <!-- 针对业务自检工具，隐藏原本的链接输入框 -->
-          <div v-if="!isDramaCheck && !isMonkeyTest" class="param-group">
+          <div v-if="!isDramaCheck && !isMonkeyTest && !isShortDramaApiTest" class="param-group">
             <label class="param-label">
               <span class="link-icon">🔗</span> 测试链接
             </label>
@@ -1501,7 +2400,7 @@ onUnmounted(() => {
             />
           </div>
 
-          <div v-if="!isWebFrontendStressTest && !isMonkeyTest" class="param-row">
+          <div v-if="!isWebFrontendStressTest && !isMonkeyTest && !isShortDramaApiTest" class="param-row">
             <div class="param-group half">
               <label class="param-label">测试服务器</label>
               <!-- 改为下拉框切换 -->
@@ -1523,7 +2422,7 @@ onUnmounted(() => {
       </div>
 
       <!-- 右侧日志区 / 报告区 -->
-      <div class="log-panel" style="position: relative;">
+      <div class="log-panel" :class="{ 'log-panel--short-drama': isShortDramaApiTest }" style="position: relative;">
         <!-- 日志顶栏 -->
         <div class="log-header">
           <div class="log-status-info">
@@ -1571,6 +2470,155 @@ onUnmounted(() => {
               <span>页面：{{ selectedMonkeyNode.activity }}</span>
               <span>来源：adb exec-out screencap -p</span>
               <MonkeyNodeSummary :summary="selectedMonkeyNode.summary" :evidence="selectedMonkeyNode.evidence" />
+            </div>
+          </div>
+        </div>
+        <div v-else-if="isShortDramaApiTest" class="short-drama-results-container">
+          <!-- 自定义 Tab 头部 -->
+          <div class="short-drama-tabs-header">
+            <button
+              class="sd-tab-btn"
+              :class="{ active: shortDramaActiveTab === 'pipeline' }"
+              @click="shortDramaActiveTab = 'pipeline'"
+            >
+              <el-icon><Tickets /></el-icon> 链路执行状态
+            </button>
+            <button
+              class="sd-tab-btn"
+              :class="{ active: shortDramaActiveTab === 'payload' }"
+              @click="shortDramaActiveTab = 'payload'"
+            >
+              <el-icon><DocumentIcon /></el-icon> 接口报文详情
+            </button>
+            <button
+              class="sd-tab-btn"
+              :class="{ active: shortDramaActiveTab === 'latency' }"
+              @click="shortDramaActiveTab = 'latency'"
+            >
+              <el-icon><Odometer /></el-icon> 时延看板
+            </button>
+            <button
+              class="sd-tab-btn"
+              :class="{ active: shortDramaActiveTab === 'logs' }"
+              @click="shortDramaActiveTab = 'logs'"
+            >
+              <el-icon><Cpu /></el-icon> 原始日志
+            </button>
+          </div>
+
+          <!-- Tab 内容区域 -->
+          <div class="short-drama-tab-body">
+            <!-- 1. Pipeline Tab -->
+            <div v-if="shortDramaActiveTab === 'pipeline'" class="pipeline-view">
+              <div class="pipeline-intro">
+                <h3>短剧测试链路流水线</h3>
+                <p>点击每个管道节点可查看详细的 HTTP 请求与响应报文内容。</p>
+              </div>
+              <div class="pipeline-list">
+                <div
+                  v-for="(step, idx) in activePipelineSteps"
+                  :key="idx"
+                  class="pipeline-card"
+                  :class="[
+                    `pipeline-card--${step.status}`,
+                    { active: selectedApiInterfaceId === step.id }
+                  ]"
+                  @click="selectPipelineStep(idx)"
+                >
+                  <div class="pipeline-card__indicator">
+                    <span v-if="step.status === 'pending'" class="status-dot pending"></span>
+                    <span v-else-if="step.status === 'running'" class="status-spinner"></span>
+                    <el-icon v-else-if="step.status === 'success'" class="status-icon success" color="#10b981"><Check /></el-icon>
+                    <el-icon v-else-if="step.status === 'failed'" class="status-icon failed" color="#ef4444"><Close /></el-icon>
+                  </div>
+                  <div class="pipeline-card__details">
+                    <div class="pipeline-card__title-row">
+                      <strong class="step-name">{{ step.name }}</strong>
+                      <span v-if="step.latency" class="step-latency">{{ step.latency }}ms</span>
+                    </div>
+                    <div class="pipeline-card__meta-row">
+                      <span class="step-badge" :class="step.method">{{ step.method }}</span>
+                      <span class="step-path">{{ getInterfaceDisplayUrl(step) }}</span>
+                      <span v-if="step.code" class="step-code" :class="`code-${step.code}`">HTTP {{ step.code }}</span>
+                    </div>
+                  </div>
+                  <div class="pipeline-card__action">
+                    <el-icon><ArrowRight /></el-icon>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. Payload Detail Tab -->
+            <div v-else-if="shortDramaActiveTab === 'payload'" class="payload-view">
+              <div v-if="selectedStepForPayload" class="payload-details-wrapper">
+                <div class="payload-header-bar">
+                  <div>
+                    <span class="payload-header-bar__eyebrow">Payload Detail</span>
+                    <strong>{{ selectedStepForPayload.name }} 报文详情</strong>
+                  </div>
+                  <span class="payload-badge" :class="selectedStepForPayload.method">
+                    {{ selectedStepForPayload.method }} {{ getInterfaceDisplayUrl(selectedStepForPayload) }}
+                  </span>
+                </div>
+                <div class="payload-split-container">
+                  <div class="payload-box">
+                    <div class="payload-box-title">Request Payload</div>
+                    <pre class="json-code-block json-code-block--request">{{ formatJSON(selectedStepForPayload.requestData) }}</pre>
+                  </div>
+                  <div class="payload-box">
+                    <div class="payload-box-title">Response Payload</div>
+                    <pre class="json-code-block json-code-block--response">{{ formatJSON(selectedStepForPayload.responseData) }}</pre>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="payload-empty-state">
+                <el-empty description="请先在链路视图中选择一个步骤，或点击 Execute 运行测试" />
+              </div>
+            </div>
+
+            <!-- 3. Latency Tab -->
+            <div v-else-if="shortDramaActiveTab === 'latency'" class="latency-view">
+              <div class="latency-view__header">
+                <span class="payload-header-bar__eyebrow">Latency Board</span>
+                <h3>链路接口时延看板</h3>
+              </div>
+              <div class="latency-chart-container">
+                <div
+                  v-for="(step, idx) in activePipelineSteps"
+                  :key="idx"
+                  class="latency-row"
+                  :class="{ 'latency-row--selected': selectedApiInterfaceId === step.id }"
+                  @click="selectPipelineStep(idx)"
+                >
+                  <div class="latency-row__info">
+                    <span class="latency-row__name">{{ step.name }}</span>
+                    <span class="latency-row__val" v-if="step.latency">{{ step.latency }} ms</span>
+                    <span class="latency-row__val latency-row__val--empty" v-else>未开始</span>
+                  </div>
+                  <div class="latency-progress-bg">
+                    <div
+                      class="latency-progress-bar"
+                      :class="getLatencyClass(step.latency)"
+                      :style="{ width: step.latency ? `${Math.min(100, (step.latency / 800) * 100)}%` : '0%' }"
+                    ></div>
+                  </div>
+                </div>
+                <div class="latency-threshold-markers">
+                  <span class="marker-ok"><span></span> 健康 (&lt;200ms)</span>
+                  <span class="marker-warn"><span></span> 警告 (200-500ms)</span>
+                  <span class="marker-err"><span></span> 延迟过高 (&gt;500ms)</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. Logs Tab -->
+            <div v-else-if="shortDramaActiveTab === 'logs'" class="log-content-wrapper" style="height: 100%;">
+              <div class="log-content" ref="logContainer" style="height: 100%; overflow-y: auto;">
+                <div v-for="(log, idx) in visibleLogs" :key="idx" class="log-line">
+                  {{ log }}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1634,7 +2682,7 @@ onUnmounted(() => {
           <el-input v-model="monkeyWirelessPairAddress" placeholder="配对地址，例如 192.168.1.86:37091" />
           <el-input v-model="monkeyWirelessPairingCode" maxlength="6" placeholder="6 位配对码" show-word-limit />
           <el-button
-            v-if="permissionStore.canAccess('monkey.device.wireless_pair')"
+            v-if="permissionStore.canAccess('dashboard.monkey_test.visible')"
             type="primary"
             :loading="monkeyWirelessSubmitting"
             @click="pairMonkeyWirelessADB"
@@ -1651,7 +2699,7 @@ onUnmounted(() => {
           <p v-if="monkeyWirelessPaired" class="monkey-wireless-step__guide">配对已完成。现在请填写手机无线调试页面顶部的连接地址。</p>
           <el-input v-model="monkeyWirelessConnectAddress" placeholder="连接地址，例如 192.168.1.86:39147" />
           <el-button
-            v-if="permissionStore.canAccess('monkey.device.wireless_connect')"
+            v-if="permissionStore.canAccess('dashboard.monkey_test.visible')"
             type="primary"
             :loading="monkeyWirelessSubmitting"
             @click="connectMonkeyWirelessADB"
@@ -1700,6 +2748,10 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
+.sidebar-panel--short-drama {
+  width: clamp(430px, 28vw, 520px);
+}
+
 .status-badge-row {
   display: flex;
   justify-content: space-between;
@@ -1714,6 +2766,14 @@ onUnmounted(() => {
   padding: 4px 10px;
   border-radius: 12px;
   letter-spacing: 0.5px;
+}
+
+.badge-ready--short-drama {
+  font-size: 16.5px;
+  font-weight: 800;
+  padding: 6px 14px;
+  border-radius: 16px;
+  letter-spacing: 0;
 }
 
 .info-icon {
@@ -1740,6 +2800,15 @@ onUnmounted(() => {
   color: #64748b;
   margin: 0;
   line-height: 1.5;
+}
+
+.add-api-test-btn {
+  height: 28px;
+  margin-left: auto;
+  padding: 0 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .params-section {
@@ -1962,6 +3031,10 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.log-panel--short-drama {
+  min-width: 0;
 }
 
 .log-header {
@@ -2444,6 +3517,915 @@ button:disabled {
   background: #2563eb;
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+/* ==================== 短剧类接口测试专属样式 ==================== */
+.short-drama-config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.short-drama-config-panel--collapsed {
+  gap: 0;
+  background: #ffffff;
+}
+
+.short-drama-config-panel--selected {
+  border-color: #3b82f6;
+  box-shadow: 0 10px 24px rgba(59, 130, 246, 0.1);
+}
+
+.short-drama-config-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.short-drama-config-panel__actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.short-drama-config-panel__eyebrow,
+.payload-header-bar__eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.short-drama-config-panel__title {
+  margin: 0;
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.short-drama-test-name {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.short-drama-test-name__text {
+  overflow: hidden;
+  max-width: 280px;
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.short-drama-test-name__edit {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+}
+
+.short-drama-test-name-input {
+  width: 240px;
+}
+
+.short-drama-test-name-input :deep(.el-input__wrapper) {
+  padding: 0 8px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px #e2e8f0 inset;
+}
+
+.short-drama-test-name-input :deep(.el-input__inner) {
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.add-api-btn {
+  height: 22px;
+  min-width: auto;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.suite-toggle-btn {
+  height: 22px;
+  min-width: auto;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.suite-toggle-btn__icon {
+  margin-left: 3px;
+  transition: transform 0.2s ease;
+}
+
+.suite-toggle-btn__icon--expanded {
+  transform: rotate(90deg);
+}
+
+.short-drama-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.short-drama-setting {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.short-drama-setting__label {
+  display: block;
+  margin-bottom: 7px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.short-drama-setting__control {
+  width: 100%;
+}
+
+.api-interface-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.api-interface-empty {
+  padding: 18px 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.api-interface-card {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.api-interface-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+}
+
+.api-interface-card--active {
+  border-color: #93c5fd;
+  box-shadow: 0 10px 24px rgba(59, 130, 246, 0.08);
+}
+
+.api-interface-card--selected {
+  border-color: #2563eb;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.12);
+}
+
+.api-interface-card--selected .api-card-header {
+  background: #eff6ff;
+}
+
+.api-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  padding: 12px 14px;
+  cursor: pointer;
+}
+
+.api-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.api-name-editor {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+
+.api-name-text {
+  overflow: hidden;
+  max-width: 220px;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-name-edit-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+}
+
+.api-name-input {
+  width: 210px;
+}
+
+.api-name-input :deep(.el-input__wrapper) {
+  padding: 0 8px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px #e2e8f0 inset;
+}
+
+.api-name-input :deep(.el-input__inner) {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.api-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.method-badge,
+.step-badge,
+.payload-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.method-badge.GET,
+.step-badge.GET,
+.payload-badge.GET {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.method-badge.POST,
+.step-badge.POST,
+.payload-badge.POST {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.method-badge.PUT,
+.step-badge.PUT,
+.payload-badge.PUT,
+.method-badge.PATCH,
+.step-badge.PATCH,
+.payload-badge.PATCH {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.method-badge.DELETE,
+.step-badge.DELETE,
+.payload-badge.DELETE {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.api-status-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.api-status-chip--pending {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.api-status-chip--running {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.api-status-chip--success {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.api-status-chip--failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.action-icon,
+.arrow-icon {
+  color: #94a3b8;
+  cursor: pointer;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.action-icon:hover {
+  color: #2563eb;
+}
+
+.delete-icon:hover {
+  color: #dc2626;
+}
+
+.arrow-icon {
+  font-size: 14px;
+}
+
+.arrow-rotated {
+  transform: rotate(90deg);
+}
+
+.api-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 14px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.form-row {
+  display: flex;
+  gap: 10px;
+}
+
+.form-item {
+  min-width: 0;
+  flex: 1;
+}
+
+.method-url-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.method-col {
+  min-width: 0;
+}
+
+.url-col {
+  min-width: 0;
+}
+
+.inner-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.method-select {
+  width: 100%;
+}
+
+.monospace-textarea :deep(.el-textarea__inner) {
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.json-command-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #d1fae5;
+  cursor: text;
+}
+
+.json-command-preview--editing {
+  border-color: #2563eb;
+}
+
+.json-command-preview:hover {
+  border-color: #334155;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.json-command-preview__label {
+  color: #16a34a;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.json-command-preview__lines {
+  min-width: 0;
+  margin: 0;
+  color: inherit;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.json-command-preview__line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.json-command-editor {
+  min-width: 0;
+}
+
+.json-command-editor :deep(.el-textarea__inner) {
+  min-width: 100%;
+  padding: 0 0 8px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: #d1fae5;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: pre;
+  word-break: normal;
+}
+
+.json-command-editor :deep(.el-textarea__inner:focus) {
+  box-shadow: none;
+}
+
+.short-drama-results-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: #ffffff;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+.short-drama-tabs-header {
+  display: flex;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 8px 16px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.sd-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #64748b;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.sd-tab-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.sd-tab-btn.active {
+  background: #3b82f6;
+  color: #ffffff;
+  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2);
+}
+
+.short-drama-tab-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pipeline-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pipeline-intro h3 {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  color: #0f172a;
+}
+
+.pipeline-intro p {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.pipeline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pipeline-card {
+  display: flex;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #ffffff;
+}
+
+.pipeline-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border-color: #cbd5e1;
+}
+
+.pipeline-card.active {
+  border-color: #3b82f6;
+  background: #f8fafc;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.06);
+}
+
+.pipeline-card--pending {
+  border-left: 4px solid #cbd5e1;
+}
+
+.pipeline-card--running {
+  border-left: 4px solid #3b82f6;
+}
+
+.pipeline-card--success {
+  border-left: 4px solid #10b981;
+}
+
+.pipeline-card--failed {
+  border-left: 4px solid #ef4444;
+}
+
+.pipeline-card__indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 14px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.status-dot.pending {
+  background: #94a3b8;
+}
+
+.status-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e2e8f0;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.status-icon {
+  font-size: 18px;
+}
+
+.pipeline-card__details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pipeline-card__title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.step-name {
+  font-size: 14px;
+  color: #1e293b;
+  font-weight: 700;
+}
+
+.step-latency {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.pipeline-card__meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.step-badge {
+  min-width: 42px;
+  height: 20px;
+  font-size: 10px;
+}
+
+.step-path {
+  overflow: hidden;
+  max-width: 420px;
+  color: #64748b;
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-code {
+  font-weight: 600;
+}
+
+.step-code.code-200 {
+  color: #10b981;
+}
+
+.step-code:not(.code-200) {
+  color: #ef4444;
+}
+
+.pipeline-card__action {
+  color: #94a3b8;
+  margin-left: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.latency-progress-bar.latency-ok {
+  background: #10b981;
+}
+
+.latency-progress-bar.latency-warn {
+  background: #f59e0b;
+}
+
+.latency-progress-bar.latency-error {
+  background: #ef4444;
+}
+
+.payload-view,
+.payload-details-wrapper,
+.latency-view {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.payload-details-wrapper {
+  gap: 12px;
+}
+
+.payload-header-bar,
+.latency-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.payload-header-bar strong,
+.latency-view__header h3 {
+  display: block;
+  margin: 0;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.payload-badge {
+  overflow: hidden;
+  max-width: 360px;
+  justify-content: flex-start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.payload-split-container {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+.payload-box {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.payload-box-title {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.json-code-block {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  background: #0f172a;
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.json-code-block--request {
+  color: #38bdf8;
+}
+
+.json-code-block--response {
+  color: #34d399;
+}
+
+.payload-empty-state {
+  padding: 40px;
+  text-align: center;
+}
+
+.latency-view {
+  gap: 14px;
+}
+
+.latency-chart-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.latency-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.latency-row--selected {
+  background: #eff6ff;
+}
+
+.latency-row__info {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.latency-row__name {
+  overflow: hidden;
+  color: #475569;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.latency-row__val {
+  flex-shrink: 0;
+  color: #2563eb;
+}
+
+.latency-row__val--empty {
+  color: #94a3b8;
+}
+
+.latency-progress-bg {
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f1f5f9;
+}
+
+.latency-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.latency-threshold-markers {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px dashed #e2e8f0;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.latency-threshold-markers span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.latency-threshold-markers span span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.marker-ok span {
+  background: #10b981;
+}
+
+.marker-warn span {
+  background: #f59e0b;
+}
+
+.marker-err span {
+  background: #ef4444;
+}
+
+@media (max-width: 1280px) {
+  .short-drama-settings-grid,
+  .payload-split-container {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
 

@@ -1,5 +1,10 @@
 # ChangeLog - Dashboard
 
+## 2026-06-26
+
+### Added
+- **Assistant Hover Fan Menu**: 智能助手悬浮按钮支持鼠标停留 3 秒后展开扇形快捷入口菜单，可直接进入当前配置的四个快捷入口。
+
 ## 2026-05-28
 
 ### Changed

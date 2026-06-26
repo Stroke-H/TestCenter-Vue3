@@ -1063,10 +1063,12 @@ func SaveAcceptanceReportHandler(c *gin.Context) {
 	req.ID = strings.TrimSpace(req.ID)
 	req.Reporter = strings.TrimSpace(req.Reporter)
 	req.TestOwner = strings.TrimSpace(req.TestOwner)
+	isNewReport := true
 
 	if req.ID != "" {
 		existing, existingErr := GetAcceptanceReportByID(req.ID)
 		if existingErr == nil && existing != nil {
+			isNewReport = false
 			if !strings.EqualFold(strings.TrimSpace(existing.Reporter), strings.TrimSpace(currentUser.Username)) {
 				c.JSON(http.StatusForbidden, gin.H{"error": "仅报告创建者可修改该验收报告"})
 				return
@@ -1097,8 +1099,15 @@ func SaveAcceptanceReportHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if isNewReport {
+		queueAcceptanceReportConfigAnalysis(req)
+	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Acceptance report saved successfully"})
+	c.JSON(http.StatusOK, gin.H{
+		"message":             "Acceptance report saved successfully",
+		"config_ai_queued":    isNewReport,
+		"config_project_code": strings.TrimSpace(req.ProjectCode),
+	})
 }
 
 func GetAcceptanceReportsHandler(c *gin.Context) {

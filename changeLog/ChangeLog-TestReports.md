@@ -1,5 +1,10 @@
 # ChangeLog - Test Reports
 
+## 2026-06-17
+
+### Changed
+- **Drama Failure Flow Aggregation**: 报告大厅的剧集播放 Failed Checks 失败来源流向默认展示全部历史数据的聚合结果；折线图和堆叠柱改为按天聚合，点击某一天后再切换为当天数据集合，并可返回全部视图。
+
 ## 2026-06-15
 
 ### Changed

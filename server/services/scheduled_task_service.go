@@ -615,7 +615,9 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 		log.Printf("[ScheduledTask] report analysis generated for task %s", task.ID)
 	}
 	failures := loadScheduledDramaFailures(reportDir)
-	failureDetail := formatScheduledDramaFailureDetail(failures)
+	dramaFailures, groupFailures := splitScheduledDramaFailures(failures)
+	failureDetail := formatScheduledDramaFailureDetail(dramaFailures)
+	groupFailureDetail := formatScheduledDramaFailureDetail(groupFailures)
 
 	statusText := "通过"
 	if status != "Passed" {
@@ -635,9 +637,110 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 		builder.WriteString("异常剧集明细\n")
 		builder.WriteString(failureDetail + "\n\n")
 	}
+	if strings.TrimSpace(groupFailureDetail) != "" {
+		builder.WriteString("分组异常\n")
+		builder.WriteString(groupFailureDetail + "\n\n")
+	}
 	builder.WriteString("报告地址：" + reportURL)
 	text := sanitizeFeishuPlainText(builder.String())
-	return text, buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, failures)
+	return text, buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, dramaFailures, groupFailures)
+}
+
+func SendDramaRunFeishuReportHandler(c *gin.Context) {
+	runID := sanitizeReportSuffix(c.Param("runId"))
+	if strings.TrimSpace(runID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "runId is required"})
+		return
+	}
+
+	rootDir := projectRootDir()
+	runDir := filepath.Join(testRunStorageRoot(rootDir), runID)
+	metadataPath := filepath.Join(runDir, "metadata.json")
+	metadataContent, err := os.ReadFile(metadataPath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "测试报告归档不存在"})
+		return
+	}
+
+	var archive TestRunArchive
+	if err := json.Unmarshal(metadataContent, &archive); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "测试报告归档元信息无效"})
+		return
+	}
+	if archive.TestType != "drama" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "仅剧集播放接口测试报告支持发送 AI 飞书报告"})
+		return
+	}
+
+	reportPath := filepath.Join(runDir, "artifacts", "report.html")
+	reportContent, err := os.ReadFile(reportPath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "测试报告 HTML 不存在"})
+		return
+	}
+
+	reportURL := firstNonEmpty(archive.ReportURLFromArtifacts(), PlatformBackendURL("/api/test-runs/"+url.PathEscape(runID)+"/artifacts/report"))
+	task := scheduledTaskFromDramaArchive(archive)
+	status := firstNonEmpty(archive.Status, "Passed")
+	duration := firstNonEmpty(archive.Duration, "-")
+	reportText := htmlToPlainText(string(reportContent))
+	if retryContent, err := os.ReadFile(filepath.Join(runDir, "artifacts", "drama_retry_result.json")); err == nil {
+		reportText += "\n\nRetry result JSON:\n" + string(retryContent)
+	}
+
+	analysis, err := analyzeScheduledReportTextWithAI(task, status, "", duration, reportText)
+	if err != nil {
+		log.Printf("[DramaRun] manual Feishu report analysis skipped for %s: %v", runID, err)
+		analysis = "报告分析暂未生成，请打开平台查看完整报告。"
+	}
+
+	failures := loadArchivedDramaFailures(runDir, string(reportContent))
+	dramaFailures, groupFailures := splitScheduledDramaFailures(failures)
+	statusText := "通过"
+	if !isDramaArchiveSuccessStatus(status) {
+		statusText = "失败"
+	}
+
+	card := buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, dramaFailures, groupFailures)
+	if err := sendFeishuGroupInteractiveCard(card); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "发送飞书失败: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "剧集播放接口测试 AI 报告已发送到飞书"})
+}
+
+func splitScheduledDramaFailures(failures []dramaFailureSummary) ([]dramaFailureSummary, []dramaFailureSummary) {
+	dramaFailures := make([]dramaFailureSummary, 0, len(failures))
+	groupFailures := make([]dramaFailureSummary, 0, len(failures))
+
+	for _, failure := range failures {
+		dramaFailure := failure
+		dramaFailure.Errors = nil
+		groupFailure := failure
+		groupFailure.Errors = nil
+
+		for _, line := range failure.Errors {
+			if isScheduledDramaGroupError(line) {
+				groupFailure.Errors = append(groupFailure.Errors, line)
+			} else {
+				dramaFailure.Errors = append(dramaFailure.Errors, line)
+			}
+		}
+		if len(dramaFailure.Errors) > 0 {
+			dramaFailures = append(dramaFailures, dramaFailure)
+		}
+		if len(groupFailure.Errors) > 0 {
+			groupFailures = append(groupFailures, groupFailure)
+		}
+	}
+
+	return dramaFailures, groupFailures
+}
+
+func isScheduledDramaGroupError(line string) bool {
+	normalized := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "•"))
+	return strings.HasPrefix(normalized, "[解锁类型]")
 }
 
 func formatScheduledDramaFailureDetail(failures []dramaFailureSummary) string {
@@ -674,9 +777,9 @@ func formatScheduledDramaFailureDetail(failures []dramaFailureSummary) string {
 	return strings.TrimSpace(builder.String())
 }
 
-func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duration string, reportURL string, analysis string, failures []dramaFailureSummary) map[string]any {
+func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duration string, reportURL string, analysis string, dramaFailures []dramaFailureSummary, groupFailures []dramaFailureSummary) map[string]any {
 	statusColor := "green"
-	if statusText != "通过" || len(failures) > 0 {
+	if statusText != "通过" || len(dramaFailures) > 0 || len(groupFailures) > 0 {
 		statusColor = "orange"
 	}
 	if statusText == "失败" {
@@ -701,16 +804,36 @@ func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duratio
 		},
 	}
 
-	if len(failures) > 0 {
+	if len(dramaFailures) > 0 {
 		elements = append(elements, map[string]any{"tag": "hr"})
 		elements = append(elements, map[string]any{
 			"tag": "div",
 			"text": map[string]any{
 				"tag":     "lark_md",
-				"content": fmt.Sprintf("**异常剧集明细（%d 部）**", len(failures)),
+				"content": fmt.Sprintf("**异常剧集明细（%d 部）**", len(dramaFailures)),
 			},
 		})
-		for _, failure := range failures {
+		for _, failure := range dramaFailures {
+			elements = append(elements, map[string]any{
+				"tag": "div",
+				"text": map[string]any{
+					"tag":     "lark_md",
+					"content": formatDramaFailureCardBlock(failure),
+				},
+			})
+		}
+	}
+
+	if len(groupFailures) > 0 {
+		elements = append(elements, map[string]any{"tag": "hr"})
+		elements = append(elements, map[string]any{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": fmt.Sprintf("**分组异常（%d 部）**", len(groupFailures)),
+			},
+		})
+		for _, failure := range groupFailures {
 			elements = append(elements, map[string]any{
 				"tag": "div",
 				"text": map[string]any{
@@ -763,6 +886,145 @@ func formatDramaFailureCardBlock(failure dramaFailureSummary) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (archive TestRunArchive) ReportURLFromArtifacts() string {
+	for _, artifact := range archive.Artifacts {
+		if strings.TrimSpace(artifact.URL) != "" {
+			return artifact.URL
+		}
+	}
+	return ""
+}
+
+func scheduledTaskFromDramaArchive(archive TestRunArchive) ScheduledTask {
+	return ScheduledTask{
+		ID:          archive.RunID,
+		Name:        firstNonEmpty(archive.TestName, "剧集播放接口测试"),
+		Creator:     firstNonEmpty(archive.Author, "tester"),
+		TestProject: "剧集播放接口测试",
+		TestEnv:     "归档报告",
+	}
+}
+
+func isDramaArchiveSuccessStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "passed", "success", "done":
+		return true
+	default:
+		return false
+	}
+}
+
+func loadArchivedDramaFailures(runDir string, reportHTML string) []dramaFailureSummary {
+	merged := make(map[string]dramaFailureSummary)
+	addFailures := func(items []dramaFailureSummary) {
+		for _, item := range items {
+			key := strings.TrimSpace(item.DramaID)
+			if key == "" {
+				key = strings.Join([]string{item.IntID, item.Title, item.CNTitle}, "|")
+			}
+			if key == "" {
+				continue
+			}
+			existing := merged[key]
+			if existing.DramaID == "" {
+				existing = item
+			} else {
+				existing.DramaID = valueOrFallback(existing.DramaID, item.DramaID)
+				existing.IntID = valueOrFallback(existing.IntID, item.IntID)
+				existing.Title = valueOrFallback(existing.Title, item.Title)
+				existing.CNTitle = valueOrFallback(existing.CNTitle, item.CNTitle)
+			}
+			existing.Errors = mergeDramaFailureErrorLines(existing.Errors, item.Errors)
+			merged[key] = existing
+		}
+	}
+
+	summaryPath := filepath.Join(runDir, "artifacts", "drama_failure_summary.json")
+	if content, err := os.ReadFile(summaryPath); err == nil {
+		var payload dramaFailureSummaryFile
+		if json.Unmarshal(content, &payload) == nil {
+			addFailures(payload.Failures)
+		}
+	}
+
+	retryPath := filepath.Join(runDir, "artifacts", "drama_retry_result.json")
+	if content, err := os.ReadFile(retryPath); err == nil {
+		var payload dramaRetryResultFile
+		if json.Unmarshal(content, &payload) == nil {
+			addFailures(payload.StructuredFailures)
+			addFailures(parseLegacyRetryFailures(payload.PersistentFailures))
+		}
+	}
+
+	if len(merged) == 0 {
+		addFailures(parseDramaFailuresFromReportHTML(reportHTML))
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	failures := make([]dramaFailureSummary, 0, len(merged))
+	for _, item := range merged {
+		failures = append(failures, item)
+	}
+	return failures
+}
+
+var dramaDetailsRegexp = regexp.MustCompile(`(?is)<details[^>]*>\s*<summary>\s*<b>\s*(.*?)\s*</b>\s*</summary>\s*<div[^>]*>\s*(.*?)\s*</div>\s*</details>`)
+var dramaIDLineRegexp = regexp.MustCompile(`(?i)ID:\s*([0-9a-f]{24})(?:\(([^)]*)\))?`)
+
+func parseDramaFailuresFromReportHTML(reportHTML string) []dramaFailureSummary {
+	matches := dramaDetailsRegexp.FindAllStringSubmatch(reportHTML, -1)
+	failures := make([]dramaFailureSummary, 0, len(matches))
+	for _, match := range matches {
+		if len(match) < 3 {
+			continue
+		}
+		summary := htmlToPlainText(strings.ReplaceAll(match[1], "<br>", "\n"))
+		detailHTML := strings.NewReplacer("<br>", "\n", "<br/>", "\n", "<br />", "\n").Replace(match[2])
+		detail := htmlToPlainText(detailHTML)
+		lines := splitNonEmptyLines(detail)
+		if len(lines) == 0 {
+			continue
+		}
+
+		failure := dramaFailureSummary{Errors: lines}
+		summaryLines := splitNonEmptyLines(summary)
+		for _, line := range summaryLines {
+			if strings.HasPrefix(strings.TrimSpace(line), "ID:") {
+				if idMatch := dramaIDLineRegexp.FindStringSubmatch(line); len(idMatch) >= 2 {
+					failure.DramaID = strings.TrimSpace(idMatch[1])
+					if len(idMatch) >= 3 {
+						failure.IntID = strings.TrimSpace(idMatch[2])
+					}
+				}
+				continue
+			}
+			if strings.Contains(line, "/CnName:") {
+				parts := strings.SplitN(line, "/CnName:", 2)
+				failure.Title = strings.TrimSpace(parts[0])
+				failure.CNTitle = strings.TrimSpace(parts[1])
+			}
+		}
+		if failure.DramaID == "" && failure.Title == "" && failure.CNTitle == "" {
+			continue
+		}
+		failures = append(failures, failure)
+	}
+	return failures
+}
+
+func splitNonEmptyLines(text string) []string {
+	parts := strings.Split(text, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		line := strings.TrimSpace(part)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 func escapeLarkMarkdown(text string) string {
@@ -1111,19 +1373,21 @@ func statusToAuditStatus(status string) string {
 }
 
 func analyzeScheduledTaskReportWithAI(task ScheduledTask, status string, result string, duration string, startedAt time.Time, reportDir string) (string, error) {
-	provider, err := selectScheduledReportProvider()
-	if err != nil {
-		return "", err
-	}
-
 	reportText, err := readScheduledTaskReportText(startedAt, reportDir)
 	if err != nil {
 		return "", err
 	}
+	return analyzeScheduledReportTextWithAI(task, status, result, duration, reportText)
+}
+
+func analyzeScheduledReportTextWithAI(task ScheduledTask, status string, result string, duration string, reportText string) (string, error) {
 	if strings.TrimSpace(reportText) == "" {
 		return "", fmt.Errorf("scheduled task report is empty")
 	}
-
+	provider, err := selectScheduledReportProvider()
+	if err != nil {
+		return "", err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 

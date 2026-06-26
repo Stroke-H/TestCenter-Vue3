@@ -4,8 +4,14 @@ import * as Icons from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { notifyAcceptanceReportsChanged } from '@/utils/acceptanceReportEvents'
-import { useDramaRunStore, useTestcaseGenerationRunStore } from '@/stores'
+import { useDramaRunStore, usePermissionStore, useTestcaseGenerationRunStore } from '@/stores'
 import { useRouter } from 'vue-router'
+import {
+  ASSISTANT_QUICK_ENTRY_CHANGED_EVENT,
+  type AssistantQuickEntry,
+  getAssistantQuickEntriesByIds,
+  getAssistantQuickEntryIds
+} from '@/config/assistantQuickEntries'
 
 // --- Types ---
 interface Message {
@@ -30,6 +36,7 @@ const API_BASE = '/api'
 const authStore = useAuthStore()
 const dramaRunStore = useDramaRunStore()
 const testcaseGenerationRunStore = useTestcaseGenerationRunStore()
+const permissionStore = usePermissionStore()
 const router = useRouter()
 
 // --- State ---
@@ -42,9 +49,11 @@ const isComposingInput = ref(false)
 const assistantMessages = ref<Message[]>([
   { role: 'assistant', text: '你好！我是你的智能助手，有什么可以帮你的吗？' }
 ])
+const assistantQuickEntryIds = ref<string[]>(getAssistantQuickEntryIds())
 const messageContainer = ref<HTMLElement | null>(null)
 const fabPosition = ref({ top: 0, left: 0 })
 const isDraggingFab = ref(false)
+const isFabFanMenuVisible = ref(false)
 const primaryRunningTask = computed<'testcase' | 'drama' | null>(() => {
   if (testcaseGenerationRunStore.hasRecoverableRun) return 'testcase'
   if (dramaRunStore.status === 'running') return 'drama'
@@ -130,10 +139,15 @@ const testcaseStatusBubbleText = computed(() => {
   }
   return ''
 })
+const assistantQuickEntries = computed(() => {
+  return getAssistantQuickEntriesByIds(assistantQuickEntryIds.value)
+    .filter((entry) => permissionStore.canAccess(entry.permissionKey))
+})
 let dragOffsetX = 0
 let dragOffsetY = 0
 let dragMoved = false
 let dragStarted = false
+let fabHoverTimer: ReturnType<typeof window.setTimeout> | null = null
 
 const cleanAssistantMarkdown = (text: string) => {
   return text
@@ -157,6 +171,7 @@ const reportSaving = ref(false)
 
 // --- Handlers ---
 const toggleAssistant = () => {
+  closeFabFanMenu()
   assistantVisible.value = !assistantVisible.value
   if (!assistantVisible.value) {
     finalizeAssistantSession()
@@ -312,6 +327,71 @@ const openCurrentRunningTask = () => {
   }
 }
 
+const openAssistantQuickEntry = async (entry: AssistantQuickEntry) => {
+  closeFabFanMenu()
+  if (!permissionStore.canAccess(entry.permissionKey)) {
+    ElMessage.warning('当前账号暂无该入口权限')
+    return
+  }
+  if (!entry.path) return
+  await router.push({
+    path: entry.path,
+    query: entry.query
+  })
+  assistantVisible.value = false
+}
+
+const clearFabHoverTimer = () => {
+  if (fabHoverTimer) {
+    window.clearTimeout(fabHoverTimer)
+    fabHoverTimer = null
+  }
+}
+
+const closeFabFanMenu = () => {
+  clearFabHoverTimer()
+  isFabFanMenuVisible.value = false
+}
+
+const startFabHover = () => {
+  if (assistantVisible.value || isDraggingFab.value || dragStarted || assistantQuickEntries.value.length === 0) return
+  clearFabHoverTimer()
+  fabHoverTimer = window.setTimeout(() => {
+    if (!assistantVisible.value && !isDraggingFab.value && !dragStarted && assistantQuickEntries.value.length > 0) {
+      isFabFanMenuVisible.value = true
+    }
+    fabHoverTimer = null
+  }, 3000)
+}
+
+const stopFabHover = () => {
+  closeFabFanMenu()
+}
+
+const getFabFanEntryStyle = (index: number, total: number) => {
+  const anglesByCount: Record<number, number[]> = {
+    1: [135],
+    2: [165, 105],
+    3: [170, 135, 100],
+    4: [180, 150, 120, 90]
+  }
+  const fallbackAngles = [180, 150, 120, 90]
+  const angles = anglesByCount[Math.min(Math.max(total, 1), 4)] ?? fallbackAngles
+  const angle = angles[index] ?? 135
+  const radius = 104
+  const radian = angle * Math.PI / 180
+
+  return {
+    '--fan-x': `${Math.cos(radian) * radius}px`,
+    '--fan-y': `${-Math.sin(radian) * radius}px`,
+    '--fan-delay': `${index * 45}ms`
+  }
+}
+
+const syncAssistantQuickEntries = () => {
+  assistantQuickEntryIds.value = getAssistantQuickEntryIds()
+}
+
 const syncFabPositionWithinViewport = () => {
   const buttonWidth = 140
   const buttonHeight = 52
@@ -371,6 +451,7 @@ const stopFabDrag = () => {
 }
 
 const startFabDrag = (event: PointerEvent) => {
+  closeFabFanMenu()
   dragStarted = true
   dragMoved = false
   dragOffsetX = event.clientX - fabPosition.value.left
@@ -384,10 +465,15 @@ onMounted(() => {
   syncFabPositionWithinViewport()
   dramaRunStore.recoverCurrentRun()
   window.addEventListener('resize', syncFabPositionWithinViewport)
+  window.addEventListener('storage', syncAssistantQuickEntries)
+  window.addEventListener(ASSISTANT_QUICK_ENTRY_CHANGED_EVENT, syncAssistantQuickEntries)
 })
 
 onBeforeUnmount(() => {
+  clearFabHoverTimer()
   window.removeEventListener('resize', syncFabPositionWithinViewport)
+  window.removeEventListener('storage', syncAssistantQuickEntries)
+  window.removeEventListener(ASSISTANT_QUICK_ENTRY_CHANGED_EVENT, syncAssistantQuickEntries)
   window.removeEventListener('pointermove', handleFabPointerMove)
   window.removeEventListener('pointerup', stopFabDrag)
 })
@@ -397,9 +483,12 @@ onBeforeUnmount(() => {
   <div class="global-assistant">
     <!-- FAB Button -->
     <div
+      v-if="!assistantVisible"
       class="fab-container"
-      :class="{ 'is-dragging': isDraggingFab, 'is-test-active': assistantButtonActive }"
+      :class="{ 'is-dragging': isDraggingFab, 'is-test-active': assistantButtonActive, 'has-fan-menu': isFabFanMenuVisible }"
       :style="{ top: `${fabPosition.top}px`, left: `${fabPosition.left}px` }"
+      @pointerenter="startFabHover"
+      @pointerleave="stopFabHover"
       @pointerdown.prevent="startFabDrag"
     >
       <transition name="assistant-bubble">
@@ -407,6 +496,27 @@ onBeforeUnmount(() => {
           {{ primaryRunningTask === 'testcase' ? testcaseStatusBubbleText : dramaRunStore.bubbleText }}
         </div>
       </transition>
+      <div
+        v-if="assistantQuickEntries.length"
+        class="fab-fan-menu"
+        :class="{ 'is-visible': isFabFanMenuVisible }"
+      >
+        <button
+          v-for="(entry, index) in assistantQuickEntries"
+          :key="entry.id"
+          type="button"
+          class="fab-fan-entry"
+          :style="getFabFanEntryStyle(index, assistantQuickEntries.length)"
+          :title="entry.name"
+          @pointerdown.stop
+          @click.stop="openAssistantQuickEntry(entry)"
+        >
+          <span class="fab-fan-entry__icon" :style="{ background: entry.iconBg, color: entry.iconColor }">
+            <el-icon><component :is="Icons[entry.iconName as keyof typeof Icons]" /></el-icon>
+          </span>
+          <span class="fab-fan-entry__label">{{ entry.name }}</span>
+        </button>
+      </div>
       <el-button
         type="primary"
         size="large"
@@ -495,6 +605,20 @@ onBeforeUnmount(() => {
         </div>
       </div>
       </div>
+      <div v-if="assistantQuickEntries.length" class="assistant-quick-entry-bar">
+        <button
+          v-for="entry in assistantQuickEntries"
+          :key="entry.id"
+          type="button"
+          class="assistant-quick-entry-btn"
+          @click="openAssistantQuickEntry(entry)"
+        >
+          <span class="assistant-quick-entry-btn__icon" :style="{ background: entry.iconBg, color: entry.iconColor }">
+            <el-icon><component :is="Icons[entry.iconName as keyof typeof Icons]" /></el-icon>
+          </span>
+          <span class="assistant-quick-entry-btn__text">{{ entry.name }}</span>
+        </button>
+      </div>
     </div>
 
     <!-- Editable Report Dialog -->
@@ -576,6 +700,88 @@ onBeforeUnmount(() => {
 
 .fab-container.is-test-active {
   animation: fabFloat 2.4s ease-in-out infinite;
+}
+
+.fab-container.has-fan-menu {
+  z-index: 3002;
+}
+
+.fab-fan-menu {
+  position: absolute;
+  left: 50%;
+  top: 26px;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.fab-fan-menu.is-visible {
+  pointer-events: auto;
+}
+
+.fab-fan-entry {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 72px;
+  min-height: 68px;
+  padding: 7px 6px 8px;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  border-radius: 16px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(12px);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, -50%) translate(0, 0) scale(0.72);
+  transition: opacity 0.18s ease, visibility 0.18s ease, color 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition-delay: 0ms;
+}
+
+.fab-fan-menu.is-visible .fab-fan-entry {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, -50%) translate(var(--fan-x), var(--fan-y));
+  transition-delay: var(--fan-delay);
+}
+
+.fab-fan-menu.is-visible .fab-fan-entry:hover {
+  color: #1d4ed8;
+  border-color: #93c5fd;
+  background: #eff6ff;
+  box-shadow: 0 18px 36px rgba(37, 99, 235, 0.20);
+  transform: translate(-50%, -50%) translate(var(--fan-x), var(--fan-y)) translateY(-2px);
+}
+
+.fab-fan-entry__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.fab-fan-entry__label {
+  width: 100%;
+  min-width: 0;
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fab-status-bubble {
@@ -664,7 +870,7 @@ onBeforeUnmount(() => {
 
 .assistant-shell-fixed {
   position: fixed;
-  bottom: 100px;
+  bottom: 156px;
   right: 40px;
   width: 480px;
   max-width: 90vw;
@@ -782,6 +988,63 @@ onBeforeUnmount(() => {
   background: #fff;
 }
 
+.assistant-quick-entry-bar {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  width: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assistant-quick-entry-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 38px;
+  padding: 0 8px;
+  color: #334155;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.10);
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.assistant-quick-entry-btn:hover {
+  color: #2563eb;
+  border-color: #93c5fd;
+  background: #eff6ff;
+  transform: translateY(-1px);
+}
+
+.assistant-quick-entry-btn__icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.assistant-quick-entry-btn__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
 .input-container {
   display: flex;
   align-items: flex-end;
@@ -791,7 +1054,7 @@ onBeforeUnmount(() => {
 .running-task-float-btn {
   position: absolute;
   left: 0;
-  top: calc(100% + 10px);
+  top: calc(100% + 58px);
   z-index: 2;
   min-width: 128px;
   min-height: 52px;

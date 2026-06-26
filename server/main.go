@@ -116,6 +116,9 @@ func main() {
 		{
 			reports.GET("/list", services.GetAcceptanceReportsHandler)
 			reports.POST("/save", services.SaveAcceptanceReportHandler)
+			reports.GET("/project-configs", services.GetProjectConfigRecordsHandler)
+			reports.POST("/project-configs", services.SaveProjectConfigRecordHandler)
+			reports.POST("/project-configs/analyze-project", services.AnalyzeProjectConfigHandler)
 			reports.POST("/send-feishu", services.SendAcceptanceReportToFeishuHandler)
 			reports.POST("/sync-cloud-doc", services.SyncAcceptanceReportToCloudDocHandler)
 			reports.POST("/fetch-project-items", services.FetchAcceptanceReportProjectItemsHandler)
@@ -140,6 +143,7 @@ func main() {
 		testRuns := api.Group("/test-runs")
 		{
 			testRuns.GET("/analytics/drama-failed-checks", services.ListDramaRunAnalyticsHandler)
+			testRuns.POST("/:runId/send-feishu", services.SendDramaRunFeishuReportHandler)
 			testRuns.GET("/:runId/logs", services.GetTestRunLogsHandler)
 			testRuns.GET("/:runId/artifacts/:artifact", services.GetTestRunArtifactHandler)
 		}
