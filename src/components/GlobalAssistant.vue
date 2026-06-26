@@ -51,6 +51,7 @@ const assistantMessages = ref<Message[]>([
 ])
 const assistantQuickEntryIds = ref<string[]>(getAssistantQuickEntryIds())
 const messageContainer = ref<HTMLElement | null>(null)
+const fabContainer = ref<HTMLElement | null>(null)
 const fabPosition = ref({ top: 0, left: 0 })
 const isDraggingFab = ref(false)
 const isFabFanMenuVisible = ref(false)
@@ -361,24 +362,35 @@ const startFabHover = () => {
       isFabFanMenuVisible.value = true
     }
     fabHoverTimer = null
-  }, 3000)
+  }, 1500)
 }
 
-const stopFabHover = () => {
+const handleFabHoverAreaLeave = () => {
+  closeFabFanMenu()
+}
+
+const handleFabFanBlankClick = () => {
+  closeFabFanMenu()
+}
+
+const handleFabOutsidePointerDown = (event: PointerEvent) => {
+  if (!isFabFanMenuVisible.value) return
+  const target = event.target
+  if (target instanceof Node && fabContainer.value?.contains(target)) return
   closeFabFanMenu()
 }
 
 const getFabFanEntryStyle = (index: number, total: number) => {
   const anglesByCount: Record<number, number[]> = {
     1: [135],
-    2: [165, 105],
-    3: [170, 135, 100],
-    4: [180, 150, 120, 90]
+    2: [176, 78],
+    3: [176, 127, 78],
+    4: [176, 143, 111, 78]
   }
-  const fallbackAngles = [180, 150, 120, 90]
+  const fallbackAngles = [176, 143, 111, 78]
   const angles = anglesByCount[Math.min(Math.max(total, 1), 4)] ?? fallbackAngles
   const angle = angles[index] ?? 135
-  const radius = 104
+  const radius = 168
   const radian = angle * Math.PI / 180
 
   return {
@@ -467,6 +479,7 @@ onMounted(() => {
   window.addEventListener('resize', syncFabPositionWithinViewport)
   window.addEventListener('storage', syncAssistantQuickEntries)
   window.addEventListener(ASSISTANT_QUICK_ENTRY_CHANGED_EVENT, syncAssistantQuickEntries)
+  window.addEventListener('pointerdown', handleFabOutsidePointerDown)
 })
 
 onBeforeUnmount(() => {
@@ -474,6 +487,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', syncFabPositionWithinViewport)
   window.removeEventListener('storage', syncAssistantQuickEntries)
   window.removeEventListener(ASSISTANT_QUICK_ENTRY_CHANGED_EVENT, syncAssistantQuickEntries)
+  window.removeEventListener('pointerdown', handleFabOutsidePointerDown)
   window.removeEventListener('pointermove', handleFabPointerMove)
   window.removeEventListener('pointerup', stopFabDrag)
 })
@@ -484,11 +498,12 @@ onBeforeUnmount(() => {
     <!-- FAB Button -->
     <div
       v-if="!assistantVisible"
+      ref="fabContainer"
       class="fab-container"
       :class="{ 'is-dragging': isDraggingFab, 'is-test-active': assistantButtonActive, 'has-fan-menu': isFabFanMenuVisible }"
       :style="{ top: `${fabPosition.top}px`, left: `${fabPosition.left}px` }"
       @pointerenter="startFabHover"
-      @pointerleave="stopFabHover"
+      @pointerleave="handleFabHoverAreaLeave"
       @pointerdown.prevent="startFabDrag"
     >
       <transition name="assistant-bubble">
@@ -501,6 +516,12 @@ onBeforeUnmount(() => {
         class="fab-fan-menu"
         :class="{ 'is-visible': isFabFanMenuVisible }"
       >
+        <div
+          v-if="isFabFanMenuVisible"
+          class="fab-fan-hit-area"
+          @pointerdown.stop
+          @click.stop="handleFabFanBlankClick"
+        />
         <button
           v-for="(entry, index) in assistantQuickEntries"
           :key="entry.id"
@@ -713,35 +734,47 @@ onBeforeUnmount(() => {
   width: 0;
   height: 0;
   pointer-events: none;
+  z-index: 1;
 }
 
 .fab-fan-menu.is-visible {
   pointer-events: auto;
 }
 
+.fab-fan-hit-area {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 440px;
+  height: 440px;
+  border-radius: 50%;
+  background: transparent;
+  cursor: default;
+  transform: translate(-50%, -50%);
+  z-index: 0;
+}
+
 .fab-fan-entry {
   position: absolute;
   left: 0;
   top: 0;
+  z-index: 2;
   width: 72px;
-  min-height: 68px;
-  padding: 7px 6px 8px;
+  min-height: 72px;
+  padding: 0;
   color: #334155;
-  background: rgba(255, 255, 255, 0.96);
-  border: 1px solid rgba(203, 213, 225, 0.92);
-  border-radius: 16px;
+  background: transparent;
+  border: 0;
   display: inline-flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 5px;
   cursor: pointer;
-  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.16);
-  backdrop-filter: blur(12px);
   opacity: 0;
   visibility: hidden;
   transform: translate(-50%, -50%) translate(0, 0) scale(0.72);
-  transition: opacity 0.18s ease, visibility 0.18s ease, color 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: opacity 0.18s ease, visibility 0.18s ease, color 0.18s ease, transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
   transition-delay: 0ms;
 }
 
@@ -754,34 +787,43 @@ onBeforeUnmount(() => {
 
 .fab-fan-menu.is-visible .fab-fan-entry:hover {
   color: #1d4ed8;
-  border-color: #93c5fd;
-  background: #eff6ff;
-  box-shadow: 0 18px 36px rgba(37, 99, 235, 0.20);
   transform: translate(-50%, -50%) translate(var(--fan-x), var(--fan-y)) translateY(-2px);
 }
 
 .fab-fan-entry__icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 12px;
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgba(203, 213, 225, 0.92);
+  border-radius: 16px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 20px;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.15);
+  backdrop-filter: blur(12px);
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.fab-fan-entry:hover .fab-fan-entry__icon {
+  border-color: #93c5fd;
+  box-shadow: 0 18px 36px rgba(37, 99, 235, 0.20);
+  transform: translateY(-1px);
 }
 
 .fab-fan-entry__label {
-  width: 100%;
+  width: max-content;
+  max-width: 86px;
   min-width: 0;
   color: #0f172a;
   font-size: 11px;
-  font-weight: 800;
-  line-height: 1.15;
+  font-weight: 760;
+  line-height: 1.2;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.92), 0 8px 18px rgba(15, 23, 42, 0.18);
 }
 
 .fab-status-bubble {
@@ -813,6 +855,8 @@ onBeforeUnmount(() => {
 }
 
 .fab-btn {
+  position: relative;
+  z-index: 3;
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
   height: 52px;
   padding: 0 28px;
