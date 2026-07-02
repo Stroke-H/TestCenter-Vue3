@@ -86,6 +86,7 @@ JSONL 到 MySQL 的一次性迁移已完成，历史迁移脚本已归档到 `�
 ### Windows 迁移
 
 从 Mac 迁移到 Windows 时，请先拉取 `windows` 分支，再按 [Windows 迁移部署说明](docs/windows-migration.md) 还原私有配置包并启动服务。
+Windows 端 Codex 接手时先读 [WINDOWS_CODEX_README.md](WINDOWS_CODEX_README.md)。
 
 ---
 

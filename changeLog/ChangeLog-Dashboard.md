@@ -4,6 +4,7 @@
 
 ### Added
 - **Windows Migration Guide**: 新增 Windows 迁移部署说明和 PowerShell 辅助脚本，支持从 `windows` 分支拉取代码后，一键还原私有配置包并按固定路径启动前后端服务。
+- **Windows Codex Handoff README**: 新增 Windows 端 Codex 接手说明，明确迁移包还原、启动、验证和隐私文件禁止提交规则，降低迁移后接手成本。
 
 ## 2026-06-26
 
