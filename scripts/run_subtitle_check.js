@@ -14,16 +14,12 @@ const FETCH_CONCURRENCY = clamp(Number(process.env.SUBTITLE_FETCH_CONCURRENCY ||
 const FETCH_TIMEOUT_MS = Number(process.env.SUBTITLE_FETCH_TIMEOUT_MS || 15000);
 const FETCH_RETRY_ATTEMPTS = Number(process.env.SUBTITLE_FETCH_RETRY_ATTEMPTS || 3);
 const MAX_SUBTITLE_SECONDS = Number(process.env.SUBTITLE_MAX_SECONDS || 600);
-const AI_ENABLED = process.env.SUBTITLE_AI_ENABLED === '1' && Boolean(process.env.SUBTITLE_AI_API_KEY);
-const AI_CONCURRENCY = clamp(Number(process.env.SUBTITLE_AI_CONCURRENCY || 1), 1, 2);
-const AI_TIMEOUT_MS = Number(process.env.SUBTITLE_AI_TIMEOUT_MS || 30000);
 
 const summary = loadSummary();
 const counters = {
   checkedFiles: 0,
   failedFiles: 0,
   failures: 0,
-  languageFailures: 0,
   timestampFailures: 0,
   fetchFailures: 0,
   missingSubtitleFailures: 0,
@@ -43,7 +39,7 @@ async function main() {
   counters.totalCheckItems = queue.length;
   counters.uniqueTasks = tasks.length;
   counters.cacheHits = cachedTasks;
-  console.log(`🔎 开始检查外挂字幕：${queue.length} 个检查项，去重后 ${tasks.length} 个任务，并发 ${FETCH_CONCURRENCY}，缓存命中 ${cachedTasks} 个，AI复核 ${AI_ENABLED ? '启用' : '未启用（默认关闭）'}`);
+  console.log(`🔎 开始检查外挂字幕：${queue.length} 个检查项，去重后 ${tasks.length} 个任务，并发 ${FETCH_CONCURRENCY}，缓存命中 ${cachedTasks} 个，检查规则：字幕数量、缺失字幕、时间轴、字幕拉取`);
 
   let nextCheckProgressPercent = 10;
   let nextSummaryWriteAt = 100;
@@ -110,7 +106,7 @@ function cacheKeyForEntry(entry) {
   if (entry.missingSubtitle || !String(entry.url || '').trim()) {
     return `missing:v2:${entry.dramaId || entry.intId || entry.title}`;
   }
-  return `url:v3:max=${MAX_SUBTITLE_SECONDS}:ai=${AI_ENABLED ? '1' : '0'}:${String(entry.url).trim()}`;
+  return `url:v4:max=${MAX_SUBTITLE_SECONDS}:${String(entry.url).trim()}`;
 }
 
 function toFailureTemplate(failure) {
@@ -154,17 +150,6 @@ async function checkSubtitleEntry(entry) {
   const timestampFailures = detectTimestampFailures(cues);
   for (const cue of timestampFailures) {
     failures.push(buildFailure(entry, 'timestamp', cue.reason, cue));
-  }
-
-  const languageResult = await detectLanguageWithOptionalAI(entry, cues);
-  if (languageResult.failed) {
-    failures.push(buildFailure(entry, 'language', languageResult.reason, {
-      expectedLang: entry.lang,
-      detectedLang: languageResult.detectedLang,
-      confidence: languageResult.confidence,
-      aiReviewed: languageResult.aiReviewed,
-      evidence: languageResult.evidence || []
-    }));
   }
 
   return failures;
@@ -259,203 +244,6 @@ function detectTimestampFailures(cues) {
   return failures;
 }
 
-async function detectLanguageWithOptionalAI(entry, cues) {
-  const expected = normalizeExpectedLang(entry.lang);
-  if (!expected) {
-    return { failed: false, detectedLang: '', confidence: 0, aiReviewed: false };
-  }
-  const sampleCues = pickLanguageSampleCues(cues);
-  const sample = sampleCues.map(cue => cue.text).filter(Boolean).join('\n').slice(0, 4000);
-  if (!sample) {
-    return { failed: true, reason: '字幕文件无可识别文本', detectedLang: '', confidence: 0, aiReviewed: false };
-  }
-  const local = detectLanguageLocal(sample);
-  if (isJapaneseExpectedWithTraditionalChinese(expected, sample)) {
-    return { failed: false, detectedLang: 'zh-tw', confidence: 0.99, aiReviewed: false };
-  }
-  const localMatched = expected.includes(local.lang);
-  if (localMatched && local.confidence >= 0.35) {
-    return { failed: false, detectedLang: local.lang, confidence: local.confidence, aiReviewed: false };
-  }
-  if (AI_ENABLED) {
-    const ai = await enqueueAIReview(expected[0], entry.rawLang || entry.lang, local, sampleCues);
-    if (ai && !ai.isMismatch) {
-      return { failed: false, detectedLang: ai.detectedLang || local.lang, confidence: ai.confidence || local.confidence, aiReviewed: true };
-    }
-    if (ai) {
-      return {
-        failed: true,
-        reason: `字幕语种与剧集语种不匹配，期望 ${entry.rawLang || entry.lang}，AI复核判断 ${ai.detectedLang || 'unknown'}。${ai.reason || ''}`.trim(),
-        detectedLang: ai.detectedLang,
-        confidence: ai.confidence,
-        aiReviewed: true,
-        evidence: ai.evidence || []
-      };
-    }
-  }
-  if (!localMatched && local.confidence >= 0.45) {
-    return {
-      failed: true,
-      reason: `字幕语种与剧集语种不匹配，期望 ${entry.rawLang || entry.lang}，本地判断 ${local.lang || 'unknown'}`,
-      detectedLang: local.lang,
-      confidence: local.confidence,
-      aiReviewed: false
-    };
-  }
-  return { failed: false, detectedLang: local.lang, confidence: local.confidence, aiReviewed: false };
-}
-
-function pickLanguageSampleCues(cues) {
-  const meaningful = cues.filter(cue => stripTags(cue.text || '').trim().length >= 2);
-  if (meaningful.length <= 30) return meaningful;
-  const sample = [];
-  const step = Math.max(1, Math.floor(meaningful.length / 30));
-  for (let i = 0; i < meaningful.length && sample.length < 30; i += step) {
-    sample.push(meaningful[i]);
-  }
-  return sample;
-}
-
-function normalizeExpectedLang(lang) {
-  const text = String(lang || '').trim().toLowerCase();
-  const aliases = {
-    cn: ['zh'], zh: ['zh'], 'zh-cn': ['zh'], chinese: ['zh'],
-    en: ['en'], english: ['en'],
-    es: ['es'], spanish: ['es'],
-    pt: ['pt'], portuguese: ['pt'],
-    fr: ['fr'], french: ['fr'],
-    de: ['de'], german: ['de'],
-    id: ['id'], indonesian: ['id'],
-    ar: ['ar'], arabic: ['ar'],
-    ru: ['ru'], russian: ['ru'],
-    ja: ['ja'], japanese: ['ja'],
-    ko: ['ko'], korean: ['ko'],
-    th: ['th'], thai: ['th'],
-    vi: ['vi'], vietnamese: ['vi']
-  };
-  return aliases[text] || aliases[text.split('-')[0]] || (text ? [text.split('-')[0]] : []);
-}
-
-function detectLanguageLocal(text) {
-  const clean = stripTags(text).toLowerCase();
-  const total = Math.max(clean.replace(/\s/g, '').length, 1);
-  const scripts = [
-    ['zh', /[\u4e00-\u9fff]/g],
-    ['ja', /[\u3040-\u30ff]/g],
-    ['ko', /[\uac00-\ud7af]/g],
-    ['ar', /[\u0600-\u06ff]/g],
-    ['ru', /[\u0400-\u04ff]/g],
-    ['th', /[\u0e00-\u0e7f]/g]
-  ].map(([lang, regex]) => ({ lang, score: (clean.match(regex)?.length || 0) / total }));
-  const scriptBest = scripts.sort((a, b) => b.score - a.score)[0];
-  if (scriptBest.score > 0.2) return { lang: scriptBest.lang, confidence: Math.min(0.99, scriptBest.score * 2) };
-
-  const stopwordScores = {
-    es: scoreWords(clean, [' que ', ' de ', ' la ', ' el ', ' los ', ' una ', ' por ', ' para ']),
-    pt: scoreWords(clean, [' que ', ' de ', ' para ', ' nao ', ' uma ', ' por ', ' voce ', ' com ']),
-    fr: scoreWords(clean, [' que ', ' de ', ' les ', ' une ', ' pas ', ' pour ', ' vous ', ' avec ']),
-    de: scoreWords(clean, [' und ', ' der ', ' die ', ' das ', ' nicht ', ' ich ', ' sie ', ' ist ']),
-    id: scoreWords(clean, [' yang ', ' dan ', ' tidak ', ' untuk ', ' aku ', ' kamu ', ' dengan ', ' dari ']),
-    en: scoreWords(clean, [' the ', ' and ', ' you ', ' that ', ' have ', ' for ', ' not ', ' with ']),
-    it: scoreWords(clean, [' che ', ' non ', ' per ', ' una ', ' del ', ' sono ', ' con ', ' gli ']),
-    vi: scoreWords(clean, [' khong ', ' nguoi ', ' cua ', ' toi ', ' ban ', ' trong ', ' mot ', ' voi '])
-  };
-  const best = Object.entries(stopwordScores).sort((a, b) => b[1] - a[1])[0] || ['', 0];
-  return { lang: best[0], confidence: Math.min(0.95, best[1] / 6) };
-}
-
-function isJapaneseExpectedWithTraditionalChinese(expected, sample) {
-  return expected.includes('ja') && containsTraditionalChinese(sample);
-}
-
-function containsTraditionalChinese(text) {
-  return /[個們來國會時過還對為與開關後點無麼體學實產當發見現電車書買賣讓說話認識邊這裡嗎問題氣長應該歡歲壞聽讀寫東從頭條愛處聲響]/.test(stripTags(text));
-}
-
-function scoreWords(text, words) {
-  return words.reduce((sum, word) => sum + countOccurrences(text, word), 0);
-}
-
-function countOccurrences(text, needle) {
-  let count = 0;
-  let index = text.indexOf(needle);
-  while (index >= 0) {
-    count += 1;
-    index = text.indexOf(needle, index + needle.length);
-  }
-  return count;
-}
-
-function stripTags(text) {
-  return String(text || '').replace(/<[^>]+>/g, ' ').replace(/[^\p{L}\p{N}\s']/gu, ' ');
-}
-
-const aiQueue = [];
-let activeAI = 0;
-
-function enqueueAIReview(expectedLang, rawExpectedLang, local, sampleCues) {
-  return new Promise(resolve => {
-    aiQueue.push({ expectedLang, rawExpectedLang, local, sampleCues, resolve });
-    drainAIQueue();
-  });
-}
-
-function drainAIQueue() {
-  while (activeAI < AI_CONCURRENCY && aiQueue.length > 0) {
-    const item = aiQueue.shift();
-    activeAI += 1;
-    reviewLanguageWithAI(item.expectedLang, item.rawExpectedLang, item.local, item.sampleCues)
-      .then(item.resolve)
-      .catch(() => item.resolve(null))
-      .finally(() => {
-        activeAI -= 1;
-        drainAIQueue();
-      });
-  }
-}
-
-async function reviewLanguageWithAI(expectedLang, rawExpectedLang, local, sampleCues) {
-  const baseURL = String(process.env.SUBTITLE_AI_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
-  const model = process.env.SUBTITLE_AI_MODEL || 'deepseek-chat';
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-  const sample = sampleCues.map(cue => `[${cue.index}] ${cue.start || '-'} --> ${cue.end || '-'} ${String(cue.text || '').replace(/\s+/g, ' ').trim()}`).join('\n').slice(0, 3500);
-  const response = await fetch(`${baseURL}/chat/completions`, {
-    method: 'POST',
-    signal: controller.signal,
-    headers: {
-      Authorization: `Bearer ${process.env.SUBTITLE_AI_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      messages: [
-        { role: 'system', content: '你是字幕语种复核器。只返回紧凑 JSON，不要 Markdown。JSON 格式：{"isMismatch":true,"detectedLang":"zh","confidence":0.95,"reason":"原因","evidence":[{"index":1,"text":"原字幕片段","reason":"为什么不符合"}]}。detectedLang 使用 ISO 639-1。只有确认字幕主要语种与期望不一致时 isMismatch 才为 true。' },
-        { role: 'user', content: `期望剧集语种: ${rawExpectedLang || expectedLang} (${expectedLang})\n本地粗判: ${local.lang || 'unknown'} / ${local.confidence || 0}\n字幕样本:\n${sample}` }
-      ]
-    })
-  }).finally(() => clearTimeout(timer));
-  if (!response.ok) return null;
-  const payload = await response.json();
-  const text = payload?.choices?.[0]?.message?.content || '';
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  const parsed = JSON.parse(match[0]);
-  const evidence = Array.isArray(parsed.evidence) ? parsed.evidence.slice(0, 5).map(item => ({
-    index: Number(item?.index || 0),
-    text: String(item?.text || '').slice(0, 500),
-    reason: String(item?.reason || '').slice(0, 300)
-  })).filter(item => item.text || item.reason) : [];
-  return {
-    isMismatch: Boolean(parsed.isMismatch),
-    detectedLang: String(parsed.detectedLang || parsed.lang || '').toLowerCase().slice(0, 8),
-    confidence: Number(parsed.confidence || 0),
-    reason: String(parsed.reason || '').slice(0, 500),
-    evidence
-  };
-}
-
 function buildFailure(entry, category, message, cue = null) {
   const failure = {
     category,
@@ -477,7 +265,6 @@ function buildFailure(entry, category, message, cue = null) {
 
 function appendFailure(failure) {
   counters.failures += 1;
-  if (failure.category === 'language') counters.languageFailures += 1;
   if (failure.category === 'timestamp') counters.timestampFailures += 1;
   if (failure.category === 'fetch') counters.fetchFailures += 1;
   if (failure.category === 'missing_subtitle') counters.missingSubtitleFailures += 1;
@@ -554,7 +341,7 @@ function writeSummary(status) {
   fs.writeFileSync(SUMMARY_FILE, JSON.stringify({
     ...summary,
     ...counters,
-    aiEnabled: AI_ENABLED,
+    aiEnabled: false,
     status,
     finishedAt: new Date().toISOString()
   }, null, 2), 'utf8');

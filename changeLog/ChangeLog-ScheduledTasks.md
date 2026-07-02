@@ -2,6 +2,9 @@
 
 ## 2026-06-30
 
+### Changed
+- **Subtitle Language Check Removal**: 剧集外挂字幕测试完全移除字幕语种识别与 AI 复核链路，仅保留字幕数量、缺失字幕、时间轴和字幕拉取异常检查；HTML 报告与飞书通知同步移除“语种异常”和“AI 复核”展示。
+
 ### Fixed
 - **Running Task Recovery Reschedule**: 周期定时任务在后端重启后若发现旧 `running` 状态但执行进程已不存在，会记录中断结果并自动顺延到下一次未来执行时间，不再永久停留在 `paused`。
 - **Early Schedule State Commit**: 剧集播放定时任务执行结束后会优先回写任务状态和下次执行时间，再执行报告归档、AI 总结和飞书通知，避免收尾链路异常导致后续周期不再触发。

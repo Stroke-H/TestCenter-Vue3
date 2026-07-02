@@ -130,7 +130,6 @@ function renderReport(summary, sections, failures) {
     th, td { padding: 11px 12px; border-top: 1px solid #eef2f7; text-align: left; vertical-align: top; font-size: 13px; line-height: 1.55; }
     th { color: #475569; background: #ffffff; font-weight: 800; }
     .category { display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 999px; background: #dbeafe; color: #1d4ed8; font-weight: 800; white-space: nowrap; font-size: 12px; }
-    .category.language { background: #fef3c7; color: #92400e; }
     .category.fetch, .category.missing_subtitle { background: #fee2e2; color: #991b1b; }
     .category.subtitle_count { background: #ffedd5; color: #9a3412; }
     .category.timestamp { background: #ede9fe; color: #6d28d9; }
@@ -154,7 +153,7 @@ function renderReport(summary, sections, failures) {
     <div class="hero-inner">
       <div>
         <h1>剧集外挂字幕测试报告</h1>
-        <div class="subtitle">生成时间：${escapeHTML(finishedAt)}<br>AI 复核：${summary.aiEnabled ? '已启用' : '未启用'}　检查规则：语种匹配、时间轴合法、10 分钟上限、字幕地址完整性</div>
+        <div class="subtitle">生成时间：${escapeHTML(finishedAt)}<br>检查规则：字幕数量、缺失字幕、时间轴合法、10 分钟上限、字幕地址可访问性</div>
       </div>
       <div class="status">
         <div class="status-label">Result</div>
@@ -179,7 +178,6 @@ function renderReport(summary, sections, failures) {
         ${stat('正片字幕文件', summary.totalSubtitleUrls || 0)}
         ${stat('字幕数量异常', summary.subtitleCountFailures || 0)}
         ${stat('缺失字幕', summary.missingSubtitleFailures || 0)}
-        ${stat('语种异常', summary.languageFailures || 0)}
         ${stat('时间轴异常', summary.timestampFailures || 0)}
         ${stat('拉取失败', summary.fetchFailures || 0)}
         ${stat('去重任务', summary.uniqueTasks || summary.checkedFiles || 0)}
@@ -283,7 +281,6 @@ function stat(label, value) {
 function categoryLabel(category) {
   return {
     timestamp: '时间轴',
-    language: '语种',
     fetch: '拉取',
     subtitle_count: '数量',
     missing_subtitle: '缺失字幕'
@@ -294,7 +291,6 @@ function categoryOrder() {
   return [
     { key: 'subtitle_count', label: '字幕数量异常', description: '剧集 chapters 数量与解析到的正片 VTT 字幕文件数不一致。' },
     { key: 'missing_subtitle', label: '缺失字幕', description: '外挂剧在章节数据中没有解析到正片 VTT 字幕地址。' },
-    { key: 'language', label: '语种异常', description: '字幕语种经本地识别和 AI 复核后仍与剧集 lang 不一致。' },
     { key: 'timestamp', label: '时间轴异常', description: '字幕时间戳存在倒退、结束早于开始、格式异常或超过 10 分钟。' },
     { key: 'fetch', label: '拉取失败', description: '字幕地址请求失败，无法完成内容检查。' },
     { key: 'unknown', label: '其他异常', description: '未归入固定分类的异常。' }
@@ -303,10 +299,8 @@ function categoryOrder() {
 
 function formatCueMeta(cue) {
   const fields = [];
-  if (cue.expectedLang) fields.push(`期望语种: ${cue.expectedLang}`);
-  if (cue.detectedLang) fields.push(`识别语种: ${cue.detectedLang}`);
-  if (cue.confidence) fields.push(`置信度: ${cue.confidence}`);
-  if (cue.aiReviewed !== undefined) fields.push(`AI复核: ${cue.aiReviewed ? '是' : '否'}`);
+  if (cue.start) fields.push(`开始: ${cue.start}`);
+  if (cue.end) fields.push(`结束: ${cue.end}`);
   return fields.join('\n');
 }
 

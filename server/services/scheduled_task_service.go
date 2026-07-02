@@ -678,7 +678,6 @@ func runExternalSubtitleTask(ctx context.Context, testEnv string, reportDir stri
 	rootDir, _ := filepath.Abs("..")
 	env := appendDramaProfileEnv(os.Environ(), profile, "", "", "", "")
 	env = append(env, "SUBTITLE_REPORT_DIR="+reportDir)
-	env = appendSubtitleAIEnv(env)
 
 	_ = os.MkdirAll(filepath.Join(rootDir, reportDir), 0755)
 	if err := runCommand(ctx, rootDir, env, "node", filepath.Join("scripts", "prepare_subtitle_check.js")); err != nil {
@@ -691,28 +690,6 @@ func runExternalSubtitleTask(ctx context.Context, testEnv string, reportDir stri
 		return fmt.Errorf("build subtitle report failed: %w", err)
 	}
 	return ctx.Err()
-}
-
-func appendSubtitleAIEnv(env []string) []string {
-	if os.Getenv("SUBTITLE_AI_ENABLED") != "1" {
-		env = append(env, "SUBTITLE_AI_ENABLED=0")
-		return env
-	}
-
-	provider, err := selectScheduledReportProvider()
-	if err != nil || strings.TrimSpace(provider.APIKey) == "" {
-		env = append(env, "SUBTITLE_AI_ENABLED=0")
-		return env
-	}
-	env = append(env, "SUBTITLE_AI_ENABLED=1")
-	env = append(env, "SUBTITLE_AI_API_KEY="+provider.APIKey)
-	if strings.TrimSpace(provider.BaseURL) != "" {
-		env = append(env, "SUBTITLE_AI_BASE_URL="+strings.TrimRight(provider.BaseURL, "/"))
-	}
-	if strings.TrimSpace(provider.Model) != "" {
-		env = append(env, "SUBTITLE_AI_MODEL="+provider.Model)
-	}
-	return env
 }
 
 func runCommand(ctx context.Context, dir string, env []string, name string, args ...string) error {
@@ -816,12 +793,10 @@ type subtitleScheduledSummary struct {
 	CheckedFiles            int    `json:"checkedFiles"`
 	FailedFiles             int    `json:"failedFiles"`
 	Failures                int    `json:"failures"`
-	LanguageFailures        int    `json:"languageFailures"`
 	TimestampFailures       int    `json:"timestampFailures"`
 	FetchFailures           int    `json:"fetchFailures"`
 	MissingSubtitleFailures int    `json:"missingSubtitleFailures"`
 	SubtitleCountFailures   int    `json:"subtitleCountFailures"`
-	AIEnabled               bool   `json:"aiEnabled"`
 	FinishedAt              string `json:"finishedAt"`
 }
 
@@ -843,7 +818,7 @@ func buildSubtitleScheduledTaskNotice(task ScheduledTask, status string, result 
 		builder.WriteString(fmt.Sprintf("外挂剧：%d 部\n", summary.ExternalDramas))
 		builder.WriteString(fmt.Sprintf("检查项：%d/%d，正片字幕文件：%d\n", summary.CheckedFiles, valueOrDefaultInt(summary.TotalCheckItems, summary.TotalSubtitleURLs), summary.TotalSubtitleURLs))
 		builder.WriteString(fmt.Sprintf("异常：%d 条，影响文件：%d 个\n", summary.Failures, summary.FailedFiles))
-		builder.WriteString(fmt.Sprintf("字幕数量异常：%d，缺失字幕：%d，语言异常：%d，时间轴异常：%d，拉取失败：%d\n", summary.SubtitleCountFailures, summary.MissingSubtitleFailures, summary.LanguageFailures, summary.TimestampFailures, summary.FetchFailures))
+		builder.WriteString(fmt.Sprintf("字幕数量异常：%d，缺失字幕：%d，时间轴异常：%d，拉取失败：%d\n", summary.SubtitleCountFailures, summary.MissingSubtitleFailures, summary.TimestampFailures, summary.FetchFailures))
 	} else if strings.TrimSpace(result) != "" {
 		builder.WriteString("执行结果：" + sanitizeFeishuPlainText(result) + "\n")
 	}
@@ -858,7 +833,7 @@ func buildSubtitleScheduledTaskNotice(task ScheduledTask, status string, result 
 		"elements": []any{
 			map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": fmt.Sprintf("**结果：**%s\n**项目：**%s\n**环境：**%s\n**耗时：**%s", statusText, valueOrFallback(task.TestProject, task.TestProjectCode), task.TestEnv, duration)}},
 			map[string]any{"tag": "hr"},
-			map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": fmt.Sprintf("**外挂剧：**%d 部\n**检查项：**%d/%d　**正片字幕文件：**%d\n**异常：**%d 条，影响文件 %d 个\n**字幕数量异常：**%d　**缺失字幕：**%d　**语言异常：**%d　**时间轴异常：**%d　**拉取失败：**%d\n**AI复核：**%s", summary.ExternalDramas, summary.CheckedFiles, valueOrDefaultInt(summary.TotalCheckItems, summary.TotalSubtitleURLs), summary.TotalSubtitleURLs, summary.Failures, summary.FailedFiles, summary.SubtitleCountFailures, summary.MissingSubtitleFailures, summary.LanguageFailures, summary.TimestampFailures, summary.FetchFailures, formatSubtitleAIEnabled(summary.AIEnabled))}},
+			map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": fmt.Sprintf("**外挂剧：**%d 部\n**检查项：**%d/%d　**正片字幕文件：**%d\n**异常：**%d 条，影响文件 %d 个\n**字幕数量异常：**%d　**缺失字幕：**%d　**时间轴异常：**%d　**拉取失败：**%d", summary.ExternalDramas, summary.CheckedFiles, valueOrDefaultInt(summary.TotalCheckItems, summary.TotalSubtitleURLs), summary.TotalSubtitleURLs, summary.Failures, summary.FailedFiles, summary.SubtitleCountFailures, summary.MissingSubtitleFailures, summary.TimestampFailures, summary.FetchFailures)}},
 		},
 	}
 	if strings.TrimSpace(reportURL) != "" {
@@ -881,13 +856,6 @@ func loadSubtitleScheduledSummary(reportDir string) subtitleScheduledSummary {
 	var summary subtitleScheduledSummary
 	_ = json.Unmarshal(content, &summary)
 	return summary
-}
-
-func formatSubtitleAIEnabled(enabled bool) string {
-	if enabled {
-		return "已启用"
-	}
-	return "未启用"
 }
 
 func valueOrDefaultInt(value int, fallback int) int {

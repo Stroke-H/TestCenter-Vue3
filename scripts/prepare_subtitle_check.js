@@ -51,7 +51,6 @@ async function main() {
     checkedFiles: 0,
     failedFiles: 0,
     failures: 0,
-    languageFailures: 0,
     timestampFailures: 0,
     fetchFailures: 0,
     missingSubtitleFailures: 0,
@@ -60,7 +59,6 @@ async function main() {
     dramasWithSubtitle: 0,
     allSubtitleFallbackDramas: 0,
     allSubtitleFallbackUrls: 0,
-    aiEnabled: isAIEnabled(),
     status: 'preparing'
   };
   writeSummary(progress);
@@ -453,10 +451,6 @@ function isPlayableSubtitleURL(text) {
 
 function normalizeLang(lang) {
   return String(lang || '').trim().toLowerCase().replace('_', '-');
-}
-
-function isAIEnabled() {
-  return process.env.SUBTITLE_AI_ENABLED === '1' && Boolean(process.env.SUBTITLE_AI_API_KEY);
 }
 
 function writeSummary(summary) {

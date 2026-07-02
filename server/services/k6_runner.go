@@ -380,7 +380,6 @@ func (job *dramaRunJob) execute(ctx context.Context, rootDir string, env []strin
 func (job *dramaRunJob) executeSubtitle(ctx context.Context, rootDir string, env []string) {
 	reportDir := scheduledTaskRuntimeReportDir(scheduledFunctionExternalSubtitle, job.id)
 	env = append(env, "SUBTITLE_REPORT_DIR="+reportDir)
-	env = appendSubtitleAIEnv(env)
 	_ = os.MkdirAll(filepath.Join(rootDir, reportDir), 0755)
 
 	progressHandler := job.subtitleProgressHandler()
