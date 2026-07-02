@@ -1,6 +1,6 @@
 import http from 'k6/http';
 import { check } from 'k6';
-import { htmlReport } from "https://raw.githubusercontent.com/benc-uk/k6-reporter/main/dist/bundle.js";
+import { htmlReport } from "./vendor/k6-reporter/bundle.js";
 
 // 全局配置参数 (优先从 Go 引擎注入的环境变量 __ENV 读取，以便后续平台化配置)
 const EMAIL = __ENV.EMAIL || "";

@@ -137,6 +137,15 @@ const apiTools = ref<ToolDef[]>([
     statusIndicator: 'ready'
   },
   {
+    id: 'external-subtitle-test',
+    name: '剧集外挂字幕测试',
+    description: '全量检查外挂剧字幕数量、语种、时间轴和字幕文件可用性',
+    iconName: 'DocumentChecked',
+    iconColor: '#0ea5e9',
+    iconBg: 'rgba(14, 165, 233, 0.12)',
+    statusIndicator: 'ready'
+  },
+  {
     id: 'short-drama-api-test',
     name: '短剧类接口测试',
     description: '聚合短剧项目的登录、剧集、章节与播放链路接口测试',

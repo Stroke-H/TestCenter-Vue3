@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +111,14 @@ var dramaRuns = struct {
 	current *dramaRunJob
 }{}
 
+var subtitleRuns = struct {
+	mu      sync.Mutex
+	current *dramaRunJob
+}{}
+
+var subtitleProgressPattern = regexp.MustCompile(`字幕(?:检查|收集|外挂剧收集)?进度\s+(\d+)%`)
+var subtitlePrepareStepPattern = regexp.MustCompile(`进度\s+(\d+)/(\d+)`)
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // Allow all cross-origin connections
@@ -177,6 +186,67 @@ func StopDramaRunHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, job.snapshot())
 }
 
+func StartSubtitleRunHandler(c *gin.Context) {
+	var req StartDramaRunRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	rootDir, _ := filepath.Abs("..")
+	env := buildDramaRunEnv(req)
+
+	subtitleRuns.mu.Lock()
+	if subtitleRuns.current != nil && subtitleRuns.current.getStatus() == "running" {
+		snapshot := subtitleRuns.current.snapshot()
+		subtitleRuns.mu.Unlock()
+		c.JSON(http.StatusOK, snapshot)
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	job := &dramaRunJob{
+		id:          fmt.Sprintf("SUBTITLE-%d", time.Now().UnixMilli()),
+		status:      "running",
+		progress:    0,
+		logs:        []string{fmt.Sprintf("[%s] 后端任务已创建，准备执行剧集外挂字幕测试...", time.Now().Format("15:04:05"))},
+		toolName:    firstNonEmpty(req.ToolName, "剧集外挂字幕测试"),
+		author:      firstNonEmpty(req.Author, "tester"),
+		environment: normalizeReportEnvironment(req.Environment),
+		startedAt:   time.Now(),
+		cancel:      cancel,
+		subscribers: make(map[chan string]struct{}),
+	}
+	subtitleRuns.current = job
+	subtitleRuns.mu.Unlock()
+
+	go job.executeSubtitle(ctx, rootDir, env)
+	c.JSON(http.StatusOK, job.snapshot())
+}
+
+func CurrentSubtitleRunHandler(c *gin.Context) {
+	subtitleRuns.mu.Lock()
+	job := subtitleRuns.current
+	subtitleRuns.mu.Unlock()
+	if job == nil {
+		c.JSON(http.StatusOK, gin.H{"status": "idle"})
+		return
+	}
+	c.JSON(http.StatusOK, job.snapshot())
+}
+
+func StopSubtitleRunHandler(c *gin.Context) {
+	subtitleRuns.mu.Lock()
+	job := subtitleRuns.current
+	subtitleRuns.mu.Unlock()
+	if job == nil || job.getStatus() != "running" {
+		c.JSON(http.StatusOK, gin.H{"status": "idle"})
+		return
+	}
+	job.stopByUser()
+	c.JSON(http.StatusOK, job.snapshot())
+}
+
 func SubscribeDramaRunHandler(c *gin.Context) {
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -199,6 +269,38 @@ func SubscribeDramaRunHandler(c *gin.Context) {
 		if err := ws.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
 			return
 		}
+	}
+
+	for message := range ch {
+		if err := ws.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
+			return
+		}
+	}
+}
+
+func SubscribeSubtitleRunHandler(c *gin.Context) {
+	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		log.Println("Subtitle run WebSocket Upgrade Error:", err)
+		return
+	}
+	defer ws.Close()
+
+	subtitleRuns.mu.Lock()
+	job := subtitleRuns.current
+	subtitleRuns.mu.Unlock()
+	if job == nil {
+		ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:idle"))
+		return
+	}
+
+	ch := job.subscribe()
+	defer job.unsubscribe(ch)
+	payload, err := json.Marshal(job.snapshot())
+	if err != nil {
+		ws.WriteMessage(websocket.TextMessage, []byte("SUBTITLE_PROGRESS:0"))
+	} else if err := ws.WriteMessage(websocket.TextMessage, []byte("SUBTITLE_SNAPSHOT:"+string(payload))); err != nil {
+		return
 	}
 
 	for message := range ch {
@@ -275,7 +377,95 @@ func (job *dramaRunJob) execute(ctx context.Context, rootDir string, env []strin
 	job.complete(reportFile, reportURL)
 }
 
+func (job *dramaRunJob) executeSubtitle(ctx context.Context, rootDir string, env []string) {
+	reportDir := scheduledTaskRuntimeReportDir(scheduledFunctionExternalSubtitle, job.id)
+	env = append(env, "SUBTITLE_REPORT_DIR="+reportDir)
+	env = appendSubtitleAIEnv(env)
+	_ = os.MkdirAll(filepath.Join(rootDir, reportDir), 0755)
+
+	progressHandler := job.subtitleProgressHandler()
+	job.publishLog("[Step 1/3] 正在准备剧集外挂字幕测试数据...")
+	if err := job.runCommandStreamWithHandler(ctx, rootDir, env, progressHandler, "node", filepath.Join("scripts", "prepare_subtitle_check.js")); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		job.failSubtitle(fmt.Sprintf("prepare subtitle data failed: %v", err))
+		return
+	}
+	job.setSubtitleProgress(50)
+
+	job.publishLog("\n[Step 2/3] 数据准备完成，开始检查字幕文件...")
+	if err := job.runCommandStreamWithHandler(ctx, rootDir, env, progressHandler, "node", filepath.Join("scripts", "run_subtitle_check.js")); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		job.failSubtitle(fmt.Sprintf("subtitle check failed: %v", err))
+		return
+	}
+	job.setSubtitleProgress(95)
+
+	job.publishLog("\n[Step 3/3] 正在生成剧集外挂字幕测试报告...")
+	if err := job.runCommandStreamWithHandler(ctx, rootDir, env, progressHandler, "node", filepath.Join("scripts", "build_subtitle_report.js")); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		job.failSubtitle(fmt.Sprintf("build subtitle report failed: %v", err))
+		return
+	}
+
+	reportFile := filepath.Join(reportDir, "subtitle_report.html")
+	if _, err := os.Stat(filepath.Join(rootDir, reportFile)); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		job.failSubtitle(fmt.Sprintf("subtitle report missing: %v", err))
+		return
+	}
+	job.completeSubtitle(reportFile)
+}
+
+func (job *dramaRunJob) subtitleProgressHandler() func(string) {
+	return func(text string) {
+		matches := subtitleProgressPattern.FindStringSubmatch(text)
+		if len(matches) >= 2 {
+			var percent int
+			if _, err := fmt.Sscanf(matches[1], "%d", &percent); err != nil {
+				return
+			}
+			progress := percent
+			if strings.Contains(text, "检查进度") {
+				progress = 50 + percent/2
+			} else {
+				progress = percent / 2
+			}
+			job.setSubtitleProgress(progress)
+			return
+		}
+
+		if strings.Contains(text, "进度 ") && !strings.Contains(text, "检查进度") {
+			matches = subtitlePrepareStepPattern.FindStringSubmatch(text)
+			if len(matches) < 3 {
+				return
+			}
+			var current int
+			var total int
+			if _, err := fmt.Sscanf(matches[1], "%d", &current); err != nil {
+				return
+			}
+			if _, err := fmt.Sscanf(matches[2], "%d", &total); err != nil || total <= 0 {
+				return
+			}
+			percent := current * 100 / total
+			job.setSubtitleProgress(percent / 2)
+		}
+	}
+}
+
 func (job *dramaRunJob) runCommandStream(ctx context.Context, dir string, env []string, name string, args ...string) error {
+	return job.runCommandStreamWithHandler(ctx, dir, env, nil, name, args...)
+}
+
+func (job *dramaRunJob) runCommandStreamWithHandler(ctx context.Context, dir string, env []string, handleLine func(string), name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
@@ -288,8 +478,13 @@ func (job *dramaRunJob) runCommandStream(ctx context.Context, dir string, env []
 		return err
 	}
 	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		job.publishLog(scanner.Text())
+		text := scanner.Text()
+		if handleLine != nil {
+			handleLine(text)
+		}
+		job.publishLog(text)
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
 		job.publishLog(fmt.Sprintf("[WARN] 读取命令输出异常: %v", scanErr))
@@ -405,6 +600,23 @@ func (job *dramaRunJob) setProgress(progress int) {
 	job.publish(fmt.Sprintf("DRAMA_PROGRESS:%d", progress))
 }
 
+func (job *dramaRunJob) setSubtitleProgress(progress int) {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
+	job.mu.Lock()
+	if progress < job.progress {
+		job.mu.Unlock()
+		return
+	}
+	job.progress = progress
+	job.mu.Unlock()
+	job.publish(fmt.Sprintf("SUBTITLE_PROGRESS:%d", progress))
+}
+
 func (job *dramaRunJob) handleControlMessage(message string) {
 	if strings.HasPrefix(message, "DRAMA_PROGRESS:") {
 		var progress int
@@ -454,6 +666,54 @@ func (job *dramaRunJob) complete(reportFile string, reportURL string) {
 	}
 }
 
+func (job *dramaRunJob) completeSubtitle(reportFile string) {
+	rootDir := projectRootDir()
+	reportDir := filepath.Dir(reportFile)
+	summary := loadSubtitleScheduledSummary(reportDir)
+	status := "Passed"
+	if summary.Failures > 0 {
+		status = "Failed"
+		job.publishLog(fmt.Sprintf("[SUMMARY] 字幕检查发现 %d 条异常，详情见报告。", summary.Failures))
+	}
+
+	archive, archiveErr := CreateScheduledSubtitleArchive(rootDir, job.id, ScheduledTask{
+		ID:      job.id,
+		Name:    job.toolName,
+		Creator: job.author,
+	}, status, time.Since(job.startedAt), job.startedAt, reportFile)
+	reportURL := PlatformBackendURL("/api/test-runs/" + job.id + "/artifacts/report")
+	if archiveErr != nil {
+		log.Printf("[SubtitleRun] create archive failed: %v", archiveErr)
+		job.publishLog(fmt.Sprintf("[WARN] 归档字幕报告失败: %v", archiveErr))
+	} else if len(archive.Artifacts) > 0 {
+		reportURL = archive.Artifacts[0].URL
+	}
+
+	job.mu.Lock()
+	job.status = "done"
+	job.progress = 100
+	job.reportURL = reportURL
+	job.finishedAt = time.Now()
+	job.mu.Unlock()
+
+	job.publishLog("\nExecution completed successfully.")
+	job.publish("SUBTITLE_PROGRESS:100")
+	job.publish("REPORT_READY_URL:" + reportURL)
+	job.publish("EXECUTION_STATUS:success")
+	if _, err := AddExecutionReport(ExecutionReport{
+		Name:        job.toolName,
+		Type:        "接口验证",
+		Status:      status,
+		Duration:    formatDuration(time.Since(job.startedAt)),
+		Author:      job.author,
+		ReportURL:   reportURL,
+		RunID:       job.id,
+		Environment: job.environment,
+	}); err != nil {
+		log.Printf("[SubtitleRun] add report failed: %v", err)
+	}
+}
+
 func (job *dramaRunJob) fail(reason string) {
 	job.mu.Lock()
 	job.status = "failed"
@@ -476,6 +736,27 @@ func (job *dramaRunJob) fail(reason string) {
 		Environment: job.environment,
 	}); err != nil {
 		log.Printf("[DramaRun] add failed report failed: %v", err)
+	}
+}
+
+func (job *dramaRunJob) failSubtitle(reason string) {
+	job.mu.Lock()
+	job.status = "failed"
+	job.errorText = reason
+	job.finishedAt = time.Now()
+	job.mu.Unlock()
+	job.publishLog(fmt.Sprintf("[ERROR] 执行失败: %s", reason))
+	job.publish("EXECUTION_STATUS:failed:" + reason)
+	if _, err := AddExecutionReport(ExecutionReport{
+		Name:        job.toolName,
+		Type:        "接口验证",
+		Status:      "Failed",
+		Duration:    formatDuration(time.Since(job.startedAt)),
+		Author:      job.author,
+		RunID:       job.id,
+		Environment: job.environment,
+	}); err != nil {
+		log.Printf("[SubtitleRun] add failed report failed: %v", err)
 	}
 }
 
@@ -531,18 +812,33 @@ func (job *dramaRunJob) snapshotMessages() []string {
 }
 
 func buildDramaRunEnv(req StartDramaRunRequest) []string {
-	env := os.Environ()
-	if req.Email != "" {
-		env = append(env, "EMAIL="+req.Email)
+	return appendDramaProfileEnv(
+		os.Environ(),
+		getDramaProfile(req.Environment),
+		req.Email,
+		req.Password,
+		req.LoginURL,
+		req.DramaListURL,
+	)
+}
+
+func appendDramaProfileEnv(env []string, profile dramaProfile, email string, password string, loginURL string, dramaListURL string) []string {
+	resolvedEmail := firstNonEmpty(email, profile.Email)
+	resolvedPassword := firstNonEmpty(password, profile.Password)
+	resolvedLoginURL := firstNonEmpty(loginURL, profile.LoginURL)
+	resolvedDramaListURL := firstNonEmpty(dramaListURL, profile.DramaListURL)
+
+	if resolvedEmail != "" {
+		env = append(env, "EMAIL="+resolvedEmail)
 	}
-	if req.Password != "" {
-		env = append(env, "PASSWORD="+req.Password)
+	if resolvedPassword != "" {
+		env = append(env, "PASSWORD="+resolvedPassword)
 	}
-	if req.LoginURL != "" {
-		env = append(env, "LOGIN_URL="+req.LoginURL)
+	if resolvedLoginURL != "" {
+		env = append(env, "LOGIN_URL="+resolvedLoginURL)
 	}
-	if req.DramaListURL != "" {
-		env = append(env, "DRAMA_LIST_URL="+req.DramaListURL)
+	if resolvedDramaListURL != "" {
+		env = append(env, "DRAMA_LIST_URL="+resolvedDramaListURL)
 	}
 	return env
 }
@@ -573,6 +869,7 @@ func RunK6TestHandler(c *gin.Context) {
 	password := c.Query("password")
 	loginUrl := c.Query("loginUrl")
 	dramaListUrl := c.Query("dramaListUrl")
+	environment := c.Query("environment")
 
 	// 统一工作目录：由于后端在 server/ 下运行，我们将所有脚本执行的根路径设为项目根目录 (..)
 	rootDir, _ := filepath.Abs("..")
@@ -587,17 +884,10 @@ func RunK6TestHandler(c *gin.Context) {
 
 	// Dynamic Env passing
 	env := os.Environ()
-	if email != "" {
-		env = append(env, "EMAIL="+email)
-	}
-	if password != "" {
-		env = append(env, "PASSWORD="+password)
-	}
-	if loginUrl != "" {
-		env = append(env, "LOGIN_URL="+loginUrl)
-	}
-	if dramaListUrl != "" {
-		env = append(env, "DRAMA_LIST_URL="+dramaListUrl)
+	if scriptName == "drama_check_flow.js" {
+		env = appendDramaProfileEnv(env, getDramaProfile(environment), email, password, loginUrl, dramaListUrl)
+	} else {
+		env = appendDramaProfileEnv(env, dramaProfile{}, email, password, loginUrl, dramaListUrl)
 	}
 
 	// Special orchestration: if running drama_check_flow, run prepare_data FIRST

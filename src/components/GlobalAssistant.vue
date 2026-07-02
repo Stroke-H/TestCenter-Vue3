@@ -362,7 +362,7 @@ const startFabHover = () => {
       isFabFanMenuVisible.value = true
     }
     fabHoverTimer = null
-  }, 1500)
+  }, 500)
 }
 
 const handleFabHoverAreaLeave = () => {
@@ -381,21 +381,34 @@ const handleFabOutsidePointerDown = (event: PointerEvent) => {
 }
 
 const getFabFanEntryStyle = (index: number, total: number) => {
-  const anglesByCount: Record<number, number[]> = {
-    1: [135],
-    2: [176, 78],
-    3: [176, 127, 78],
-    4: [176, 143, 111, 78]
+  const iconSize = 46
+  const entrySize = 64
+  const topRowGap = 78
+  const topRowY = -68
+  const lowerRowY = 0
+  const buttonWidth = fabContainer.value?.getBoundingClientRect().width || 140
+  const lowerLeftX = -buttonWidth / 2 - 10 - entrySize / 2
+  const rightAlignedX = buttonWidth / 2 - iconSize / 2
+  const topRowPositions = [
+    { x: rightAlignedX - topRowGap * 2, y: topRowY },
+    { x: rightAlignedX - topRowGap, y: topRowY },
+    { x: rightAlignedX, y: topRowY }
+  ]
+  const positionsByCount: Record<number, Array<{ x: number; y: number }>> = {
+    1: [{ x: rightAlignedX, y: topRowY }],
+    2: topRowPositions.slice(1),
+    3: topRowPositions,
+    4: [
+      { x: lowerLeftX, y: lowerRowY },
+      ...topRowPositions
+    ]
   }
-  const fallbackAngles = [176, 143, 111, 78]
-  const angles = anglesByCount[Math.min(Math.max(total, 1), 4)] ?? fallbackAngles
-  const angle = angles[index] ?? 135
-  const radius = 168
-  const radian = angle * Math.PI / 180
+  const positions = positionsByCount[Math.min(Math.max(total, 1), 4)] || topRowPositions
+  const position = positions[index] || positions[positions.length - 1] || { x: rightAlignedX, y: topRowY }
 
   return {
-    '--fan-x': `${Math.cos(radian) * radius}px`,
-    '--fan-y': `${-Math.sin(radian) * radius}px`,
+    '--fan-x': `${position.x}px`,
+    '--fan-y': `${position.y}px`,
     '--fan-delay': `${index * 45}ms`
   }
 }
@@ -759,8 +772,8 @@ onBeforeUnmount(() => {
   left: 0;
   top: 0;
   z-index: 2;
-  width: 72px;
-  min-height: 72px;
+  width: 64px;
+  min-height: 64px;
   padding: 0;
   color: #334155;
   background: transparent;
@@ -769,7 +782,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 5px;
+  gap: 4px;
   cursor: pointer;
   opacity: 0;
   visibility: hidden;
@@ -791,16 +804,16 @@ onBeforeUnmount(() => {
 }
 
 .fab-fan-entry__icon {
-  width: 52px;
-  height: 52px;
+  width: 46px;
+  height: 46px;
   border: 1px solid rgba(203, 213, 225, 0.92);
-  border-radius: 16px;
+  border-radius: 14px;
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
-  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.15);
+  font-size: 18px;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.14);
   backdrop-filter: blur(12px);
   transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
@@ -813,10 +826,10 @@ onBeforeUnmount(() => {
 
 .fab-fan-entry__label {
   width: max-content;
-  max-width: 86px;
+  max-width: 76px;
   min-width: 0;
   color: #0f172a;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 760;
   line-height: 1.2;
   text-align: center;

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
-import { useDramaRunStore, usePermissionStore, useReportStore } from '@/stores'
+import { useDramaRunStore, usePermissionStore, useReportStore, useSubtitleRunStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { buildBackendUrl, buildBackendWsUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
@@ -31,6 +31,7 @@ const router = useRouter()
 const reportStore = useReportStore()
 const authStore = useAuthStore()
 const dramaRunStore = useDramaRunStore()
+const subtitleRunStore = useSubtitleRunStore()
 const permissionStore = usePermissionStore()
 
 // 从路由参数获取工具信息
@@ -46,6 +47,7 @@ if (toolTypeName === 'Web前端压测') {
 
 // 是否是剧集播放自检工具
 const isDramaCheck = toolTypeName.includes('播放')
+const isSubtitleCheck = toolTypeName === '剧集外挂字幕测试' || toolTypeName.includes('外挂字幕')
 // 是否是Web前端压测
 const isWebFrontendStressTest = toolTypeName === 'WebFrontend性能' || toolTypeName === 'Web前端压测'
 // 是否是 Monkey 稳定性测试 demo
@@ -868,11 +870,34 @@ const logContainer = ref<HTMLElement | null>(null)
 let ws: WebSocket | null = null
 const executionSucceeded = ref(false)
 const executionFailed = ref(false)
-const visibleLogs = computed(() => isDramaCheck ? dramaRunStore.logs : logs.value)
-const visibleReportUrl = computed(() => isDramaCheck ? dramaRunStore.reportUrl : reportUrl.value)
-const visibleDuration = computed(() => isDramaCheck ? dramaRunStore.duration : duration.value)
-const visibleUptime = computed(() => isDramaCheck ? dramaRunStore.uptime : uptime.value)
+const visibleLogs = computed(() => {
+  if (isDramaCheck) return dramaRunStore.logs
+  if (isSubtitleCheck) return subtitleRunStore.logs
+  return logs.value
+})
+const visibleReportUrl = computed(() => {
+  if (isDramaCheck) return dramaRunStore.reportUrl
+  if (isSubtitleCheck) return subtitleRunStore.reportUrl
+  return reportUrl.value
+})
+const visibleDuration = computed(() => {
+  if (isDramaCheck) return dramaRunStore.duration
+  if (isSubtitleCheck) return subtitleRunStore.duration
+  return duration.value
+})
+const visibleUptime = computed(() => {
+  if (isDramaCheck) return dramaRunStore.uptime
+  if (isSubtitleCheck) return subtitleRunStore.uptime
+  return uptime.value
+})
 const visibleStatus = computed<ExecStatus>(() => {
+  if (isSubtitleCheck) {
+    if (subtitleRunStore.status === 'running') return 'Executing'
+    if (subtitleRunStore.status === 'done') return 'Finished'
+    if (subtitleRunStore.status === 'failed') return 'Failed'
+    if (subtitleRunStore.status === 'stopped') return 'Stopped'
+    return currentStatus.value
+  }
   if (!isDramaCheck) return currentStatus.value
   if (dramaRunStore.status === 'running') return 'Executing'
   if (dramaRunStore.status === 'done') return 'Finished'
@@ -1687,39 +1712,54 @@ const startExecution = async () => {
   // 获取当前配置
   const profile = serverProfiles[testServer.value as keyof typeof serverProfiles]
   
-    // 组装 WebSocket 链接地址，注入动态参数
-    let wsUrl = buildBackendWsUrl('/api/ws/k6')
-    const params: Record<string, string> = {
-      script: scriptName,
+  // 组装 WebSocket 链接地址，注入动态参数
+  let wsUrl = buildBackendWsUrl('/api/ws/k6')
+  const params: Record<string, string> = {
+    script: scriptName,
+    email: profile.email,
+    password: profile.password,
+    loginUrl: profile.loginUrl,
+    dramaListUrl: profile.dramaListUrl,
+    environment: testServer.value
+  }
+
+  if (isWebFrontendStressTest) {
+    wsUrl = buildBackendWsUrl('/api/ws/lighthouse')
+    // 确保有协议头
+    const finalUrl = projectName.value.startsWith('http') ? projectName.value : `http://${projectName.value}`
+    delete params.script // lighthouse 不需要 script 参数
+    params.url = finalUrl
+  }
+
+  const query = new URLSearchParams(params).toString()
+  if (isDramaCheck) {
+    await dramaRunStore.start({
       email: profile.email,
       password: profile.password,
       loginUrl: profile.loginUrl,
-      dramaListUrl: profile.dramaListUrl
-    }
+      dramaListUrl: profile.dramaListUrl,
+      toolName: toolName.value,
+      author: authStore.user?.username || 'tester',
+      environment: testServer.value
+    })
+    return
+  }
 
-    if (isWebFrontendStressTest) {
-      wsUrl = buildBackendWsUrl('/api/ws/lighthouse')
-      // 确保有协议头
-      const finalUrl = projectName.value.startsWith('http') ? projectName.value : `http://${projectName.value}`
-      delete params.script // lighthouse 不需要 script 参数
-      params.url = finalUrl
-    }
+  if (isSubtitleCheck) {
+    await subtitleRunStore.start({
+      email: profile.email,
+      password: profile.password,
+      loginUrl: profile.loginUrl,
+      dramaListUrl: profile.dramaListUrl,
+      toolName: toolName.value,
+      author: authStore.user?.username || 'tester',
+      environment: testServer.value
+    })
+    currentStatus.value = 'Ready'
+    return
+  }
 
-    const query = new URLSearchParams(params).toString()
-    if (isDramaCheck) {
-      await dramaRunStore.start({
-        email: profile.email,
-        password: profile.password,
-        loginUrl: profile.loginUrl,
-        dramaListUrl: profile.dramaListUrl,
-        toolName: toolName.value,
-        author: authStore.user?.username || 'tester',
-        environment: testServer.value
-      })
-      return
-    }
-
-    ws = new WebSocket(`${wsUrl}?${query}`)
+  ws = new WebSocket(`${wsUrl}?${query}`)
 
     ws.onopen = () => {
       logs.value.push(`[${new Date().toLocaleTimeString()}] WebSocket 连接已建立`)
@@ -1881,6 +1921,12 @@ const stopExecution = async () => {
     return
   }
 
+  if (isSubtitleCheck) {
+    await subtitleRunStore.stop()
+    currentStatus.value = 'Stopped'
+    return
+  }
+
   if (isMonkeyTest) {
     if (!monkeyRunId.value) return
     appendMonkeyLiveLog(`[${new Date().toLocaleTimeString()}] 正在停止设备端 Monkey 进程并生成报告...`)
@@ -1958,6 +2004,9 @@ const persistShortDramaApiConfigBeforeUnload = () => {
 onMounted(() => {
   reportStore.fetchReports()
   fetchMonkeyDevices()
+  if (isSubtitleCheck) {
+    subtitleRunStore.recoverCurrentRun()
+  }
   window.addEventListener('beforeunload', persistShortDramaApiConfigBeforeUnload)
 })
 
@@ -2390,7 +2439,7 @@ onBeforeRouteLeave(() => {
           </template>
 
           <!-- 针对业务自检工具，隐藏原本的链接输入框 -->
-          <div v-if="!isDramaCheck && !isMonkeyTest && !isShortDramaApiTest" class="param-group">
+          <div v-if="!isDramaCheck && !isSubtitleCheck && !isMonkeyTest && !isShortDramaApiTest" class="param-group">
             <label class="param-label">
               <span class="link-icon">🔗</span> 测试链接
             </label>

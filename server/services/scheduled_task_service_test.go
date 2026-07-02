@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSplitScheduledDramaFailures(t *testing.T) {
@@ -95,5 +96,45 @@ func TestDramaArchiveDoneStatusIsSuccess(t *testing.T) {
 	}
 	if isDramaArchiveSuccessStatus("failed") {
 		t.Fatal("expected failed archive status to be treated as failure")
+	}
+}
+
+func TestRescheduleScheduledTaskAfterRunMovesDailyTaskToFuture(t *testing.T) {
+	tasks := []ScheduledTask{{
+		ID:           "ST-daily",
+		ScheduleType: "Daily",
+		Status:       "running",
+		NextRunAt:    "2026-06-27T09:00:09+08:00",
+	}}
+	now := time.Date(2026, 6, 30, 18, 0, 0, 0, time.FixedZone("CST", 8*60*60))
+
+	rescheduleScheduledTaskAfterRun(&tasks, 0, now)
+
+	if len(tasks) != 1 {
+		t.Fatalf("expected daily task to remain, got %d", len(tasks))
+	}
+	if tasks[0].Status != "active" {
+		t.Fatalf("expected daily task to become active, got %s", tasks[0].Status)
+	}
+	if tasks[0].NextRunAt != "2026-07-01T09:00:09+08:00" {
+		t.Fatalf("expected next run to move to next future day, got %s", tasks[0].NextRunAt)
+	}
+	if tasks[0].NextRun != "2026-07-01 09:00:09" {
+		t.Fatalf("expected display next run to be updated, got %s", tasks[0].NextRun)
+	}
+}
+
+func TestRescheduleScheduledTaskAfterRunRemovesOnceTask(t *testing.T) {
+	tasks := []ScheduledTask{{
+		ID:           "ST-once",
+		ScheduleType: "Once",
+		Status:       "running",
+		NextRunAt:    "2026-06-30T09:00:00+08:00",
+	}}
+
+	rescheduleScheduledTaskAfterRun(&tasks, 0, time.Date(2026, 6, 30, 18, 0, 0, 0, time.FixedZone("CST", 8*60*60)))
+
+	if len(tasks) != 0 {
+		t.Fatalf("expected once task to be removed, got %#v", tasks)
 	}
 }

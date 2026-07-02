@@ -50,6 +50,21 @@ export const ASSISTANT_QUICK_ENTRIES: AssistantQuickEntry[] = [
     group: 'API 工具'
   },
   {
+    id: 'external-subtitle-test',
+    name: '外挂字幕测试',
+    description: '进入剧集外挂字幕测试，检查字幕数量、语种、时间轴与文件可用性',
+    iconName: 'DocumentChecked',
+    iconColor: '#0ea5e9',
+    iconBg: 'rgba(14, 165, 233, 0.12)',
+    path: '/com_api_commit',
+    query: {
+      name: '剧集外挂字幕测试',
+      desc: '全量检查外挂剧字幕数量、语种、时间轴和字幕文件可用性'
+    },
+    permissionKey: 'dashboard.com_api_commit.visible',
+    group: 'API 工具'
+  },
+  {
     id: 'short-drama-api-test',
     name: '短剧类接口测试',
     description: '聚合短剧项目的登录、剧集、章节与播放链路接口测试',

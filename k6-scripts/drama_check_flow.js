@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
-import { htmlReport } from "https://raw.githubusercontent.com/benc-uk/k6-reporter/main/dist/bundle.js";
+import { htmlReport } from "./vendor/k6-reporter/bundle.js";
 
 // ---------- 1. 自定义统计指标 ----------
 const continuityErrors = new Counter('continuity_fail_count');

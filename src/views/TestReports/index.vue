@@ -113,6 +113,7 @@ const dramaAnalytics = ref<DramaFailedStat[]>([])
 const normalizeReportType = (type: string) => {
   if (type === '业务自动化') return 'K6 压测'
   if (type === 'Monkey测试') return 'Monkey 测试'
+  if (type === '字幕测试') return '接口验证'
   return type
 }
 

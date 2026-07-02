@@ -38,6 +38,7 @@ interface OperationLog {
 }
 
 type ScheduleType = 'Once' | 'Daily' | 'weekly'
+type ScheduledTaskType = 'episode-playback-test' | 'external-subtitle-test'
 
 interface ScheduledTask {
   id: string
@@ -50,6 +51,7 @@ interface ScheduledTask {
   testEnv: string
   status: 'active' | 'paused' | 'running' | 'completed'
   description: string
+  function?: ScheduledTaskType
 }
 
 interface ProjectOption {
@@ -59,7 +61,7 @@ interface ProjectOption {
 }
 
 interface ScheduledTaskForm {
-  taskType: 'episode-playback-test' | ''
+  taskType: ScheduledTaskType | ''
   scheduleType: ScheduleType | ''
   creator: string
   startDate: string
@@ -302,6 +304,7 @@ const normalizeScheduledTask = (task: any): ScheduledTask => {
   return {
     id: task.id,
     name: task.name,
+    function: task.function,
     scheduleType: task.scheduleType || task.schedule_type,
     creator: task.creator,
     nextRun: task.nextRun || task.next_run,
@@ -368,7 +371,7 @@ const openEditScheduledTask = (task: ScheduledTask) => {
   scheduledTaskDialogMode.value = 'edit'
   editingScheduledTaskId.value = task.id
   scheduledTaskForm.value = {
-    taskType: 'episode-playback-test',
+    taskType: task.function || 'episode-playback-test',
     scheduleType: task.scheduleType,
     creator: task.creator,
     startDate: date,
@@ -492,6 +495,14 @@ const handleRunningStatusClick = async (task: ScheduledTask) => {
       stopCurrentScheduledTask(task)
     }
   }
+}
+
+const handleScheduledTaskStatusClick = (task: ScheduledTask) => {
+  if (task.status === 'running') {
+    handleRunningStatusClick(task)
+    return
+  }
+  openEditScheduledTask(task)
 }
 
 const submitScheduledTask = () => {
@@ -684,10 +695,10 @@ const formatTime = (ts: string) => {
             <template #default="scope">
               <el-tag
                 :type="getStatusType(scope.row.status)"
-                :class="{ 'scheduled-task-status--clickable': scope.row.status === 'running' }"
+                class="scheduled-task-status--clickable"
                 size="small"
                 round
-                @click.stop="handleRunningStatusClick(scope.row)"
+                @click.stop="handleScheduledTaskStatusClick(scope.row)"
               >
                 {{ scope.row.status.toUpperCase() }}
               </el-tag>
@@ -800,6 +811,7 @@ const formatTime = (ts: string) => {
             :disabled="scheduledTaskDialogMode === 'edit'"
           >
             <el-option label="剧集播放接口测试" value="episode-playback-test" />
+            <el-option label="剧集外挂字幕测试" value="external-subtitle-test" />
           </el-select>
         </el-form-item>
 

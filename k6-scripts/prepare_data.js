@@ -63,6 +63,11 @@ async function main() {
   console.log(`📡 目标环境: ${DRAMA_LIST_URL.includes('admin') ? '正式服' : '测试服'}`);
   console.log(`👤 目标账户: ${EMAIL}`);
   console.log(`📝 存储位置: ${OUTPUT_FILE} (执行强制覆盖并刷新)`);
+
+  if (!EMAIL || !PASSWORD) {
+    console.error('❌ 缺少登录账号配置：请检查后端 DRAMA_PROD_* / DRAMA_TEST_* / DRAMA_GRAY_* 环境变量，或手动执行请求参数。');
+    process.exit(1);
+  }
   
   // -------------------------------------------------------------
   // Step 1: 模拟登录获取 x-token

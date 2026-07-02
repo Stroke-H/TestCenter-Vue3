@@ -214,11 +214,72 @@ func CreateScheduledDramaArchive(rootDir string, runID string, task ScheduledTas
 	return archive, nil
 }
 
+func CreateScheduledSubtitleArchive(rootDir string, runID string, task ScheduledTask, status string, duration time.Duration, startedAt time.Time, reportFile string) (TestRunArchive, error) {
+	finishedAt := startedAt.Add(duration)
+	sourcePath := filepath.Join(rootDir, reportFile)
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return TestRunArchive{}, err
+	}
+
+	runDir := filepath.Join(testRunStorageRoot(rootDir), runID)
+	artifactDir := filepath.Join(runDir, "artifacts")
+	if err := os.MkdirAll(artifactDir, 0755); err != nil {
+		return TestRunArchive{}, err
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "report.html"), content, 0644); err != nil {
+		return TestRunArchive{}, err
+	}
+	copySubtitleRunDiagnosticArtifacts(filepath.Dir(sourcePath), artifactDir)
+
+	archive := TestRunArchive{
+		RunID:      runID,
+		TestType:   "subtitle",
+		TestName:   firstNonEmpty(task.Name, "剧集外挂字幕测试"),
+		Status:     status,
+		StartedAt:  formatArchiveTime(startedAt),
+		FinishedAt: formatArchiveTime(finishedAt),
+		Duration:   formatDuration(duration),
+		Author:     firstNonEmpty(task.Creator, "scheduled-task"),
+		Artifacts: []TestRunArtifact{
+			{
+				Type:        "html",
+				DisplayName: "剧集外挂字幕测试报告",
+				StoragePath: filepath.ToSlash(filepath.Join("api_report", "test-runs", runID, "artifacts", "report.html")),
+				URL:         PlatformBackendURL("/api/test-runs/" + url.PathEscape(runID) + "/artifacts/report"),
+				MimeType:    "text/html; charset=utf-8",
+			},
+		},
+		Metrics: DramaRunMetrics{},
+	}
+	if err := writeJSONFile(filepath.Join(runDir, "metrics.json"), archive.Metrics); err != nil {
+		return TestRunArchive{}, err
+	}
+	if err := writeJSONFile(filepath.Join(runDir, "metadata.json"), archive); err != nil {
+		return TestRunArchive{}, err
+	}
+	return archive, nil
+}
+
 func copyDramaRunDiagnosticArtifacts(reportDir string, artifactDir string) {
 	for _, fileName := range []string{
 		"drama_failure_summary.json",
 		"drama_retry_result.json",
 		"drama_retry_candidates.json",
+	} {
+		content, err := os.ReadFile(filepath.Join(reportDir, fileName))
+		if err != nil {
+			continue
+		}
+		_ = os.WriteFile(filepath.Join(artifactDir, fileName), content, 0644)
+	}
+}
+
+func copySubtitleRunDiagnosticArtifacts(reportDir string, artifactDir string) {
+	for _, fileName := range []string{
+		"subtitle_queue.jsonl",
+		"subtitle_summary.json",
+		"subtitle_failures.jsonl",
 	} {
 		content, err := os.ReadFile(filepath.Join(reportDir, fileName))
 		if err != nil {
