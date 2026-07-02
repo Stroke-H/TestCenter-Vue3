@@ -40,6 +40,7 @@ report/api_report/*
 !report/web_test_report/
 report/web_test_report/*
 !report/web_test_report/.gitkeep
+windows_private_migration_*.tar.gz
 
 Skills/
 !.agents/skills/

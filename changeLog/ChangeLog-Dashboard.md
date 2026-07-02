@@ -1,5 +1,10 @@
 # ChangeLog - Dashboard
 
+## 2026-07-02
+
+### Added
+- **Windows Migration Guide**: 新增 Windows 迁移部署说明和 PowerShell 辅助脚本，支持从 `windows` 分支拉取代码后，一键还原私有配置包并按固定路径启动前后端服务。
+
 ## 2026-06-26
 
 ### Added
