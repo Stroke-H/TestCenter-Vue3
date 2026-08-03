@@ -247,6 +247,15 @@ const toggleAssistantMode = () => {
 const saveReport = async () => {
   reportSaving.value = true
   try {
+    const currentVersionBugStatus = [
+      reportForm.value.bug_links_unfixed.length > 0
+        ? `未修复：\n${reportForm.value.bug_links_unfixed.join('\n')}`
+        : '',
+      reportForm.value.bug_links_fixed.length > 0
+        ? `已修复：\n${reportForm.value.bug_links_fixed.join('\n')}`
+        : ''
+    ].filter(Boolean).join('\n\n')
+
     const res = await fetch(`${API_BASE}/acceptance-reports/save`, {
       method: 'POST',
       credentials: 'include',
@@ -262,8 +271,8 @@ const saveReport = async () => {
         test_time: reportForm.value.period,
         test_env: reportForm.value.environment,
         test_conclusion: 'Pass',
-        bug_submission_status: reportForm.value.bug_links_unfixed.join('\n'),
-        bug_fix_status: reportForm.value.bug_links_fixed.join('\n'),
+        bug_submission_status: '',
+        bug_fix_status: currentVersionBugStatus,
         update_requirements: reportForm.value.story_links.join('\n')
       })
     })

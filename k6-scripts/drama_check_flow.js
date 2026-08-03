@@ -35,7 +35,11 @@ const DRAMA_META = config.dramaMeta || {};
 const APP_GROUPS = config.appGroups || [];
 const TOKEN = config.auth.x_token;
 const API_BASE = config.apiBase || "http://35.225.224.94:8080";
-const AD_UNLOCK_ALLOWED_GROUP_NAMES = ['IAA组', '漫剧产品组-IAA', 'AIGC组', '内容二组-觉醒纪元'];
+const DS_EXCLUSIVE_GROUP_NAME = 'TT-Minis 分销组';
+const DS_EXCLUSIVE_GROUP_NAME_KEY = normalizeGroupNameForRule(DS_EXCLUSIVE_GROUP_NAME);
+const MD_PRODUCT_GROUP_NAME = 'MD-产品组';
+const MD_PRODUCT_GROUP_NAME_KEY = normalizeGroupNameForRule(MD_PRODUCT_GROUP_NAME);
+const AD_UNLOCK_ALLOWED_GROUP_NAMES = ['IAA组', '漫剧产品组-IAA', 'AIGC组', '内容二组-觉醒纪元', DS_EXCLUSIVE_GROUP_NAME];
 const AD_UNLOCK_ALLOWED_GROUP_NAME_KEYS = AD_UNLOCK_ALLOWED_GROUP_NAMES.map(normalizeGroupNameForRule);
 
 // ---------- 3. 动态负载逻辑 ----------
@@ -275,12 +279,29 @@ function buildCountMismatchError(total, healthyCount, existingErrors) {
 function buildUnlockTypeRuleErrors(dramaId) {
     const meta = getDramaMeta(dramaId);
     const cnNameHasIAA = hasStrictIAA(meta.cnName);
+    const cnNameHasDS = String(meta.cnName || '').toUpperCase().includes('-DS');
+    const appGroupIds = normalizeAppGroupIds(meta.appGroups);
     const groupNames = getMatchedAppGroupNames(meta.appGroups);
+    const groupMetadataAvailable = APP_GROUPS.length > 0;
     const groupHasIAA = groupNames.some(name => String(name).includes('IAA'));
     const groupHasShortsWave = groupNames.some(name => String(name).includes('ShortsWave'));
     const groupHasAllowedAdUnlockName = groupNames.some(name => AD_UNLOCK_ALLOWED_GROUP_NAME_KEYS.includes(normalizeGroupNameForRule(name)));
+    const hasOnlyDSExclusiveGroup = appGroupIds.length === 1
+        && groupNames.length === 1
+        && normalizeGroupNameForRule(groupNames[0]) === DS_EXCLUSIVE_GROUP_NAME_KEY;
+    const hasOnlyMDProductGroup = appGroupIds.length === 1
+        && groupNames.length === 1
+        && normalizeGroupNameForRule(groupNames[0]) === MD_PRODUCT_GROUP_NAME_KEY;
     const unlockType = meta.unlockType.toLowerCase();
     const errors = [];
+
+    if (cnNameHasDS && groupMetadataAvailable && !hasOnlyDSExclusiveGroup) {
+        errors.push({
+            type: 'unlock',
+            msg: `[分组规则] cn_name 包含 -DS 时，App Group 必须且只能为 ${DS_EXCLUSIVE_GROUP_NAME}。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`,
+            count: 1
+        });
+    }
 
     if (unlockType === 'coin' && (cnNameHasIAA || groupHasIAA)) {
         errors.push({
@@ -290,13 +311,13 @@ function buildUnlockTypeRuleErrors(dramaId) {
         });
     }
 
-    if (unlockType === 'ad' && groupHasShortsWave) {
+    if (!cnNameHasDS && groupMetadataAvailable && unlockType === 'ad' && groupHasShortsWave) {
         errors.push({
             type: 'unlock',
             msg: `[解锁类型] unlock_type=ad，但 App Group 命中 ShortsWave。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`,
             count: 1
         });
-    } else if (unlockType === 'ad' && !groupHasAllowedAdUnlockName) {
+    } else if (!cnNameHasDS && groupMetadataAvailable && unlockType === 'ad' && !groupHasAllowedAdUnlockName && !hasOnlyMDProductGroup) {
         errors.push({
             type: 'unlock',
             msg: `[解锁类型] unlock_type=ad，但 App Group 未命中允许的广告解锁分组（${AD_UNLOCK_ALLOWED_GROUP_NAMES.join('、')}）。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`,

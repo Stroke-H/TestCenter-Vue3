@@ -534,7 +534,7 @@ func executeScheduledTask(ctx context.Context, task ScheduledTask) {
 		log.Printf("[ScheduledTask] notify sent to %s for run %s", task.Creator, runID)
 	}
 
-	appendScheduledTaskAuditLog(task, status, result, formatDuration(duration), reportURL, start)
+	appendScheduledTaskAuditLog(task, status, result, formatDuration(duration), reportURL, start, reportDir)
 }
 
 func scheduledTaskReportSnapshot(rootDir string, reportDir string, runID string, function string) (string, string, error) {
@@ -959,7 +959,7 @@ func splitScheduledDramaFailures(failures []dramaFailureSummary) ([]dramaFailure
 
 func isScheduledDramaGroupError(line string) bool {
 	normalized := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "•"))
-	return strings.HasPrefix(normalized, "[解锁类型]")
+	return strings.HasPrefix(normalized, "[解锁类型]") || strings.HasPrefix(normalized, "[分组规则]")
 }
 
 func formatScheduledDramaFailureDetail(failures []dramaFailureSummary) string {
@@ -1543,7 +1543,7 @@ func extractDramaIDFromFailureName(name string) string {
 	return match[1]
 }
 
-func appendScheduledTaskAuditLog(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time) {
+func appendScheduledTaskAuditLog(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time, reportDir string) {
 	projectName := valueOrFallback(task.TestProject, task.TestProjectCode)
 	detail := fmt.Sprintf(
 		"Scheduled task executed: %s | duration=%s | result=%s | next=%s",
@@ -1554,6 +1554,13 @@ func appendScheduledTaskAuditLog(task ScheduledTask, status string, result strin
 	)
 	if strings.TrimSpace(reportURL) != "" {
 		detail += " | report=" + reportURL
+	}
+	if task.Function != scheduledFunctionExternalSubtitle {
+		failures := loadScheduledDramaFailures(reportDir)
+		detail = summarizeScheduledDramaAuditFailures(failures)
+		if statusToAuditStatus(status) == "failed" && len(failures) == 0 {
+			detail = "执行错误 1"
+		}
 	}
 
 	op := feishumodel.AIOperationLog{
@@ -1571,6 +1578,47 @@ func appendScheduledTaskAuditLog(task ScheduledTask, status string, result strin
 	if err := SQLUpsertJSONForFeishu("ai_operation_logs", op); err != nil {
 		log.Printf("[ScheduledTask] append audit log failed: %v", err)
 	}
+}
+
+func summarizeScheduledDramaAuditFailures(failures []dramaFailureSummary) string {
+	dramaFailures, groupFailures := splitScheduledDramaFailures(failures)
+	parts := make([]string, 0, 2)
+	if len(dramaFailures) > 0 {
+		parts = append(parts, fmt.Sprintf("剧集错误 %d", len(dramaFailures)))
+	}
+	if len(groupFailures) > 0 {
+		parts = append(parts, fmt.Sprintf("分组错误 %d", len(groupFailures)))
+	}
+	if len(parts) == 0 {
+		return "无异常"
+	}
+	return strings.Join(parts, "、")
+}
+
+// ScheduledDramaAuditSummaryForRunID rebuilds the compact audit summary for legacy logs.
+func ScheduledDramaAuditSummaryForRunID(runID string) (string, bool) {
+	safeRunID := sanitizeReportSuffix(runID)
+	if safeRunID == "" || safeRunID == "." || safeRunID == ".." {
+		return "", false
+	}
+
+	runDir := filepath.Join(testRunStorageRoot(projectRootDir()), safeRunID)
+	metadataContent, err := os.ReadFile(filepath.Join(runDir, "metadata.json"))
+	if err != nil {
+		return "", false
+	}
+	var archive TestRunArchive
+	if json.Unmarshal(metadataContent, &archive) != nil || archive.TestType != "drama" {
+		return "", false
+	}
+
+	reportHTML := ""
+	reportPath := filepath.Join(runDir, "artifacts", "report.html")
+	if content, readErr := os.ReadFile(reportPath); readErr == nil {
+		reportHTML = string(content)
+	}
+	failures := loadArchivedDramaFailures(runDir, reportHTML)
+	return summarizeScheduledDramaAuditFailures(failures), true
 }
 
 func normalizeScheduledTaskAuditEnv(testEnv string) string {

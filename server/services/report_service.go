@@ -106,8 +106,8 @@ func GetAcceptanceReportByID(id string) (*AcceptanceReport, error) {
 }
 
 func FormatAcceptanceReportText(report AcceptanceReport) string {
-	formattedFixed := formatAcceptanceReportSection(report.BugFixStatus)
-	formattedUnfixed := formatAcceptanceReportSection(report.BugSubmissionStatus)
+	formattedCurrentVersionBugs := formatAcceptanceReportSection(report.BugFixStatus)
+	formattedHistoricalBugFixes := formatAcceptanceReportSection(report.BugSubmissionStatus)
 	formattedStories := formatAcceptanceReportSection(report.UpdateRequirements)
 
 	devicesBlock := ""
@@ -140,8 +140,8 @@ func FormatAcceptanceReportText(report AcceptanceReport) string {
 		report.TestEnv,
 		devicesBlock,
 		conclusion,
-		formattedFixed,
-		formattedUnfixed,
+		formattedHistoricalBugFixes,
+		formattedCurrentVersionBugs,
 		formattedStories,
 	)
 }
@@ -204,8 +204,8 @@ func buildAcceptanceReportFeishuCard(report AcceptanceReport, senderName string)
 		},
 	}
 
-	appendAcceptanceCardSection(&elements, "正式版本缺陷修复验证情况", report.BugFixStatus)
-	appendAcceptanceCardSection(&elements, "本次预提审版本缺陷提交情况", report.BugSubmissionStatus)
+	appendAcceptanceCardSection(&elements, "正式版本缺陷修复验证情况", report.BugSubmissionStatus)
+	appendAcceptanceCardSection(&elements, "本次预提审版本缺陷提交情况", report.BugFixStatus)
 	appendAcceptanceCardSection(&elements, "版本更新测试需求点", report.UpdateRequirements)
 
 	return map[string]any{

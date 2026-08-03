@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -115,10 +116,11 @@ func TestDetectMonkeySystemOverlayFromFocusedNotificationShade(t *testing.T) {
 }
 
 func TestStatusBarProtectionCommandsUseAvailableADBCommand(t *testing.T) {
-	if err := setMonkeyStatusBarExpansionProtected(context.Background(), "/usr/bin/true", "device-1", true); err != nil {
+	stubSuccessfulMonkeyADBCommand(t)
+	if err := setMonkeyStatusBarExpansionProtected(context.Background(), "adb", "device-1", true); err != nil {
 		t.Fatalf("expected status bar protection command to succeed, got %v", err)
 	}
-	if err := collapseMonkeyStatusBar(context.Background(), "/usr/bin/true", "device-1"); err != nil {
+	if err := collapseMonkeyStatusBar(context.Background(), "adb", "device-1"); err != nil {
 		t.Fatalf("expected status bar collapse command to succeed, got %v", err)
 	}
 }
@@ -169,9 +171,28 @@ func TestValidateMonkeyLaunchOutputRejectsAbortedLaunch(t *testing.T) {
 }
 
 func TestStopADBMonkeyProcessUsesAvailableCommand(t *testing.T) {
-	if err := stopADBMonkeyProcess(context.Background(), "/usr/bin/true", "device-1"); err != nil {
+	stubSuccessfulMonkeyADBCommand(t)
+	if err := stopADBMonkeyProcess(context.Background(), "adb", "device-1"); err != nil {
 		t.Fatalf("expected successful stop command, got %v", err)
 	}
+}
+
+func stubSuccessfulMonkeyADBCommand(t *testing.T) {
+	t.Helper()
+	original := monkeyADBCommandContext
+	monkeyADBCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=TestMonkeyADBCommandHelper")
+		cmd.Env = append(os.Environ(), "GO_WANT_MONKEY_ADB_COMMAND_HELPER=1")
+		return cmd
+	}
+	t.Cleanup(func() { monkeyADBCommandContext = original })
+}
+
+func TestMonkeyADBCommandHelper(t *testing.T) {
+	if os.Getenv("GO_WANT_MONKEY_ADB_COMMAND_HELPER") != "1" {
+		return
+	}
+	os.Exit(0)
 }
 
 func TestFinalCaptureContextSurvivesCanceledRun(t *testing.T) {

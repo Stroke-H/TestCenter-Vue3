@@ -1,0 +1,33 @@
+{
+  "name": "fast",
+  "description": "Fast QC profile for large batches. Runs low-cost checks only.",
+  "stages": {
+    "fileCheck": true,
+    "decodeCheck": true,
+    "blackScreen": true,
+    "frameDrop": true,
+    "freeze": true,
+    "visualArtifact": false,
+    "avSync": false,
+    "deepMotion": false
+  },
+  "thresholds": {
+    "blackMeanY": 24,
+    "blackPixelRatio": 0.95,
+    "blackEdgeRatio": 0.04,
+    "blackMinDurationMs": 500,
+    "freezeSsim": 0.999,
+    "freezeMinDurationMs": 1000,
+    "ptsGapRatio": 1.8,
+    "whiteMeanY": 232,
+    "whitePixelRatio": 0.95
+  },
+  "limits": {
+    "maxWorkers": 4,
+    "taskTimeoutSeconds": 900
+  },
+  "tools": {
+    "ffprobe": "ffprobe",
+    "ffmpeg": "ffmpeg"
+  }
+}

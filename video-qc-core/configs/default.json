@@ -1,0 +1,33 @@
+{
+  "name": "default",
+  "description": "Default online QC profile: file check, decode check, black screen, PTS frame drop, freeze, and basic visual artifacts.",
+  "stages": {
+    "fileCheck": true,
+    "decodeCheck": true,
+    "blackScreen": true,
+    "frameDrop": true,
+    "freeze": true,
+    "visualArtifact": true,
+    "avSync": false,
+    "deepMotion": false
+  },
+  "thresholds": {
+    "blackMeanY": 24,
+    "blackPixelRatio": 0.95,
+    "blackEdgeRatio": 0.03,
+    "blackMinDurationMs": 500,
+    "freezeSsim": 0.999,
+    "freezeMinDurationMs": 1000,
+    "ptsGapRatio": 1.8,
+    "whiteMeanY": 232,
+    "whitePixelRatio": 0.95
+  },
+  "limits": {
+    "maxWorkers": 2,
+    "taskTimeoutSeconds": 1800
+  },
+  "tools": {
+    "ffprobe": "ffprobe",
+    "ffmpeg": "ffmpeg"
+  }
+}

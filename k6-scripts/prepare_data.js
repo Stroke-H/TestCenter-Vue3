@@ -6,7 +6,7 @@ const EMAIL = process.env.EMAIL || "";
 const PASSWORD = process.env.PASSWORD || "";
 const LOGIN_URL = process.env.LOGIN_URL || "http://35.225.224.94:8080/api/pwd_login";
 const DRAMA_LIST_URL = process.env.DRAMA_LIST_URL || "http://35.225.224.94:8080/api/management/drama/all_online_ids";
-const APP_GROUP_LIST_URL = process.env.APP_GROUP_LIST_URL || "https://admin.shortswave.com/api/management/app/group/list";
+const APP_GROUP_LIST_URL = process.env.APP_GROUP_LIST_URL || buildAppGroupListURL(DRAMA_LIST_URL);
 const FETCH_RETRY_ATTEMPTS = Number(process.env.PREPARE_FETCH_RETRY_ATTEMPTS || 3);
 const DRAMA_META_PAGE_SIZE = Number(process.env.DRAMA_META_PAGE_SIZE || 200);
 
@@ -14,6 +14,14 @@ const DRAMA_META_PAGE_SIZE = Number(process.env.DRAMA_META_PAGE_SIZE || 200);
 const OUTPUT_FILE = path.join(import.meta.dirname, '..', 'drama_info.json');
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+function buildAppGroupListURL(dramaListURL) {
+  try {
+    return new URL('/api/management/app/group/list', dramaListURL).toString();
+  } catch (error) {
+    return 'https://admin.shortswave.com/api/management/app/group/list';
+  }
+}
 
 async function fetchWithRetry(url, options, label) {
   let lastError;

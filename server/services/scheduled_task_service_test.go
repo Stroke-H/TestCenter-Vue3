@@ -23,14 +23,18 @@ func TestSplitScheduledDramaFailures(t *testing.T) {
 			DramaID: "6985803d8671d0853028b57b",
 			Errors:  []string{"• [解锁类型] unlock_type=coin，但 cn_name 或 App Group 命中 IAA"},
 		},
+		{
+			DramaID: "6a61c109e124f7d6d95cbeca",
+			Errors:  []string{"• [分组规则] cn_name 包含 -DS 时，App Group 必须且只能为 TT-Minis 分销组"},
+		},
 	}
 
 	dramaFailures, groupFailures := splitScheduledDramaFailures(failures)
 	if len(dramaFailures) != 1 {
 		t.Fatalf("expected 1 drama failure, got %d", len(dramaFailures))
 	}
-	if len(groupFailures) != 2 {
-		t.Fatalf("expected 2 group failures, got %d", len(groupFailures))
+	if len(groupFailures) != 3 {
+		t.Fatalf("expected 3 group failures, got %d", len(groupFailures))
 	}
 	if len(dramaFailures[0].Errors) != 1 || strings.Contains(dramaFailures[0].Errors[0], "[解锁类型]") {
 		t.Fatalf("unexpected drama failure errors: %#v", dramaFailures[0].Errors)
@@ -40,6 +44,36 @@ func TestSplitScheduledDramaFailures(t *testing.T) {
 	}
 	if groupFailures[0].Title != failures[0].Title || groupFailures[0].CNTitle != failures[0].CNTitle {
 		t.Fatalf("expected drama metadata to be preserved: %#v", groupFailures[0])
+	}
+	if len(groupFailures[2].Errors) != 1 || !strings.Contains(groupFailures[2].Errors[0], "[分组规则]") {
+		t.Fatalf("expected DS rule error in group failures: %#v", groupFailures[2].Errors)
+	}
+}
+
+func TestSummarizeScheduledDramaAuditFailures(t *testing.T) {
+	failures := []dramaFailureSummary{
+		{
+			DramaID: "drama-1",
+			Errors: []string{
+				"• [出错] 章节异常",
+				"• [解锁类型] unlock_type=ad，但 App Group 命中 ShortsWave",
+			},
+		},
+		{
+			DramaID: "drama-2",
+			Errors:  []string{"• [转换中] 章节尚未完成转换"},
+		},
+		{
+			DramaID: "drama-3",
+			Errors:  []string{"• [分组规则] cn_name 包含 -DS"},
+		},
+	}
+
+	if got := summarizeScheduledDramaAuditFailures(failures); got != "剧集错误 2、分组错误 2" {
+		t.Fatalf("unexpected audit summary: %s", got)
+	}
+	if got := summarizeScheduledDramaAuditFailures(nil); got != "无异常" {
+		t.Fatalf("unexpected empty audit summary: %s", got)
 	}
 }
 

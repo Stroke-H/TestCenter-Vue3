@@ -35,6 +35,7 @@ func GetOperationLogs() ([]model.AIOperationLog, error) {
 	}
 
 	enrichLegacyDeleteOperationLogs(logs)
+	enrichScheduledEpisodePlaybackOperationLogs(logs)
 
 	// Reverse to show newest first
 	for i, j := 0, len(logs)-1; i < j; i, j = i+1, j-1 {
@@ -47,6 +48,35 @@ func GetOperationLogs() ([]model.AIOperationLog, error) {
 	}
 
 	return logs, nil
+}
+
+func enrichScheduledEpisodePlaybackOperationLogs(logs []model.AIOperationLog) {
+	for i := range logs {
+		logEntry := &logs[i]
+		if logEntry.ToolName != "scheduled_episode_playback_test" {
+			continue
+		}
+		runID := extractScheduledTaskRunID(logEntry.Detail)
+		if runID == "" {
+			continue
+		}
+		if summary, ok := services.ScheduledDramaAuditSummaryForRunID(runID); ok {
+			logEntry.Detail = summary
+		}
+	}
+}
+
+func extractScheduledTaskRunID(detail string) string {
+	const marker = "/api/test-runs/"
+	start := strings.Index(detail, marker)
+	if start < 0 {
+		return ""
+	}
+	remainder := detail[start+len(marker):]
+	if end := strings.Index(remainder, "/"); end >= 0 {
+		remainder = remainder[:end]
+	}
+	return strings.TrimSpace(remainder)
 }
 
 type deleteRequestTrace struct {

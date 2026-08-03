@@ -155,19 +155,20 @@ type monkeyRunState struct {
 }
 
 var (
-	monkeyRunsMu           sync.Mutex
-	monkeyRuns             = map[string]*monkeyRunState{}
-	monkeyPackagesMu       sync.Mutex
-	monkeyPackagesTTL      = 5 * time.Minute
-	monkeyPackages         = map[string]monkeyPackageCache{}
-	monkeyWirelessMu       sync.Mutex
-	monkeyWirelessADBs     = map[string]MonkeyWirelessADBDevice{}
-	packageNamePattern     = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
-	pairingCodePattern     = regexp.MustCompile(`^\d{6}$`)
-	logcatPIDPattern       = regexp.MustCompile(`\(\s*(\d+)\)`)
-	activityPattern        = regexp.MustCompile(`([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)`)
-	nodeBoundsPattern      = regexp.MustCompile(`\[(\d+),(\d+)\]\[(\d+),(\d+)\]`)
-	archiveActivityPattern = regexp.MustCompile(`originalComponentName\s*=\s*ComponentInfo\{([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)\}`)
+	monkeyRunsMu            sync.Mutex
+	monkeyRuns              = map[string]*monkeyRunState{}
+	monkeyPackagesMu        sync.Mutex
+	monkeyPackagesTTL       = 5 * time.Minute
+	monkeyPackages          = map[string]monkeyPackageCache{}
+	monkeyWirelessMu        sync.Mutex
+	monkeyWirelessADBs      = map[string]MonkeyWirelessADBDevice{}
+	monkeyADBCommandContext = exec.CommandContext
+	packageNamePattern      = regexp.MustCompile(`^[A-Za-z0-9_.]+$`)
+	pairingCodePattern      = regexp.MustCompile(`^\d{6}$`)
+	logcatPIDPattern        = regexp.MustCompile(`\(\s*(\d+)\)`)
+	activityPattern         = regexp.MustCompile(`([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)`)
+	nodeBoundsPattern       = regexp.MustCompile(`\[(\d+),(\d+)\]\[(\d+),(\d+)\]`)
+	archiveActivityPattern  = regexp.MustCompile(`originalComponentName\s*=\s*ComponentInfo\{([A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+)\}`)
 )
 
 const monkeyModulePermissionKey = "dashboard.monkey_test.visible"
@@ -563,7 +564,7 @@ func stopADBMonkeyProcess(ctx context.Context, adbPath string, deviceID string) 
 		{"-s", deviceID, "shell", "pkill", "-f", "com.android.commands.monkey"},
 		{"-s", deviceID, "shell", "killall", "com.android.commands.monkey"},
 	} {
-		output, err := exec.CommandContext(ctx, adbPath, args...).CombinedOutput()
+		output, err := monkeyADBCommandContext(ctx, adbPath, args...).CombinedOutput()
 		if err == nil {
 			return nil
 		}
@@ -1723,7 +1724,7 @@ func setMonkeyStatusBarExpansionProtected(ctx context.Context, adbPath string, d
 	var lastErr error
 	for _, command := range commands {
 		args := append([]string{"-s", deviceID}, command...)
-		output, err := exec.CommandContext(statusBarCtx, adbPath, args...).CombinedOutput()
+		output, err := monkeyADBCommandContext(statusBarCtx, adbPath, args...).CombinedOutput()
 		if err == nil {
 			return nil
 		}
@@ -1735,7 +1736,7 @@ func setMonkeyStatusBarExpansionProtected(ctx context.Context, adbPath string, d
 func collapseMonkeyStatusBar(ctx context.Context, adbPath string, deviceID string) error {
 	collapseCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(collapseCtx, adbPath, "-s", deviceID, "shell", "cmd", "statusbar", "collapse").CombinedOutput()
+	output, err := monkeyADBCommandContext(collapseCtx, adbPath, "-s", deviceID, "shell", "cmd", "statusbar", "collapse").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 	}
