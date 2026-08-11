@@ -6,8 +6,9 @@ const EMAIL = process.env.EMAIL || "";
 const PASSWORD = process.env.PASSWORD || "";
 const LOGIN_URL = process.env.LOGIN_URL || "http://35.225.224.94:8080/api/pwd_login";
 const DRAMA_LIST_URL = process.env.DRAMA_LIST_URL || "http://35.225.224.94:8080/api/management/drama/all_online_ids";
-const APP_GROUP_LIST_URL = process.env.APP_GROUP_LIST_URL || "https://admin.shortswave.com/api/management/app/group/list";
+const APP_GROUP_LIST_URL = process.env.APP_GROUP_LIST_URL || buildAppGroupListURL(DRAMA_LIST_URL);
 const FETCH_RETRY_ATTEMPTS = Number(process.env.PREPARE_FETCH_RETRY_ATTEMPTS || 3);
+const FETCH_TIMEOUT_MS = Number(process.env.PREPARE_FETCH_TIMEOUT_MS || 60000);
 const DRAMA_META_PAGE_SIZE = Number(process.env.DRAMA_META_PAGE_SIZE || 200);
 
 // 定义最终落盘的存储文件路径 (锁定在项目根目录)
@@ -15,11 +16,27 @@ const OUTPUT_FILE = path.join(import.meta.dirname, '..', 'drama_info.json');
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+function buildAppGroupListURL(dramaListURL) {
+  try {
+    return new URL('/api/management/app/group/list', dramaListURL).toString();
+  } catch (error) {
+    return 'https://admin.shortswave.com/api/management/app/group/list';
+  }
+}
+
 async function fetchWithRetry(url, options, label) {
   let lastError;
   for (let attempt = 1; attempt <= FETCH_RETRY_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
-      const response = await fetch(url, options);
+      const networkResponse = await fetch(url, { ...options, signal: controller.signal });
+      const responseBody = await networkResponse.arrayBuffer();
+      const response = new Response(responseBody, {
+        status: networkResponse.status,
+        statusText: networkResponse.statusText,
+        headers: networkResponse.headers
+      });
       if (response.ok || attempt >= FETCH_RETRY_ATTEMPTS || !shouldRetryStatus(response.status)) {
         return response;
       }
@@ -31,6 +48,8 @@ async function fetchWithRetry(url, options, label) {
         throw error;
       }
       console.warn(`⚠️ ${label} 第 ${attempt}/${FETCH_RETRY_ATTEMPTS} 次请求异常，准备重试: ${formatFetchError(error)}`);
+    } finally {
+      clearTimeout(timeout);
     }
     await sleep(500 * attempt);
   }
@@ -63,6 +82,11 @@ async function main() {
   console.log(`📡 目标环境: ${DRAMA_LIST_URL.includes('admin') ? '正式服' : '测试服'}`);
   console.log(`👤 目标账户: ${EMAIL}`);
   console.log(`📝 存储位置: ${OUTPUT_FILE} (执行强制覆盖并刷新)`);
+
+  if (!EMAIL || !PASSWORD) {
+    console.error('❌ 缺少登录账号配置：请检查后端 DRAMA_PROD_* / DRAMA_TEST_* / DRAMA_GRAY_* 环境变量，或手动执行请求参数。');
+    process.exit(1);
+  }
   
   // -------------------------------------------------------------
   // Step 1: 模拟登录获取 x-token
@@ -163,7 +187,9 @@ async function main() {
               title: item?.title,
               cn_title: item?.cn_title,
               cn_name: item?.cn_name,
+              created_at: item?.created_at,
               unlock_type: item?.unlock_type,
+              marketing_position: item?.marketing_position,
               app_groups: item?.app_groups
             });
             return id;
@@ -198,8 +224,13 @@ async function main() {
   // Step 2.6: 拉取 App Group 列表，供 unlock_type / 投放组规则校验复用
   // -------------------------------------------------------------
   console.log(`\n🧩 Step 2.6: 请求 App Group 列表 [${APP_GROUP_LIST_URL}]`);
-  const appGroups = await fetchAppGroups(xToken);
-  console.log(`✅ App Group 数据准备完成: ${appGroups.length} 条`);
+  const appGroupResult = await fetchAppGroups(xToken);
+  const appGroups = appGroupResult.groups;
+  if (appGroupResult.available) {
+    console.log(`✅ App Group 数据准备完成: ${appGroups.length} 条`);
+  } else {
+    console.warn(`⚠️ App Group 元数据不可用，本轮相关剧集将进入二次确认: ${appGroupResult.error}`);
+  }
 
   // -------------------------------------------------------------
   // Step 3: 格式化包裹并持久化落盘
@@ -218,7 +249,13 @@ async function main() {
     apiBase,
     dramaList: dramaIds,
     dramaMeta,
-    appGroups
+    appGroups,
+    validationMeta: {
+      appGroups: {
+        available: appGroupResult.available,
+        error: appGroupResult.error
+      }
+    }
   };
 
   fs.writeFileSync(OUTPUT_FILE, JSON.stringify(targetOutput, null, 2), 'utf8');
@@ -272,7 +309,9 @@ function buildDramaMetaFromRecord(headers, row) {
     title: firstRecordValue(record, ['title', 'name']),
     cn_title: firstRecordValue(record, ['cn_title', 'cnTitle', 'cn_name', 'cnName', '中文标题', '中文名']),
     cn_name: firstRecordValue(record, ['cn_name', 'cnName', 'cn_title', 'cnTitle', '中文名', '中文标题']),
+    created_at: firstRecordValue(record, ['created_at', 'createdAt']),
     unlock_type: firstRecordValue(record, ['unlock_type', 'unlockType']),
+    marketing_position: firstRecordValue(record, ['marketing_position', 'marketingPosition']),
     app_groups: firstRecordValue(record, ['app_groups', 'appGroups', 'app_group_ids', 'appGroupIds'])
   });
 }
@@ -293,7 +332,9 @@ function normalizeDramaMeta(meta) {
     title: String(meta.title ?? meta.name ?? '').trim(),
     cn_title: cnTitle,
     cn_name: String(meta.cn_name ?? meta.cnName ?? cnTitle).trim(),
+    created_at: String(meta.created_at ?? meta.createdAt ?? '').trim(),
     unlock_type: String(meta.unlock_type ?? meta.unlockType ?? '').trim(),
+    marketing_position: String(meta.marketing_position ?? meta.marketingPosition ?? '').trim(),
     app_groups: normalizeAppGroupsValue(meta.app_groups ?? meta.appGroups ?? meta.app_group_ids ?? meta.appGroupIds)
   };
 }
@@ -373,7 +414,9 @@ function mergeDramaMeta(primary, secondary) {
     title: left.title || right.title,
     cn_title: left.cn_title || right.cn_title,
     cn_name: left.cn_name || right.cn_name,
+    created_at: left.created_at || right.created_at,
     unlock_type: left.unlock_type || right.unlock_type,
+    marketing_position: left.marketing_position || right.marketing_position,
     app_groups: left.app_groups.length ? left.app_groups : right.app_groups
   });
 }
@@ -383,7 +426,9 @@ function hasReadableDramaMeta(meta) {
 }
 
 async function fetchAppGroups(xToken) {
-  if (!xToken) return [];
+  if (!xToken) {
+    return { groups: [], available: false, error: '缺少 x-token' };
+  }
   try {
     const response = await fetchWithRetry(APP_GROUP_LIST_URL, {
       method: 'GET',
@@ -396,15 +441,19 @@ async function fetchAppGroups(xToken) {
     if (!response.ok) {
       const errorText = await response.text();
       console.warn(`⚠️ App Group 列表接口返回 HTTP ${response.status}，将继续执行主检查。响应: ${errorText}`);
-      return [];
+      return { groups: [], available: false, error: `HTTP ${response.status}` };
     }
 
     const payload = await response.json();
     const list = extractListPayload(payload);
-    return list.map(normalizeAppGroup).filter(group => group.id || group.name);
+    const groups = list.map(normalizeAppGroup).filter(group => group.id || group.name);
+    if (groups.length === 0) {
+      return { groups: [], available: false, error: '接口返回的 App Group 列表为空' };
+    }
+    return { groups, available: true, error: '' };
   } catch (error) {
     console.warn(`⚠️ App Group 列表接口请求异常，将继续执行主检查: ${formatFetchError(error)}`);
-    return [];
+    return { groups: [], available: false, error: formatFetchError(error) };
   }
 }
 

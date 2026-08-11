@@ -40,6 +40,10 @@ func main() {
 		api.GET("/drama-runs/current", services.CurrentDramaRunHandler)
 		api.POST("/drama-runs/start", services.StartDramaRunHandler)
 		api.POST("/drama-runs/stop", services.StopDramaRunHandler)
+		api.GET("/ws/subtitle-run", services.SubscribeSubtitleRunHandler)
+		api.GET("/subtitle-runs/current", services.CurrentSubtitleRunHandler)
+		api.POST("/subtitle-runs/start", services.StartSubtitleRunHandler)
+		api.POST("/subtitle-runs/stop", services.StopSubtitleRunHandler)
 		// WebSocket endpoint for Lighthouse execution
 		api.GET("/ws/lighthouse", services.RunLighthouseHandler)
 		// WebSocket endpoint for Playwright execution

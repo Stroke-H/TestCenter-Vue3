@@ -1,0 +1,33 @@
+{
+  "name": "deep",
+  "description": "Deep QC profile for suspicious videos. Enables expensive motion and AV sync checks.",
+  "stages": {
+    "fileCheck": true,
+    "decodeCheck": true,
+    "blackScreen": true,
+    "frameDrop": true,
+    "freeze": true,
+    "visualArtifact": true,
+    "avSync": true,
+    "deepMotion": true
+  },
+  "thresholds": {
+    "blackMeanY": 24,
+    "blackPixelRatio": 0.95,
+    "blackEdgeRatio": 0.03,
+    "blackMinDurationMs": 500,
+    "freezeSsim": 0.999,
+    "freezeMinDurationMs": 1000,
+    "ptsGapRatio": 1.8,
+    "whiteMeanY": 232,
+    "whitePixelRatio": 0.95
+  },
+  "limits": {
+    "maxWorkers": 1,
+    "taskTimeoutSeconds": 3600
+  },
+  "tools": {
+    "ffprobe": "ffprobe",
+    "ffmpeg": "ffmpeg"
+  }
+}

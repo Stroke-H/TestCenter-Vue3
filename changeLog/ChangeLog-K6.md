@@ -1,5 +1,11 @@
 # ChangeLog - K6 Integration
 
+## 2026-07-23
+
+### Updated
+- **DS Exclusive Group Rule**: 当剧集 `cn_name` 包含 `-DS` 时，App Group 必须且只能配置为 `TT-Minis 分销组`；未配置该分组或同时配置其他分组时，剧集播放接口检测会报告分组规则异常。
+- **Environment-aware Group Lookup**: App Group 列表接口会跟随当前剧集检测环境，不再使用固定正式服地址；`-DS` 剧集命中专属规则后不再重复执行通用广告分组判断，分组元数据不可用时也不会产生全量“未匹配”误报。
+
 ## 2026-04-30
 
 ### Updated

@@ -231,8 +231,8 @@ func extractConfigsFromAcceptanceReport(ctx context.Context, report AcceptanceRe
 		Content string
 	}{
 		{Name: "版本更新测试需求点", Content: report.UpdateRequirements},
-		{Name: "正式版本缺陷修复验证情况", Content: report.BugFixStatus},
-		{Name: "本次预提审版本缺陷提交情况", Content: report.BugSubmissionStatus},
+		{Name: "正式版本缺陷修复验证情况", Content: report.BugSubmissionStatus},
+		{Name: "本次预提审版本缺陷提交情况", Content: report.BugFixStatus},
 		{Name: "测试结论", Content: report.TestConclusion},
 	}
 

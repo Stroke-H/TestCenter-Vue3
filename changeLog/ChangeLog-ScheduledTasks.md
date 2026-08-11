@@ -1,5 +1,42 @@
 # ChangeLog - Scheduled Tasks
 
+## 2026-06-30
+
+### Changed
+- **Subtitle Language Check Removal**: 剧集外挂字幕测试完全移除字幕语种识别与 AI 复核链路，仅保留字幕数量、缺失字幕、时间轴和字幕拉取异常检查；HTML 报告与飞书通知同步移除“语种异常”和“AI 复核”展示。
+
+### Fixed
+- **Running Task Recovery Reschedule**: 周期定时任务在后端重启后若发现旧 `running` 状态但执行进程已不存在，会记录中断结果并自动顺延到下一次未来执行时间，不再永久停留在 `paused`。
+- **Early Schedule State Commit**: 剧集播放定时任务执行结束后会优先回写任务状态和下次执行时间，再执行报告归档、AI 总结和飞书通知，避免收尾链路异常导致后续周期不再触发。
+- **Paused Task Status Click**: 定时任务状态标签点击行为补齐，`PAUSED` 等非运行状态点击状态标签会打开编辑弹窗，避免标签拦截行点击后没有反馈。
+
+### Added
+- **External Subtitle Scheduled Test**: 新增“剧集外挂字幕测试”定时任务类型，独立于剧集播放接口测试执行。任务会筛选 `embedded_subtitle=0` 的外挂剧，按章节在线请求 VTT 字幕并全量检查语种匹配、时间轴超过 10 分钟、结束早于开始和时间轴倒退等异常。
+- **Subtitle Failure Artifacts**: 字幕测试只保存异常字幕的精准 cue 或文件级异常，不缓存正常字幕正文；运行产物包含 `subtitle_summary.json`、`subtitle_failures.jsonl` 和 `subtitle_report.html`，并会归档到执行报告详情页。
+- **Subtitle Task Feishu Notice**: 字幕测试完成后会发送独立的飞书通知卡片，展示外挂剧数量、字幕检查进度、异常文件、语种异常、时间轴异常和拉取失败统计。
+- **Subtitle Prepare Progress**: 字幕测试准备阶段改为有限并发拉取章节列表，并持续刷新 `subtitle_summary.json` 与后台进度日志，避免全量剧库准备阶段长时间无可见反馈。
+- **Subtitle Missing URL Detection**: 字幕测试会把 `embedded_subtitle=0` 但章节数据中未解析到 VTT 地址的剧集作为“缺失字幕”异常上报，避免只检查到有 URL 的外挂剧。
+- **Subtitle Report Redesign**: 剧集外挂字幕测试报告改为更接近剧集播放接口测试报告的版式，包含顶部状态区、关键指标卡、分类统计和按剧集分组的异常明细。
+- **Subtitle Online Scope Fix**: 剧集外挂字幕测试改为以 `all_online_ids` 作为权威在线剧集范围，再使用 `drama/list` 补全元信息，避免正式服 `drama/list?online=1` 返回更宽集合导致误扫非目标剧集。
+- **Subtitle Collection Milestones**: 字幕测试准备阶段新增按外挂剧数量计算的 10% 里程碑日志，并在日志中附带总在线剧集数作为上下文，避免把非外挂剧误表述为已收集。
+- **Scheduled Command Streaming Logs**: 定时任务执行外部脚本时改为实时流式输出 stdout/stderr，避免字幕全量检查这类长任务在后台日志中长时间无反馈。
+- **Subtitle Check Milestones**: 字幕文件检查阶段新增每 10% 的里程碑日志，展示已检查项数和异常数。
+- **Subtitle Full-run Optimization**: 字幕检查默认关闭 AI 复核，新增 URL 级去重与跨运行缓存，重复字幕 URL 会复用上次检查结果，显著减少正式服全量检查的网络请求和 AI token 消耗。
+- **Subtitle Check Heartbeat**: 字幕文件检查阶段新增每 60 秒心跳日志，长时间未跨过 10% 里程碑时也会持续输出当前检查数、百分比、异常数和缓存命中数。
+- **Subtitle Report Classification**: 剧集外挂字幕报告新增“字幕数量异常、缺失字幕、语种异常、时间轴异常、拉取失败”分类展示，避免不同异常混在同一个列表里。
+- **Subtitle Count Validation**: 字幕准备阶段会读取剧集 `chapters` 并在内容检查前比对正片 VTT 字幕文件数量；数量不一致会独立上报但不阻断后续字幕内容检查。
+- **Subtitle Language AI Review**: 语种疑似不符时会通过配置的 AI 提供方复核，只有 AI 确认不符才按语种异常上报，并在报告里展示不符合的字幕片段和原因。
+- **Subtitle Report Entry**: 剧集外挂字幕测试报告归入测试报告页“接口验证”分类；历史 `字幕测试` 类型记录也会兼容显示到该分类下。
+- **Manual Subtitle Check Entry**: 仪表盘 API 工具和智能助手快捷入口配置新增“剧集外挂字幕测试”入口，可在执行测试页手动启动字幕检查。
+- **Manual Subtitle Check Logs**: 新增字幕检查手动运行链路，准备数据、字幕检查和报告生成阶段会把后端脚本日志实时输出到执行页日志区，并在完成后归档到“接口验证”报告列表。
+- **Subtitle Check Concurrency**: 字幕准备和字幕文件拉取默认并发从 6 提升到 16，仍支持通过 `SUBTITLE_CHAPTER_CONCURRENCY` 与 `SUBTITLE_FETCH_CONCURRENCY` 配置覆盖，上限 24。
+- **Subtitle Prepare Log Detail**: 字幕准备阶段进度日志新增本段新增正片字幕、累计正片字幕、有字幕剧、未解析字幕剧和数量异常剧统计，避免累计值不变时误以为重复打印。
+- **Subtitle Prepare Log Clarity**: 字幕准备阶段日志改为展示本段处理外挂剧数、本段新增字幕、本段新增命中剧、累计命中率和连续未新增提示；手动执行页会按 50 部进度同步推进准备阶段进度条，并合并相邻重复日志。
+- **Subtitle Source Fallback**: 字幕准备阶段在 `chapter/list` 未解析到完整正片 VTT 时，会按剧集语种请求 `all_subtitle` 兜底，修复部分外挂剧实际有字幕却被误报为“缺失字幕”的问题。
+- **Subtitle Report Navigation**: 字幕报告异常明细按异常类型支持展开/收起，并在右下角新增返回顶部按钮，减少大量异常时的纵向滚动成本。
+- **Subtitle AI Review Disabled By Default**: 剧集外挂字幕测试默认关闭 AI 语种复核，避免全量检查缓存未命中时产生过高 token 消耗；仅在显式设置 `SUBTITLE_AI_ENABLED=1` 时启用。
+- **Subtitle Japanese Traditional Chinese Tolerance**: 日语剧集字幕语种检查新增繁体中文容错，字幕样本包含繁体中文时不再按语种异常上报。
+
 ## 2026-06-11
 
 ### Added

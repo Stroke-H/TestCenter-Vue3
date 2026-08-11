@@ -98,6 +98,14 @@ type scheduledTaskRunControl struct {
 	cancel context.CancelFunc
 }
 
+const (
+	scheduledFunctionEpisodePlayback  = "episode-playback-test"
+	scheduledFunctionExternalSubtitle = "external-subtitle-test"
+	defaultScheduledTaskMaxRuntime    = 3 * time.Hour
+	scheduledTaskSafeResultRunes      = 60
+	scheduledTaskDetailedResultRunes  = 8000
+)
+
 var (
 	scheduledTaskMu   sync.Mutex
 	scheduledRunnerOn sync.Once
@@ -111,9 +119,50 @@ var scheduledTaskRetryDelays = []time.Duration{
 	15 * time.Minute,
 }
 
+var scheduledTaskSaveRetryDelays = []time.Duration{
+	0,
+	500 * time.Millisecond,
+	2 * time.Second,
+}
+
+func isSupportedScheduledTaskFunction(function string) bool {
+	switch function {
+	case scheduledFunctionEpisodePlayback, scheduledFunctionExternalSubtitle:
+		return true
+	default:
+		return false
+	}
+}
+
+func scheduledTaskDisplayName(function string) string {
+	switch function {
+	case scheduledFunctionExternalSubtitle:
+		return "剧集外挂字幕测试"
+	default:
+		return "剧集播放接口测试"
+	}
+}
+
+func scheduledTaskDescription(function string) string {
+	switch function {
+	case scheduledFunctionExternalSubtitle:
+		return "Run the external subtitle validation flow for online dramas."
+	default:
+		return "Run the drama playback API test flow for the selected project."
+	}
+}
+
+func scheduledTaskReportType(function string) string {
+	switch function {
+	case scheduledFunctionExternalSubtitle:
+		return "接口验证"
+	default:
+		return "K6 压测"
+	}
+}
+
 func InitScheduledTaskService() {
 	scheduledRunnerOn.Do(func() {
-		recoverAbandonedScheduledTasks()
 		go scheduledTaskLoop()
 	})
 }
@@ -135,8 +184,8 @@ func CreateScheduledTaskHandler(c *gin.Context) {
 		return
 	}
 
-	if req.Function != "episode-playback-test" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Only episode playback scheduled tasks are supported now"})
+	if !isSupportedScheduledTaskFunction(req.Function) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported scheduled task function"})
 		return
 	}
 
@@ -153,7 +202,7 @@ func CreateScheduledTaskHandler(c *gin.Context) {
 	now := time.Now()
 	task := ScheduledTask{
 		ID:              "ST-" + uuid.New().String(),
-		Name:            "剧集播放接口测试",
+		Name:            scheduledTaskDisplayName(req.Function),
 		Function:        req.Function,
 		ScheduleType:    req.ScheduleType,
 		Creator:         req.Creator,
@@ -163,7 +212,7 @@ func CreateScheduledTaskHandler(c *gin.Context) {
 		TestProjectCode: req.TestProjectCode,
 		TestEnv:         req.TestEnv,
 		Status:          "active",
-		Description:     "Run the drama playback API test flow for the selected project.",
+		Description:     scheduledTaskDescription(req.Function),
 		CreatedAt:       now.Format(time.RFC3339),
 		UpdatedAt:       now.Format(time.RFC3339),
 	}
@@ -317,10 +366,18 @@ func scheduledTaskLoop() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	runDueScheduledTasks()
+	runScheduledTaskCycle()
 	for range ticker.C {
-		runDueScheduledTasks()
+		runScheduledTaskCycle()
 	}
+}
+
+func runScheduledTaskCycle() {
+	// Recovery is part of every scheduler cycle rather than a one-time startup
+	// action. A failed persistence attempt must never leave a task permanently
+	// stuck in the running state.
+	recoverAbandonedScheduledTasks()
+	runDueScheduledTasks()
 }
 
 func runDueScheduledTasks() {
@@ -331,10 +388,9 @@ func runDueScheduledTasks() {
 	}
 
 	now := time.Now()
-	changed := false
 	for i := range tasks {
 		task := &tasks[i]
-		if task.Status != "active" || task.Function != "episode-playback-test" {
+		if task.Status != "active" || !isSupportedScheduledTaskFunction(task.Function) {
 			continue
 		}
 		nextRunAt, err := time.Parse(time.RFC3339, task.NextRunAt)
@@ -344,20 +400,20 @@ func runDueScheduledTasks() {
 
 		task.Status = "running"
 		task.UpdatedAt = now.Format(time.RFC3339)
-		runCtx, cancel := context.WithCancel(context.Background())
+		runCtx, cancel := context.WithTimeout(context.Background(), scheduledTaskExecutionTimeout())
 		registerScheduledTaskRun(task.ID, cancel)
-		changed = true
-		if err := saveScheduledTasks(tasks); err != nil {
+		if err := upsertScheduledTaskWithRetry(*task); err != nil {
 			unregisterScheduledTaskRun(task.ID)
+			cancel()
+			task.Status = "active"
 			log.Printf("[ScheduledTask] mark running failed: %v", err)
 			continue
 		}
 
-		go executeScheduledTask(runCtx, *task)
-	}
-
-	if changed {
-		_ = saveScheduledTasks(tasks)
+		go func(ctx context.Context, scheduledTask ScheduledTask, cancel context.CancelFunc) {
+			defer cancel()
+			executeScheduledTask(ctx, scheduledTask)
+		}(runCtx, *task, cancel)
 	}
 }
 
@@ -399,28 +455,52 @@ func recoverAbandonedScheduledTasks() {
 	}
 
 	now := time.Now()
-	changed := false
 	for i := range tasks {
 		if tasks[i].Status != "running" || isScheduledTaskActivelyRunning(tasks[i].ID) {
 			continue
 		}
-		tasks[i].Status = "paused"
-		tasks[i].LastResult = "任务中断：后端服务重启或执行进程已不存在"
-		tasks[i].UpdatedAt = now.Format(time.RFC3339)
-		changed = true
+		prepareAbandonedScheduledTaskForRetry(&tasks[i], now)
+		if err := upsertScheduledTaskWithRetry(tasks[i]); err != nil {
+			log.Printf("[ScheduledTask] save recovered scheduled task %s failed: %v", tasks[i].ID, err)
+		}
 	}
-	if !changed {
+}
+
+func prepareAbandonedScheduledTaskForRetry(task *ScheduledTask, now time.Time) {
+	task.LastResult = "任务中断，调度器将在恢复后自动补跑"
+	task.UpdatedAt = now.Format(time.RFC3339)
+	if _, err := time.Parse(time.RFC3339, task.NextRunAt); err != nil {
+		task.Status = "paused"
 		return
 	}
-	if err := saveScheduledTasks(tasks); err != nil {
-		log.Printf("[ScheduledTask] save recovered scheduled tasks failed: %v", err)
+	switch task.ScheduleType {
+	case "Once", "Daily", "weekly":
+		// Preserve NextRunAt. If it is overdue, runDueScheduledTasks executes one
+		// catch-up run immediately, and normal rescheduling then moves it to the
+		// next future slot without replaying every missed day.
+		task.Status = "active"
+	default:
+		task.Status = "paused"
 	}
+}
+
+func scheduledTaskExecutionTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("SCHEDULED_TASK_MAX_RUNTIME"))
+	if raw == "" {
+		return defaultScheduledTaskMaxRuntime
+	}
+	duration, err := time.ParseDuration(raw)
+	if err != nil || duration <= 0 {
+		log.Printf("[ScheduledTask] invalid SCHEDULED_TASK_MAX_RUNTIME=%q; using %s", raw, defaultScheduledTaskMaxRuntime)
+		return defaultScheduledTaskMaxRuntime
+	}
+	return duration
 }
 
 func executeScheduledTask(ctx context.Context, task ScheduledTask) {
 	start := time.Now()
 	runID := fmt.Sprintf("ST-%s-%d", sanitizeReportSuffix(task.ID), start.UnixMilli())
-	log.Printf("[ScheduledTask] executing %s (%s)", task.Name, task.ID)
+	log.Printf("[ScheduledTask] 开始执行：%s (%s)", task.Name, task.ID)
 	defer unregisterScheduledTaskRun(task.ID)
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -430,7 +510,7 @@ func executeScheduledTask(ctx context.Context, task ScheduledTask) {
 		}
 	}()
 
-	attempts := runScheduledDramaTaskWithRetries(ctx, task, runID)
+	attempts := runScheduledTaskWithRetries(ctx, task, runID)
 	finalAttempt := attempts[len(attempts)-1]
 	duration := time.Since(start)
 	result := "success"
@@ -446,16 +526,26 @@ func executeScheduledTask(ctx context.Context, task ScheduledTask) {
 	} else if len(attempts) > 1 {
 		result = fmt.Sprintf("success after %d attempt(s)", len(attempts))
 	}
+	if finalAttempt.Err == nil && task.Function == scheduledFunctionExternalSubtitle {
+		summary := loadSubtitleScheduledSummary(reportDir)
+		if summary.Failures > 0 {
+			status = "Failed"
+			result = fmt.Sprintf("subtitle check found %d failure(s)", summary.Failures)
+		}
+	}
+
+	updateScheduledTaskAfterRun(task, start, result)
 
 	reportURL := ""
-	if status == "Passed" {
-		rootDir := projectRootDir()
-		reportFile, snapshotURL, snapshotErr := snapshotDramaReport(rootDir, reportDir, runID)
+	rootDir := projectRootDir()
+	if status == "Passed" || task.Function == scheduledFunctionExternalSubtitle {
+		reportFile, snapshotURL, snapshotErr := scheduledTaskReportSnapshot(rootDir, reportDir, runID, task.Function)
 		if snapshotErr != nil {
 			log.Printf("[ScheduledTask] snapshot report failed: %v", snapshotErr)
 		} else {
 			reportURL = snapshotURL
-			if archive, archiveErr := CreateScheduledDramaArchive(rootDir, runID, task, status, duration, start, reportFile); archiveErr != nil {
+			archive, archiveErr := createScheduledTaskArchive(rootDir, runID, task, status, duration, start, reportFile)
+			if archiveErr != nil {
 				log.Printf("[ScheduledTask] archive report failed: %v", archiveErr)
 			} else if len(archive.Artifacts) > 0 {
 				reportURL = archive.Artifacts[0].URL
@@ -464,7 +554,7 @@ func executeScheduledTask(ctx context.Context, task ScheduledTask) {
 	}
 	if _, addErr := AddExecutionReport(ExecutionReport{
 		Name:        task.Name,
-		Type:        "K6 压测",
+		Type:        scheduledTaskReportType(task.Function),
 		Status:      status,
 		Duration:    formatDuration(duration),
 		Author:      task.Creator,
@@ -475,19 +565,34 @@ func executeScheduledTask(ctx context.Context, task ScheduledTask) {
 		log.Printf("[ScheduledTask] add report failed: %v", addErr)
 	}
 
-	noticeText, noticeCard := buildScheduledTaskNotice(task, status, result, formatDuration(duration), reportURL, start, reportDir)
+	noticeText, noticeCard := buildScheduledTaskNoticeByFunction(task, status, result, formatDuration(duration), reportURL, start, reportDir)
 	if notifyErr := notifyScheduledTaskCreator(task.Creator, noticeText, noticeCard); notifyErr != nil {
 		log.Printf("[ScheduledTask] notify failed: %v", notifyErr)
-	} else {
-		log.Printf("[ScheduledTask] notify sent to %s for run %s", task.Creator, runID)
 	}
 
-	appendScheduledTaskAuditLog(task, status, result, formatDuration(duration), reportURL, start)
-
-	updateScheduledTaskAfterRun(task, start, result)
+	appendScheduledTaskAuditLog(task, status, result, formatDuration(duration), reportURL, start, reportDir)
+	log.Printf("[ScheduledTask] 执行完成：%s (%s)，结果=%s，耗时=%s", task.Name, task.ID, status, formatDuration(duration))
 }
 
-func runScheduledDramaTaskWithRetries(ctx context.Context, task ScheduledTask, runID string) []scheduledTaskAttemptResult {
+func scheduledTaskReportSnapshot(rootDir string, reportDir string, runID string, function string) (string, string, error) {
+	if function == scheduledFunctionExternalSubtitle {
+		reportFile := filepath.Join(reportDir, "subtitle_report.html")
+		if _, err := os.Stat(filepath.Join(rootDir, reportFile)); err != nil {
+			return "", "", err
+		}
+		return reportFile, PlatformBackendURL("/api/test-runs/" + url.PathEscape(runID) + "/artifacts/report"), nil
+	}
+	return snapshotDramaReport(rootDir, reportDir, runID)
+}
+
+func createScheduledTaskArchive(rootDir string, runID string, task ScheduledTask, status string, duration time.Duration, startedAt time.Time, reportFile string) (TestRunArchive, error) {
+	if task.Function == scheduledFunctionExternalSubtitle {
+		return CreateScheduledSubtitleArchive(rootDir, runID, task, status, duration, startedAt, reportFile)
+	}
+	return CreateScheduledDramaArchive(rootDir, runID, task, status, duration, startedAt, reportFile)
+}
+
+func runScheduledTaskWithRetries(ctx context.Context, task ScheduledTask, runID string) []scheduledTaskAttemptResult {
 	maxAttempts := len(scheduledTaskRetryDelays) + 1
 	attempts := make([]scheduledTaskAttemptResult, 0, maxAttempts)
 
@@ -522,8 +627,8 @@ func runScheduledDramaTaskWithRetries(ctx context.Context, task ScheduledTask, r
 		if attempt > 1 {
 			attemptRunID = fmt.Sprintf("%s-attempt-%d", runID, attempt)
 		}
-		reportDir := dramaRuntimeReportDir(attemptRunID)
-		err := runDramaPlaybackTask(ctx, task.TestEnv, reportDir)
+		reportDir := scheduledTaskRuntimeReportDir(task.Function, attemptRunID)
+		err := runScheduledTaskAttempt(ctx, task, reportDir)
 		attemptResult := scheduledTaskAttemptResult{
 			Attempt:   attempt,
 			ReportDir: reportDir,
@@ -533,9 +638,6 @@ func runScheduledDramaTaskWithRetries(ctx context.Context, task ScheduledTask, r
 		}
 		attempts = append(attempts, attemptResult)
 		if err == nil {
-			if attempt > 1 {
-				log.Printf("[ScheduledTask] %s (%s) succeeded on attempt %d/%d", task.Name, task.ID, attempt, maxAttempts)
-			}
 			return attempts
 		}
 
@@ -565,13 +667,8 @@ func buildScheduledTaskAttemptSummary(attempts []scheduledTaskAttemptResult) str
 func runDramaPlaybackTask(ctx context.Context, testEnv string, reportDir string) error {
 	profile := getDramaProfile(testEnv)
 	rootDir, _ := filepath.Abs("..")
-	env := append(os.Environ(),
-		"EMAIL="+profile.Email,
-		"PASSWORD="+profile.Password,
-		"LOGIN_URL="+profile.LoginURL,
-		"DRAMA_LIST_URL="+profile.DramaListURL,
-		"DRAMA_REPORT_DIR="+reportDir,
-	)
+	env := appendDramaProfileEnv(os.Environ(), profile, "", "", "", "")
+	env = append(env, "DRAMA_REPORT_DIR="+reportDir)
 
 	_ = os.MkdirAll(filepath.Join(rootDir, reportDir), 0755)
 	removeDramaRetryArtifacts(rootDir, reportDir)
@@ -584,22 +681,78 @@ func runDramaPlaybackTask(ctx context.Context, testEnv string, reportDir string)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if err := rerunDramaRetryCandidates(rootDir, reportDir, env, func(message string) {
-		log.Printf("[ScheduledTask][Retry] %s", message)
-	}); err != nil {
+	if err := rerunDramaRetryCandidates(ctx, rootDir, reportDir, env, nil, false); err != nil {
 		return fmt.Errorf("retry failed cases failed: %w", err)
 	}
 	return nil
+}
+
+func runScheduledTaskAttempt(ctx context.Context, task ScheduledTask, reportDir string) error {
+	switch task.Function {
+	case scheduledFunctionExternalSubtitle:
+		return runExternalSubtitleTask(ctx, task.TestEnv, reportDir)
+	default:
+		return runDramaPlaybackTask(ctx, task.TestEnv, reportDir)
+	}
+}
+
+func scheduledTaskRuntimeReportDir(function string, runID string) string {
+	switch function {
+	case scheduledFunctionExternalSubtitle:
+		return filepath.ToSlash(filepath.Join("report", "api_report", ".runtime", "subtitle_"+runID))
+	default:
+		return dramaRuntimeReportDir(runID)
+	}
+}
+
+func runExternalSubtitleTask(ctx context.Context, testEnv string, reportDir string) error {
+	profile := getDramaProfile(testEnv)
+	rootDir, _ := filepath.Abs("..")
+	env := appendDramaProfileEnv(os.Environ(), profile, "", "", "", "")
+	env = append(env, "SUBTITLE_REPORT_DIR="+reportDir)
+
+	_ = os.MkdirAll(filepath.Join(rootDir, reportDir), 0755)
+	if err := runCommand(ctx, rootDir, env, "node", filepath.Join("scripts", "prepare_subtitle_check.js")); err != nil {
+		return fmt.Errorf("prepare subtitle data failed: %w", err)
+	}
+	if err := runCommand(ctx, rootDir, env, "node", filepath.Join("scripts", "run_subtitle_check.js")); err != nil {
+		return fmt.Errorf("subtitle check failed: %w", err)
+	}
+	if err := runCommand(ctx, rootDir, env, "node", filepath.Join("scripts", "build_subtitle_report.js")); err != nil {
+		return fmt.Errorf("build subtitle report failed: %w", err)
+	}
+	return ctx.Err()
 }
 
 func runCommand(ctx context.Context, dir string, env []string, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
-	output, err := cmd.CombinedOutput()
-	if len(output) > 0 {
-		log.Printf("[ScheduledTask][%s] %s", name, removeANSI(string(output)))
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
 	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	drainCommandOutput := func(reader io.Reader) {
+		defer wg.Done()
+		_, _ = io.Copy(io.Discard, reader)
+	}
+
+	wg.Add(2)
+	go drainCommandOutput(stdout)
+	go drainCommandOutput(stderr)
+
+	err = cmd.Wait()
+	wg.Wait()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -611,13 +764,13 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 	if err != nil {
 		log.Printf("[ScheduledTask] report analysis skipped: %v", err)
 		analysis = "报告分析暂未生成，请打开平台查看完整报告。"
-	} else {
-		log.Printf("[ScheduledTask] report analysis generated for task %s", task.ID)
 	}
 	failures := loadScheduledDramaFailures(reportDir)
-	dramaFailures, groupFailures := splitScheduledDramaFailures(failures)
+	dramaFailures, groupFailures, classificationFailures, otherFailures := splitScheduledDramaFailures(failures)
 	failureDetail := formatScheduledDramaFailureDetail(dramaFailures)
 	groupFailureDetail := formatScheduledDramaFailureDetail(groupFailures)
+	classificationFailureDetail := formatScheduledDramaFailureDetail(classificationFailures)
+	otherFailureDetail := formatScheduledDramaFailureDetail(otherFailures)
 
 	statusText := "通过"
 	if status != "Passed" {
@@ -641,9 +794,104 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 		builder.WriteString("分组异常\n")
 		builder.WriteString(groupFailureDetail + "\n\n")
 	}
+	if strings.TrimSpace(classificationFailureDetail) != "" {
+		builder.WriteString("分类异常\n")
+		builder.WriteString(classificationFailureDetail + "\n\n")
+	}
+	if strings.TrimSpace(otherFailureDetail) != "" {
+		builder.WriteString("其他异常\n")
+		builder.WriteString(otherFailureDetail + "\n\n")
+	}
 	builder.WriteString("报告地址：" + reportURL)
 	text := sanitizeFeishuPlainText(builder.String())
-	return text, buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, dramaFailures, groupFailures)
+	return text, buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, dramaFailures, groupFailures, classificationFailures, otherFailures)
+}
+
+func buildScheduledTaskNoticeByFunction(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time, reportDir string) (string, map[string]any) {
+	if task.Function == scheduledFunctionExternalSubtitle {
+		return buildSubtitleScheduledTaskNotice(task, status, result, duration, reportURL, reportDir)
+	}
+	return buildScheduledTaskNotice(task, status, result, duration, reportURL, startedAt, reportDir)
+}
+
+type subtitleScheduledSummary struct {
+	TotalDramas             int    `json:"totalDramas"`
+	ExternalDramas          int    `json:"externalDramas"`
+	TotalSubtitleURLs       int    `json:"totalSubtitleUrls"`
+	TotalCheckItems         int    `json:"totalCheckItems"`
+	CheckedFiles            int    `json:"checkedFiles"`
+	FailedFiles             int    `json:"failedFiles"`
+	Failures                int    `json:"failures"`
+	TimestampFailures       int    `json:"timestampFailures"`
+	FetchFailures           int    `json:"fetchFailures"`
+	MissingSubtitleFailures int    `json:"missingSubtitleFailures"`
+	SubtitleCountFailures   int    `json:"subtitleCountFailures"`
+	FinishedAt              string `json:"finishedAt"`
+}
+
+func buildSubtitleScheduledTaskNotice(task ScheduledTask, status string, result string, duration string, reportURL string, reportDir string) (string, map[string]any) {
+	summary := loadSubtitleScheduledSummary(reportDir)
+	statusText := "通过"
+	if status != "Passed" || summary.Failures > 0 {
+		statusText = "失败"
+	}
+
+	var builder strings.Builder
+	builder.WriteString("定时任务执行完成\n")
+	builder.WriteString("任务：" + task.Name + "\n")
+	builder.WriteString("项目：" + valueOrFallback(task.TestProject, task.TestProjectCode) + "\n")
+	builder.WriteString("环境：" + task.TestEnv + "\n")
+	builder.WriteString("结果：" + statusText + "\n")
+	builder.WriteString("耗时：" + duration + "\n")
+	if summary.TotalSubtitleURLs > 0 || summary.CheckedFiles > 0 {
+		builder.WriteString(fmt.Sprintf("外挂剧：%d 部\n", summary.ExternalDramas))
+		builder.WriteString(fmt.Sprintf("检查项：%d/%d，正片字幕文件：%d\n", summary.CheckedFiles, valueOrDefaultInt(summary.TotalCheckItems, summary.TotalSubtitleURLs), summary.TotalSubtitleURLs))
+		builder.WriteString(fmt.Sprintf("异常：%d 条，影响文件：%d 个\n", summary.Failures, summary.FailedFiles))
+		builder.WriteString(fmt.Sprintf("字幕数量异常：%d，缺失字幕：%d，时间轴异常：%d，拉取失败：%d\n", summary.SubtitleCountFailures, summary.MissingSubtitleFailures, summary.TimestampFailures, summary.FetchFailures))
+	} else if strings.TrimSpace(result) != "" {
+		builder.WriteString("执行结果：" + sanitizeFeishuPlainText(result) + "\n")
+	}
+	builder.WriteString("报告地址：" + reportURL)
+
+	card := map[string]any{
+		"config": map[string]any{"wide_screen_mode": true},
+		"header": map[string]any{
+			"title":    map[string]any{"tag": "plain_text", "content": task.Name},
+			"template": map[string]string{"通过": "green", "失败": "red"}[statusText],
+		},
+		"elements": []any{
+			map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": fmt.Sprintf("**结果：**%s\n**项目：**%s\n**环境：**%s\n**耗时：**%s", statusText, valueOrFallback(task.TestProject, task.TestProjectCode), task.TestEnv, duration)}},
+			map[string]any{"tag": "hr"},
+			map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": fmt.Sprintf("**外挂剧：**%d 部\n**检查项：**%d/%d　**正片字幕文件：**%d\n**异常：**%d 条，影响文件 %d 个\n**字幕数量异常：**%d　**缺失字幕：**%d　**时间轴异常：**%d　**拉取失败：**%d", summary.ExternalDramas, summary.CheckedFiles, valueOrDefaultInt(summary.TotalCheckItems, summary.TotalSubtitleURLs), summary.TotalSubtitleURLs, summary.Failures, summary.FailedFiles, summary.SubtitleCountFailures, summary.MissingSubtitleFailures, summary.TimestampFailures, summary.FetchFailures)}},
+		},
+	}
+	if strings.TrimSpace(reportURL) != "" {
+		card["elements"] = append(card["elements"].([]any), map[string]any{
+			"tag": "action",
+			"actions": []any{
+				map[string]any{"tag": "button", "text": map[string]any{"tag": "plain_text", "content": "查看报告"}, "url": reportURL, "type": "primary"},
+			},
+		})
+	}
+	return sanitizeFeishuPlainText(builder.String()), card
+}
+
+func loadSubtitleScheduledSummary(reportDir string) subtitleScheduledSummary {
+	rootDir, _ := filepath.Abs("..")
+	content, err := os.ReadFile(filepath.Join(rootDir, reportDir, "subtitle_summary.json"))
+	if err != nil {
+		return subtitleScheduledSummary{}
+	}
+	var summary subtitleScheduledSummary
+	_ = json.Unmarshal(content, &summary)
+	return summary
+}
+
+func valueOrDefaultInt(value int, fallback int) int {
+	if value != 0 {
+		return value
+	}
+	return fallback
 }
 
 func SendDramaRunFeishuReportHandler(c *gin.Context) {
@@ -695,13 +943,13 @@ func SendDramaRunFeishuReportHandler(c *gin.Context) {
 	}
 
 	failures := loadArchivedDramaFailures(runDir, string(reportContent))
-	dramaFailures, groupFailures := splitScheduledDramaFailures(failures)
+	dramaFailures, groupFailures, classificationFailures, otherFailures := splitScheduledDramaFailures(failures)
 	statusText := "通过"
 	if !isDramaArchiveSuccessStatus(status) {
 		statusText = "失败"
 	}
 
-	card := buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, dramaFailures, groupFailures)
+	card := buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, dramaFailures, groupFailures, classificationFailures, otherFailures)
 	if err := sendFeishuGroupInteractiveCard(card); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "发送飞书失败: " + err.Error()})
 		return
@@ -710,18 +958,28 @@ func SendDramaRunFeishuReportHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "剧集播放接口测试 AI 报告已发送到飞书"})
 }
 
-func splitScheduledDramaFailures(failures []dramaFailureSummary) ([]dramaFailureSummary, []dramaFailureSummary) {
+func splitScheduledDramaFailures(failures []dramaFailureSummary) ([]dramaFailureSummary, []dramaFailureSummary, []dramaFailureSummary, []dramaFailureSummary) {
 	dramaFailures := make([]dramaFailureSummary, 0, len(failures))
 	groupFailures := make([]dramaFailureSummary, 0, len(failures))
+	classificationFailures := make([]dramaFailureSummary, 0, len(failures))
+	otherFailures := make([]dramaFailureSummary, 0, len(failures))
 
 	for _, failure := range failures {
 		dramaFailure := failure
 		dramaFailure.Errors = nil
 		groupFailure := failure
 		groupFailure.Errors = nil
+		classificationFailure := failure
+		classificationFailure.Errors = nil
+		otherFailure := failure
+		otherFailure.Errors = nil
 
 		for _, line := range failure.Errors {
-			if isScheduledDramaGroupError(line) {
+			if isScheduledDramaClassificationError(line) {
+				classificationFailure.Errors = append(classificationFailure.Errors, line)
+			} else if isScheduledDramaOtherError(line) {
+				otherFailure.Errors = append(otherFailure.Errors, line)
+			} else if isScheduledDramaGroupError(line) {
 				groupFailure.Errors = append(groupFailure.Errors, line)
 			} else {
 				dramaFailure.Errors = append(dramaFailure.Errors, line)
@@ -733,14 +991,32 @@ func splitScheduledDramaFailures(failures []dramaFailureSummary) ([]dramaFailure
 		if len(groupFailure.Errors) > 0 {
 			groupFailures = append(groupFailures, groupFailure)
 		}
+		if len(classificationFailure.Errors) > 0 {
+			classificationFailures = append(classificationFailures, classificationFailure)
+		}
+		if len(otherFailure.Errors) > 0 {
+			otherFailures = append(otherFailures, otherFailure)
+		}
 	}
 
-	return dramaFailures, groupFailures
+	return dramaFailures, groupFailures, classificationFailures, otherFailures
 }
 
 func isScheduledDramaGroupError(line string) bool {
 	normalized := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "•"))
-	return strings.HasPrefix(normalized, "[解锁类型]")
+	return strings.HasPrefix(normalized, "[解锁类型]") ||
+		strings.HasPrefix(normalized, "[分组规则]") ||
+		strings.HasPrefix(normalized, "[App Group元数据]")
+}
+
+func isScheduledDramaOtherError(line string) bool {
+	normalized := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "•"))
+	return strings.HasPrefix(normalized, "[命名规范]")
+}
+
+func isScheduledDramaClassificationError(line string) bool {
+	normalized := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "•"))
+	return strings.HasPrefix(normalized, "[分类规则]")
 }
 
 func formatScheduledDramaFailureDetail(failures []dramaFailureSummary) string {
@@ -777,9 +1053,9 @@ func formatScheduledDramaFailureDetail(failures []dramaFailureSummary) string {
 	return strings.TrimSpace(builder.String())
 }
 
-func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duration string, reportURL string, analysis string, dramaFailures []dramaFailureSummary, groupFailures []dramaFailureSummary) map[string]any {
+func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duration string, reportURL string, analysis string, dramaFailures []dramaFailureSummary, groupFailures []dramaFailureSummary, classificationFailures []dramaFailureSummary, otherFailures []dramaFailureSummary) map[string]any {
 	statusColor := "green"
-	if statusText != "通过" || len(dramaFailures) > 0 || len(groupFailures) > 0 {
+	if statusText != "通过" || len(dramaFailures) > 0 || len(groupFailures) > 0 || len(classificationFailures) > 0 || len(otherFailures) > 0 {
 		statusColor = "orange"
 	}
 	if statusText == "失败" {
@@ -844,6 +1120,46 @@ func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duratio
 		}
 	}
 
+	if len(classificationFailures) > 0 {
+		elements = append(elements, map[string]any{"tag": "hr"})
+		elements = append(elements, map[string]any{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": fmt.Sprintf("**分类异常（%d 部）**", len(classificationFailures)),
+			},
+		})
+		for _, failure := range classificationFailures {
+			elements = append(elements, map[string]any{
+				"tag": "div",
+				"text": map[string]any{
+					"tag":     "lark_md",
+					"content": formatDramaFailureCardBlock(failure),
+				},
+			})
+		}
+	}
+
+	if len(otherFailures) > 0 {
+		elements = append(elements, map[string]any{"tag": "hr"})
+		elements = append(elements, map[string]any{
+			"tag": "div",
+			"text": map[string]any{
+				"tag":     "lark_md",
+				"content": fmt.Sprintf("**其他异常（%d 部）**", len(otherFailures)),
+			},
+		})
+		for _, failure := range otherFailures {
+			elements = append(elements, map[string]any{
+				"tag": "div",
+				"text": map[string]any{
+					"tag":     "lark_md",
+					"content": formatDramaFailureCardBlock(failure),
+				},
+			})
+		}
+	}
+
 	if strings.TrimSpace(reportURL) != "" {
 		elements = append(elements, map[string]any{"tag": "hr"})
 		elements = append(elements, map[string]any{
@@ -874,15 +1190,46 @@ func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duratio
 	}
 }
 
+const defaultDramaManagementListURL = "https://admin.shortswave.com/drama/list"
+
+func buildDramaManagementURL(dramaID string) string {
+	dramaID = strings.TrimSpace(dramaID)
+	if dramaID == "" {
+		return ""
+	}
+
+	baseURL := strings.TrimSpace(os.Getenv("DRAMA_MANAGEMENT_LIST_URL"))
+	if baseURL == "" {
+		baseURL = defaultDramaManagementListURL
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return ""
+	}
+	target, err := json.Marshal(map[string]string{"id": dramaID})
+	if err != nil {
+		return ""
+	}
+	query := parsed.Query()
+	query.Set("target", string(target))
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
 func formatDramaFailureCardBlock(failure dramaFailureSummary) string {
 	lines := []string{
 		fmt.Sprintf("**%s  %s**", escapeLarkMarkdown(valueOrFallback(failure.IntID, "-")), escapeLarkMarkdown(valueOrFallback(failure.Title, "-"))),
 		escapeLarkMarkdown(valueOrFallback(failure.DramaID, "-")),
 		escapeLarkMarkdown(valueOrFallback(failure.CNTitle, "-")),
 	}
+	dramaURL := buildDramaManagementURL(failure.DramaID)
 	for _, line := range failure.Errors {
 		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			lines = append(lines, escapeLarkMarkdown(trimmed))
+			formatted := escapeLarkMarkdown(trimmed)
+			if dramaURL != "" {
+				formatted += "  [查看剧集信息](" + dramaURL + ")"
+			}
+			lines = append(lines, formatted)
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -1324,7 +1671,7 @@ func extractDramaIDFromFailureName(name string) string {
 	return match[1]
 }
 
-func appendScheduledTaskAuditLog(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time) {
+func appendScheduledTaskAuditLog(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time, reportDir string) {
 	projectName := valueOrFallback(task.TestProject, task.TestProjectCode)
 	detail := fmt.Sprintf(
 		"Scheduled task executed: %s | duration=%s | result=%s | next=%s",
@@ -1335,6 +1682,13 @@ func appendScheduledTaskAuditLog(task ScheduledTask, status string, result strin
 	)
 	if strings.TrimSpace(reportURL) != "" {
 		detail += " | report=" + reportURL
+	}
+	if task.Function != scheduledFunctionExternalSubtitle {
+		failures := loadScheduledDramaFailures(reportDir)
+		detail = summarizeScheduledDramaAuditFailures(failures)
+		if statusToAuditStatus(status) == "failed" && len(failures) == 0 {
+			detail = "执行错误 1"
+		}
 	}
 
 	op := feishumodel.AIOperationLog{
@@ -1352,6 +1706,53 @@ func appendScheduledTaskAuditLog(task ScheduledTask, status string, result strin
 	if err := SQLUpsertJSONForFeishu("ai_operation_logs", op); err != nil {
 		log.Printf("[ScheduledTask] append audit log failed: %v", err)
 	}
+}
+
+func summarizeScheduledDramaAuditFailures(failures []dramaFailureSummary) string {
+	dramaFailures, groupFailures, classificationFailures, otherFailures := splitScheduledDramaFailures(failures)
+	parts := make([]string, 0, 4)
+	if len(dramaFailures) > 0 {
+		parts = append(parts, fmt.Sprintf("剧集错误 %d", len(dramaFailures)))
+	}
+	if len(groupFailures) > 0 {
+		parts = append(parts, fmt.Sprintf("分组错误 %d", len(groupFailures)))
+	}
+	if len(classificationFailures) > 0 {
+		parts = append(parts, fmt.Sprintf("分类错误 %d", len(classificationFailures)))
+	}
+	if len(otherFailures) > 0 {
+		parts = append(parts, fmt.Sprintf("其他错误 %d", len(otherFailures)))
+	}
+	if len(parts) == 0 {
+		return "无异常"
+	}
+	return strings.Join(parts, "、")
+}
+
+// ScheduledDramaAuditSummaryForRunID rebuilds the compact audit summary for legacy logs.
+func ScheduledDramaAuditSummaryForRunID(runID string) (string, bool) {
+	safeRunID := sanitizeReportSuffix(runID)
+	if safeRunID == "" || safeRunID == "." || safeRunID == ".." {
+		return "", false
+	}
+
+	runDir := filepath.Join(testRunStorageRoot(projectRootDir()), safeRunID)
+	metadataContent, err := os.ReadFile(filepath.Join(runDir, "metadata.json"))
+	if err != nil {
+		return "", false
+	}
+	var archive TestRunArchive
+	if json.Unmarshal(metadataContent, &archive) != nil || archive.TestType != "drama" {
+		return "", false
+	}
+
+	reportHTML := ""
+	reportPath := filepath.Join(runDir, "artifacts", "report.html")
+	if content, readErr := os.ReadFile(reportPath); readErr == nil {
+		reportHTML = string(content)
+	}
+	failures := loadArchivedDramaFailures(runDir, reportHTML)
+	return summarizeScheduledDramaAuditFailures(failures), true
 }
 
 func normalizeScheduledTaskAuditEnv(testEnv string) string {
@@ -1599,6 +2000,14 @@ func getDramaProfile(testEnv string) dramaProfile {
 			DramaListURL: valueOrFallback(os.Getenv("DRAMA_PROD_LIST_URL"), "https://admin.shortswave.com/api/management/drama/all_online_ids"),
 		}
 	}
+	if strings.Contains(testEnv, "灰") || strings.EqualFold(testEnv, "gray") {
+		return dramaProfile{
+			Email:        os.Getenv("DRAMA_GRAY_EMAIL"),
+			Password:     os.Getenv("DRAMA_GRAY_PASSWORD"),
+			LoginURL:     valueOrFallback(os.Getenv("DRAMA_GRAY_LOGIN_URL"), "http://35.193.183.77:8080/api/pwd_login"),
+			DramaListURL: valueOrFallback(os.Getenv("DRAMA_GRAY_LIST_URL"), "http://35.193.183.77:8080/api/management/drama/all_online_ids"),
+		}
+	}
 	return dramaProfile{
 		Email:        os.Getenv("DRAMA_TEST_EMAIL"),
 		Password:     os.Getenv("DRAMA_TEST_PASSWORD"),
@@ -1614,37 +2023,118 @@ func updateScheduledTaskAfterRun(task ScheduledTask, runAt time.Time, result str
 		return
 	}
 
+	detailedResult := compactScheduledTaskResult(result, scheduledTaskDetailedResultRunes)
+	criticalResult := compactScheduledTaskResult(detailedResult, scheduledTaskSafeResultRunes)
 	for i := range tasks {
 		if tasks[i].ID != task.ID {
 			continue
 		}
 		tasks[i].LastRunAt = runAt.Format(time.RFC3339)
-		tasks[i].LastResult = result
+		tasks[i].LastResult = criticalResult
 		tasks[i].UpdatedAt = time.Now().Format(time.RFC3339)
-		if tasks[i].Status == "paused" {
-			break
+		if tasks[i].Status != "paused" {
+			if tasks[i].ScheduleType == "Once" {
+				if err := deleteScheduledTaskWithRetry(tasks[i].ID); err != nil {
+					log.Printf("[ScheduledTask] remove completed one-time task failed: %v", err)
+				}
+				return
+			}
+			rescheduleScheduledTaskAfterRun(&tasks, i, time.Now())
 		}
-		nextRunAt, _ := time.Parse(time.RFC3339, task.NextRunAt)
-		switch task.ScheduleType {
-		case "Once":
-			tasks = append(tasks[:i], tasks[i+1:]...)
-		case "Daily":
-			tasks[i].Status = "active"
-			tasks[i].NextRunAt = nextRunAt.AddDate(0, 0, 1).Format(time.RFC3339)
-			tasks[i].NextRun = formatScheduleDisplay(tasks[i].NextRunAt)
-		case "weekly":
-			tasks[i].Status = "active"
-			tasks[i].NextRunAt = nextRunAt.AddDate(0, 0, 7).Format(time.RFC3339)
-			tasks[i].NextRun = formatScheduleDisplay(tasks[i].NextRunAt)
-		default:
-			tasks[i].Status = "paused"
+
+		// The compact result is a critical checkpoint that remains compatible
+		// with legacy VARCHAR(64) schemas. Persist it before the best-effort
+		// detailed result, and update only this row to avoid stale-list races.
+		if err := upsertScheduledTaskWithRetry(tasks[i]); err != nil {
+			log.Printf("[ScheduledTask] save critical state after run failed: %v", err)
+			return
 		}
-		break
+		if detailedResult != criticalResult {
+			tasks[i].LastResult = detailedResult
+			if err := upsertScheduledTask(tasks[i]); err != nil {
+				log.Printf("[ScheduledTask] save detailed result after run failed; compact checkpoint retained: %v", err)
+			}
+		}
+		return
+	}
+}
+
+func compactScheduledTaskResult(result string, maxRunes int) string {
+	result = strings.Join(strings.Fields(strings.TrimSpace(result)), " ")
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(result)
+	if len(runes) <= maxRunes {
+		return result
+	}
+	if maxRunes == 1 {
+		return "…"
+	}
+	return string(runes[:maxRunes-1]) + "…"
+}
+
+func retryScheduledTaskPersistence(operation func() error) error {
+	var lastErr error
+	for _, delay := range scheduledTaskSaveRetryDelays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		if err := operation(); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
+func upsertScheduledTaskWithRetry(task ScheduledTask) error {
+	return retryScheduledTaskPersistence(func() error {
+		return upsertScheduledTask(task)
+	})
+}
+
+func deleteScheduledTaskWithRetry(taskID string) error {
+	return retryScheduledTaskPersistence(func() error {
+		return deleteScheduledTaskRecord(taskID)
+	})
+}
+
+func rescheduleScheduledTaskAfterRun(tasks *[]ScheduledTask, index int, now time.Time) {
+	if index < 0 || index >= len(*tasks) {
+		return
 	}
 
-	if err := saveScheduledTasks(tasks); err != nil {
-		log.Printf("[ScheduledTask] save after run failed: %v", err)
+	task := &(*tasks)[index]
+	nextRunAt, err := time.Parse(time.RFC3339, task.NextRunAt)
+	if err != nil {
+		task.Status = "paused"
+		return
 	}
+
+	switch task.ScheduleType {
+	case "Once":
+		*tasks = append((*tasks)[:index], (*tasks)[index+1:]...)
+	case "Daily":
+		task.Status = "active"
+		task.NextRunAt = nextFutureScheduledTime(nextRunAt, 24*time.Hour, now).Format(time.RFC3339)
+		task.NextRun = formatScheduleDisplay(task.NextRunAt)
+	case "weekly":
+		task.Status = "active"
+		task.NextRunAt = nextFutureScheduledTime(nextRunAt, 7*24*time.Hour, now).Format(time.RFC3339)
+		task.NextRun = formatScheduleDisplay(task.NextRunAt)
+	default:
+		task.Status = "paused"
+	}
+}
+
+func nextFutureScheduledTime(base time.Time, interval time.Duration, now time.Time) time.Time {
+	next := base.Add(interval)
+	for !next.After(now) {
+		next = next.Add(interval)
+	}
+	return next
 }
 
 func loadScheduledTasks() ([]ScheduledTask, error) {
@@ -1654,9 +2144,19 @@ func loadScheduledTasks() ([]ScheduledTask, error) {
 }
 
 func appendScheduledTask(task ScheduledTask) error {
+	return upsertScheduledTask(task)
+}
+
+func upsertScheduledTask(task ScheduledTask) error {
 	scheduledTaskMu.Lock()
 	defer scheduledTaskMu.Unlock()
 	return sqlUpsertJSON("scheduled_tasks", task)
+}
+
+func deleteScheduledTaskRecord(taskID string) error {
+	scheduledTaskMu.Lock()
+	defer scheduledTaskMu.Unlock()
+	return sqlDeleteJSON("scheduled_tasks", taskID)
 }
 
 func saveScheduledTasks(tasks []ScheduledTask) error {

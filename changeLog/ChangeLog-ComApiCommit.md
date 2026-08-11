@@ -1,5 +1,12 @@
 # ChangeLog - ComApiCommit
 
+## 2026-06-29
+
+### Fixed
+- **Drama Manual Run Config Fallback**: 剧集播放接口测试手动执行链路改为复用后端 `DRAMA_*` 环境配置；前端未传账号密码时，会按所选测试/正式/灰度环境兜底读取后端配置。
+- **Drama Prepare Config Error**: 前置数据脚本在账号或密码缺失时直接提示配置缺失，避免误报为登录成功但缺少 `Set-Cookie`。
+- **K6 Reporter Vendoring**: K6 报告生成改为引用本地化的原版 `k6-reporter` bundle，保留原报告样式，同时避免运行时拉取 GitHub reporter 因 TLS 超时导致测试初始化失败。
+
 ## 2026-06-02
 
 ### Added

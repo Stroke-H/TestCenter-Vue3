@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, watch, markRaw } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, watch, markRaw, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { Plus, Search, Calendar, User, Money, Loading } from '@element-plus/icons-vue'
+import { Plus, Search, Calendar, User, Money, Loading, Close } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { retryFetch } from '@/utils/retryFetch'
@@ -28,6 +28,7 @@ interface DeviceOption {
   os: string
   model: string
   allowed_app: string
+  created_at?: string
 }
 
 // ===== State =====
@@ -46,6 +47,13 @@ const projects = ref<ProjectOption[]>([])
 const devices = ref<DeviceOption[]>([])
 const testTimeRange = ref<string[]>([])
 const selectedTestDevices = ref<string[]>([])
+const deviceSelectRef = ref<any>(null)
+const deviceFieldRef = ref<HTMLElement | null>(null)
+const deviceAssociationVisible = ref(false)
+const deviceAssociationSearch = ref('')
+const pendingDeviceIds = ref<string[]>([])
+const associatingDevices = ref(false)
+const deviceAssociationPanelStyle = ref<Record<string, string>>({})
 const autoFetchingProjectItems = ref(false)
 const autoFetchProjectItemsError = ref('')
 let autoFetchProjectItemsTimer: ReturnType<typeof setTimeout> | null = null
@@ -174,6 +182,149 @@ const filteredDevices = computed(() => {
   })
 })
 
+const getDeviceProjectCodes = (device: DeviceOption) => {
+  return (device.allowed_app || '').split(',').map(code => code.trim()).filter(Boolean)
+}
+
+const isDeviceAssociatedWithCurrentProject = (device: DeviceOption) => {
+  const projectCode = String(reportForm.value.project_code || '').trim()
+  return !!projectCode && getDeviceProjectCodes(device).includes(projectCode)
+}
+
+const deviceAssociationItems = computed(() => {
+  const keyword = deviceAssociationSearch.value.trim().toLowerCase()
+
+  return devices.value
+    .filter((device) => {
+      if (!keyword) return true
+      return [device.device_name, device.model, device.os, device.id]
+        .some(value => String(value || '').toLowerCase().includes(keyword))
+    })
+    .map(device => ({
+      device,
+      associated: isDeviceAssociatedWithCurrentProject(device)
+    }))
+    .sort((left, right) => {
+      if (left.associated !== right.associated) return left.associated ? 1 : -1
+      return left.device.device_name.localeCompare(right.device.device_name, 'zh-CN')
+    })
+})
+
+const updateDeviceAssociationPanelPosition = () => {
+  if (!deviceAssociationVisible.value || !deviceFieldRef.value) return
+
+  const fieldRect = deviceFieldRef.value.getBoundingClientRect()
+  const dialog = deviceFieldRef.value.closest('.el-dialog') as HTMLElement | null
+  const dialogRect = dialog?.getBoundingClientRect() || fieldRect
+  const viewportPadding = 12
+  const gap = 6
+  const preferredWidth = 340
+  const panelWidth = Math.min(preferredWidth, window.innerWidth - viewportPadding * 2)
+  let left = dialogRect.right + gap
+
+  if (left + panelWidth > window.innerWidth - viewportPadding) {
+    left = Math.max(viewportPadding, dialogRect.left - panelWidth - gap)
+  }
+
+  const top = Math.max(viewportPadding, fieldRect.top)
+  deviceAssociationPanelStyle.value = {
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+    width: `${Math.round(panelWidth)}px`,
+    maxHeight: `${Math.max(280, Math.round(window.innerHeight - top - viewportPadding))}px`
+  }
+}
+
+const closeDeviceAssociationPanel = () => {
+  if (associatingDevices.value) return
+  deviceAssociationVisible.value = false
+  deviceAssociationSearch.value = ''
+  pendingDeviceIds.value = []
+}
+
+const openDeviceAssociationPanel = async () => {
+  if (!reportForm.value.project_code) {
+    ElMessage.warning('请先选择项目，再添加关联设备')
+    return
+  }
+
+  pendingDeviceIds.value = []
+  deviceAssociationSearch.value = ''
+  deviceAssociationVisible.value = true
+  await nextTick()
+  updateDeviceAssociationPanelPosition()
+}
+
+const togglePendingDevice = (deviceId: string, associated: boolean) => {
+  if (associated || associatingDevices.value) return
+  if (pendingDeviceIds.value.includes(deviceId)) {
+    pendingDeviceIds.value = pendingDeviceIds.value.filter(id => id !== deviceId)
+    return
+  }
+  pendingDeviceIds.value = [...pendingDeviceIds.value, deviceId]
+}
+
+const saveDeviceAssociations = async () => {
+  const projectCode = String(reportForm.value.project_code || '').trim()
+  if (!projectCode) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  if (pendingDeviceIds.value.length === 0) {
+    ElMessage.warning('请至少选择一台设备')
+    return
+  }
+
+  associatingDevices.value = true
+  const succeededIds: string[] = []
+  const failedIds: string[] = []
+
+  for (const deviceId of pendingDeviceIds.value) {
+    const device = devices.value.find(item => item.id === deviceId)
+    if (!device || isDeviceAssociatedWithCurrentProject(device)) continue
+
+    const updatedDevice = {
+      ...device,
+      allowed_app: [...new Set([...getDeviceProjectCodes(device), projectCode])].join(',')
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/config/devices`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedDevice)
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        throw new Error(data?.error || `关联失败 (${res.status})`)
+      }
+      const index = devices.value.findIndex(item => item.id === deviceId)
+      if (index >= 0) devices.value[index] = updatedDevice
+      succeededIds.push(deviceId)
+    } catch (err) {
+      console.error(`Failed to associate device ${deviceId}`, err)
+      failedIds.push(deviceId)
+    }
+  }
+
+  associatingDevices.value = false
+  await fetchDevices()
+
+  if (failedIds.length > 0) {
+    pendingDeviceIds.value = failedIds
+    ElMessage.error(`已关联 ${succeededIds.length} 台设备，${failedIds.length} 台关联失败，请重试`)
+    return
+  }
+
+  deviceAssociationVisible.value = false
+  deviceAssociationSearch.value = ''
+  pendingDeviceIds.value = []
+  ElMessage.success(`已为 ${projectCode} 关联 ${succeededIds.length} 台设备`)
+  await nextTick()
+  deviceSelectRef.value?.focus?.()
+}
+
 const syncProjectByCode = (code: string) => {
   const matched = projects.value.find(item => item.project_code === code)
   if (matched) {
@@ -255,6 +406,15 @@ const formatAutoFetchedLinks = (links: string[]) => {
   return links.length > 0 ? links.join('\n') : '无'
 }
 
+const formatCurrentVersionBugStatus = (unfixedLinks: string[], fixedLinks: string[]) => {
+  const sections = [
+    unfixedLinks.length > 0 ? `未修复：\n${unfixedLinks.join('\n')}` : '',
+    fixedLinks.length > 0 ? `已修复：\n${fixedLinks.join('\n')}` : ''
+  ].filter(Boolean)
+
+  return sections.length > 0 ? sections.join('\n\n') : '无'
+}
+
 const normalizeProjectCode = (value: string) => value.trim().toUpperCase()
 
 const getReportTimestamp = (report: any) => {
@@ -329,8 +489,11 @@ const fetchProjectItemsForReport = async (projectCode: string, version: string, 
     if (!stillCurrentRequest) return
 
     reportForm.value.update_requirements = formatAutoFetchedLinks(data?.story_links || [])
-    reportForm.value.bug_submission_status = formatAutoFetchedLinks(data?.bug_links_unfixed || [])
-    reportForm.value.bug_fix_status = formatAutoFetchedLinks(data?.bug_links_fixed || [])
+    reportForm.value.bug_submission_status = '无'
+    reportForm.value.bug_fix_status = formatCurrentVersionBugStatus(
+      data?.bug_links_unfixed || [],
+      data?.bug_links_fixed || []
+    )
   } catch (err: any) {
     if (seq !== autoFetchProjectItemsSeq) return
     console.error('Failed to fetch acceptance report project items', err)
@@ -362,6 +525,7 @@ const scheduleAutoFetchProjectItems = () => {
 }
 
 const openCreateReport = () => {
+  closeDeviceAssociationPanel()
   previewMode.value = 'create'
   currentPreview.value = null
   reportForm.value = {
@@ -387,6 +551,7 @@ const openCreateReport = () => {
 const openEditReport = () => {
   if (!currentPreview.value) return
 
+  closeDeviceAssociationPanel()
   previewMode.value = 'edit'
   reportForm.value = {
     id: currentPreview.value.id,
@@ -578,8 +743,13 @@ watch(selectedTestDevices, (list) => {
 })
 
 watch(() => reportForm.value.project_code, () => {
+  closeDeviceAssociationPanel()
   const allowedNames = new Set(filteredDevices.value.map(item => item.device_name))
   selectedTestDevices.value = selectedTestDevices.value.filter(name => allowedNames.has(name))
+})
+
+watch(previewVisible, (visible) => {
+  if (!visible) closeDeviceAssociationPanel()
 })
 
 watch(
@@ -598,6 +768,8 @@ watch(
 )
 
 onMounted(async () => {
+  window.addEventListener('resize', updateDeviceAssociationPanelPosition)
+  window.addEventListener('scroll', updateDeviceAssociationPanelPosition, true)
   await Promise.all([fetchProjects(), fetchDevices()])
   if (!authStore.isLoggedIn && authStore.status !== 'anonymous') {
     await authStore.fetchMe()
@@ -609,6 +781,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearAutoFetchProjectItemsTimer()
+  window.removeEventListener('resize', updateDeviceAssociationPanelPosition)
+  window.removeEventListener('scroll', updateDeviceAssociationPanelPosition, true)
 })
 </script>
 
@@ -792,8 +966,11 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="preview-detail">
-            <h4 class="detail-title">缺陷提交/修复情况 (Bug Status)</h4>
-            <pre class="detail-text">{{ [currentPreview.bug_submission_status, currentPreview.bug_fix_status].filter(Boolean).join('\n') || '无缺陷记录' }}</pre>
+            <h4 class="detail-title">当前版本缺陷提交及修复情况</h4>
+            <pre class="detail-text">{{ currentPreview.bug_fix_status || '无' }}</pre>
+
+            <h4 class="detail-title detail-title--spaced">历史版本遗留缺陷修复情况</h4>
+            <pre class="detail-text">{{ currentPreview.bug_submission_status || '无' }}</pre>
           </div>
         </div>
       </div>
@@ -873,9 +1050,10 @@ onBeforeUnmount(() => {
               <el-option label="正式服务器" value="正式服务器" />
             </el-select>
           </div>
-          <div class="preview-item">
+          <div ref="deviceFieldRef" class="preview-item">
             <span class="label">测试设备:</span>
             <el-select
+              ref="deviceSelectRef"
               v-model="selectedTestDevices"
               multiple
               filterable
@@ -890,6 +1068,17 @@ onBeforeUnmount(() => {
                 :label="`${device.device_name}${device.model ? ` (${device.model})` : ''}`"
                 :value="device.device_name"
               />
+              <template v-if="previewMode === 'create'" #footer>
+                <button
+                  type="button"
+                  class="associate-device-trigger"
+                  @mousedown.prevent.stop
+                  @click.prevent.stop="openDeviceAssociationPanel"
+                >
+                  <el-icon><Plus /></el-icon>
+                  添加关联设备
+                </button>
+              </template>
             </el-select>
           </div>
         </div>
@@ -930,7 +1119,7 @@ onBeforeUnmount(() => {
 
           <div class="preview-detail">
             <h4 class="detail-title detail-title--inline">
-              <span>缺陷提交情况 (Bug Submission Status)</span>
+              <span>历史版本遗留缺陷修复情况</span>
               <span v-if="showProjectItemsLoading" class="auto-fetch-status">
                 <el-icon class="auto-fetch-status__icon"><Loading /></el-icon>
                 正在自动拉取对应数据中，请稍等
@@ -940,11 +1129,11 @@ onBeforeUnmount(() => {
               v-model="reportForm.bug_submission_status"
               type="textarea"
               :rows="3"
-              placeholder="请输入未修复缺陷、提单链接或说明"
+              placeholder="请输入历史版本遗留缺陷的修复及验证情况"
             />
 
             <h4 class="detail-title detail-title--spaced detail-title--inline">
-              <span>缺陷修复情况 (Bug Fix Status)</span>
+              <span>当前版本缺陷提交及修复情况</span>
               <span v-if="showProjectItemsLoading" class="auto-fetch-status">
                 <el-icon class="auto-fetch-status__icon"><Loading /></el-icon>
                 正在自动拉取对应数据中，请稍等
@@ -954,7 +1143,7 @@ onBeforeUnmount(() => {
               v-model="reportForm.bug_fix_status"
               type="textarea"
               :rows="3"
-              placeholder="请输入已修复缺陷、验证结果或说明"
+              placeholder="请输入当前版本提交的缺陷、修复状态、链接或说明"
             />
           </div>
         </div>
@@ -985,6 +1174,85 @@ onBeforeUnmount(() => {
         </span>
       </template>
     </el-dialog>
+
+    <Teleport to="body">
+      <section
+        v-if="deviceAssociationVisible"
+        class="device-association-panel"
+        :style="deviceAssociationPanelStyle"
+        aria-label="添加关联设备"
+        @mousedown.stop
+        @click.stop
+      >
+        <div class="device-association-panel__header">
+          <div>
+            <h3>添加关联设备</h3>
+            <p>{{ reportForm.project_name || reportForm.project_code }}</p>
+          </div>
+          <el-button
+            link
+            :icon="Close"
+            aria-label="关闭"
+            :disabled="associatingDevices"
+            @click="closeDeviceAssociationPanel"
+          />
+        </div>
+
+        <el-input
+          v-model="deviceAssociationSearch"
+          :prefix-icon="Search"
+          clearable
+          placeholder="搜索设备名称、型号、系统或 ID"
+          class="device-association-panel__search"
+        />
+
+        <div class="device-association-list">
+          <div
+            v-for="item in deviceAssociationItems"
+            :key="item.device.id"
+            class="device-association-item"
+            :class="{ 'device-association-item--disabled': item.associated }"
+            @click="togglePendingDevice(item.device.id, item.associated)"
+          >
+            <el-checkbox
+              class="device-association-checkbox"
+              :model-value="pendingDeviceIds.includes(item.device.id)"
+              :disabled="item.associated"
+              @click.stop
+              @change="togglePendingDevice(item.device.id, item.associated)"
+            >
+              <span class="device-association-item__content">
+                <span class="device-association-item__name">{{ item.device.device_name }}</span>
+                <span class="device-association-item__meta">
+                  {{ [item.device.os, item.device.model, item.device.id].filter(Boolean).join(' · ') }}
+                </span>
+              </span>
+            </el-checkbox>
+            <el-tag v-if="item.associated" type="info" size="small" effect="plain">已关联</el-tag>
+          </div>
+          <el-empty
+            v-if="deviceAssociationItems.length === 0"
+            description="没有匹配的测试设备"
+            :image-size="64"
+          />
+        </div>
+
+        <div class="device-association-panel__footer">
+          <span>已选 {{ pendingDeviceIds.length }} 台</span>
+          <div>
+            <el-button :disabled="associatingDevices" @click="closeDeviceAssociationPanel">取消</el-button>
+            <el-button
+              type="primary"
+              :loading="associatingDevices"
+              :disabled="pendingDeviceIds.length === 0"
+              @click="saveDeviceAssociations"
+            >
+              完成关联
+            </el-button>
+          </div>
+        </div>
+      </section>
+    </Teleport>
   </div>
 </template>
 
@@ -1326,6 +1594,156 @@ onBeforeUnmount(() => {
 .preview-item :deep(.el-input__wrapper),
 .preview-item :deep(.el-select__wrapper) {
   border-radius: 10px;
+}
+
+.associate-device-trigger {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: #2563eb;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.associate-device-trigger:hover {
+  background: #eff6ff;
+}
+
+.device-association-panel {
+  position: fixed;
+  z-index: 3200;
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.16);
+  color: #1e293b;
+}
+
+.device-association-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.device-association-panel__header h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 22px;
+}
+
+.device-association-panel__header p {
+  margin: 2px 0 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.device-association-panel__search {
+  margin-bottom: 12px;
+}
+
+.device-association-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  border-top: 1px solid #eef2f7;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.device-association-item {
+  min-height: 58px;
+  padding: 9px 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #f1f5f9;
+  cursor: pointer;
+}
+
+.device-association-item:last-child {
+  border-bottom: 0;
+}
+
+.device-association-item:hover {
+  background: #f8fafc;
+}
+
+.device-association-item--disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.device-association-checkbox {
+  min-width: 0;
+  flex: 1;
+  height: auto;
+  margin-right: 0;
+}
+
+.device-association-checkbox :deep(.el-checkbox__label) {
+  min-width: 0;
+  flex: 1;
+}
+
+.device-association-item__content {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.device-association-item__name,
+.device-association-item__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-association-item__name {
+  color: #334155;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.device-association-item--disabled .device-association-item__name {
+  color: #94a3b8;
+}
+
+.device-association-item__meta {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.device-association-panel__footer {
+  padding-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .device-association-panel {
+    right: 12px;
+    left: 12px !important;
+    width: auto !important;
+  }
 }
 
 .detail-text {

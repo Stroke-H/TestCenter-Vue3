@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
   status VARCHAR(64),
   description TEXT,
   last_run_at VARCHAR(64),
-  last_result VARCHAR(64),
+  last_result TEXT,
   created_at VARCHAR(64),
   updated_at VARCHAR(64),
   raw_json JSON NOT NULL,

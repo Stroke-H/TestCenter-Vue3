@@ -83,6 +83,11 @@ TestCenter_Vue3/
 启动后可通过 `GET /api/database/config` 查看脱敏配置，通过 `GET /api/database/health` 检查连接池和数据库连通性。
 JSONL 到 MySQL 的一次性迁移已完成，历史迁移脚本已归档到 `平台功能测试文件管理/mysql-jsonl-migration/`。
 
+### Windows 迁移
+
+从 Mac 迁移到 Windows 时，请先拉取 `windows` 分支，再按 [Windows 迁移部署说明](docs/windows-migration.md) 还原私有配置包并启动服务。
+Windows 端 Codex 接手时先读 [WINDOWS_CODEX_README.md](WINDOWS_CODEX_README.md)。
+
 ---
 
 ## 📜 变更记录

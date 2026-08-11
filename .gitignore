@@ -40,6 +40,15 @@ report/api_report/*
 !report/web_test_report/
 report/web_test_report/*
 !report/web_test_report/.gitkeep
+windows_private_migration_*.tar.gz
+
+# Local migration snapshots and secrets
+migration/config/
+migration/secrets/
+migration/MANIFEST.json
+migration/SHA256SUMS.txt
+migration/database/testcenter_business_*.sql
+migration/database/table_row_counts.csv
 
 Skills/
 !.agents/skills/

@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
-import { htmlReport } from "https://raw.githubusercontent.com/benc-uk/k6-reporter/main/dist/bundle.js";
+import { htmlReport } from "./vendor/k6-reporter/bundle.js";
 
 // ---------- 1. 自定义统计指标 ----------
 const continuityErrors = new Counter('continuity_fail_count');
@@ -14,10 +14,14 @@ const transportRetryCount = new Counter('transport_retry_count');
 const retryCandidateCount = new Counter('retry_candidate_count');
 const totalDramaEpisodeCount = new Counter('total_drama_episode_count');
 const unlockTypeRuleErrors = new Counter('unlock_type_rule_fail_count');
+const appGroupMetadataErrors = new Counter('app_group_metadata_fail_count');
+const namingRuleErrors = new Counter('naming_rule_fail_count');
+const classificationRuleErrors = new Counter('classification_rule_fail_count');
 
 // ---------- 2. 加载配置与数据 (Config & Drama Info) ----------
 const k6Config = JSON.parse(open('./k6_config.json'));
-const RETRY_MARKER_PREFIX = '__DRAMA_RETRY_720_NETWORK__|';
+const RETRY_MARKER_PREFIX = '__DRAMA_RETRY_CANDIDATE__|';
+const LEGACY_RETRY_MARKER_PREFIX = '__DRAMA_RETRY_720_NETWORK__|';
 const PROGRESS_MARKER_PREFIX = '__DRAMA_CASE_DONE__|';
 const isRetryPhase = __ENV.DRAMA_RETRY_PHASE === '1';
 const retryIds = parseRetryIds(__ENV.DRAMA_RETRY_IDS || '');
@@ -33,10 +37,36 @@ const config = data[0];
 const DRAMA_LIST = retryIds.length > 0 ? retryIds : (config.dramaList || []);
 const DRAMA_META = config.dramaMeta || {};
 const APP_GROUPS = config.appGroups || [];
+const VALIDATION_META = config.validationMeta || {};
+const APP_GROUP_VALIDATION_META = VALIDATION_META.appGroups || {};
+const APP_GROUP_METADATA_AVAILABLE = typeof APP_GROUP_VALIDATION_META.available === 'boolean'
+    ? APP_GROUP_VALIDATION_META.available
+    : APP_GROUPS.length > 0;
+const APP_GROUP_METADATA_ERROR = String(APP_GROUP_VALIDATION_META.error || '').trim();
 const TOKEN = config.auth.x_token;
 const API_BASE = config.apiBase || "http://35.225.224.94:8080";
-const AD_UNLOCK_ALLOWED_GROUP_NAMES = ['IAA组', '漫剧产品组-IAA', 'AIGC组', '内容二组-觉醒纪元'];
-const AD_UNLOCK_ALLOWED_GROUP_NAME_KEYS = AD_UNLOCK_ALLOWED_GROUP_NAMES.map(normalizeGroupNameForRule);
+const DS_EXCLUSIVE_GROUP_NAME = 'TT-Minis 分销组';
+const MD_PRODUCT_GROUP_NAME = 'MD-产品组';
+const AD_UNLOCK_ALLOWED_GROUP_NAMES = ['IAA组', '漫剧产品组-IAA', 'AIGC组', '内容二组-觉醒纪元', DS_EXCLUSIVE_GROUP_NAME];
+const SUPPORTED_UNLOCK_TYPES = ['coin', 'ad'];
+const DUBBING_MARKETING_POSITION = '配音剧';
+const CLASSIFICATION_CHECK_START_DATE = '2026-06-01';
+const DUBBING_LANGUAGE_PREFIXES = [
+    '印度尼西亚', '马来西亚', '罗马尼亚', '澳大利亚', '意大利', '西班牙',
+    '葡萄牙', '菲律宾', '土耳其', '阿拉伯', '墨西哥', '加拿大', '新加坡',
+    '匈牙利', '乌克兰', '以色列', '希伯来', '柬埔寨', '俄罗斯', '美国',
+    '英国', '法国', '德国', '印度', '日本', '韩国', '泰国', '越南', '印尼',
+    '巴西', '荷兰', '波兰', '希腊', '捷克', '瑞典', '挪威', '丹麦', '芬兰',
+    '沙特', '伊朗', '南非', '埃及', '马来', '缅甸', '老挝', '中文', '国语',
+    '西', '葡', '英', '法', '德', '意', '日', '韩', '泰', '越', '印', '菲',
+    '俄', '阿', '土', '巴', '墨', '加', '澳', '新', '马', '缅', '柬', '老',
+    '荷', '波', '希', '罗', '匈', '捷', '瑞', '挪', '丹', '芬', '乌', '以',
+    '沙', '伊', '南', '埃', '粤', '国', '中'
+];
+const CANONICAL_RULE_GROUP_NAMES = Array.from(new Set([
+    ...AD_UNLOCK_ALLOWED_GROUP_NAMES,
+    MD_PRODUCT_GROUP_NAME,
+]));
 
 // ---------- 3. 动态负载逻辑 ----------
 const totalIds = DRAMA_LIST.length;
@@ -130,6 +160,13 @@ function formatRequestError(res, attempt, maxAttempts) {
 
 function markDramaCaseDone(dramaId) {
     console.log(`${PROGRESS_MARKER_PREFIX}${dramaId}`);
+}
+
+function queueSecondConfirmation(dramaId, kind, reasons) {
+    const reasonText = (reasons || []).filter(Boolean).join('；');
+    const retryMarker = `${RETRY_MARKER_PREFIX}${dramaId}|${kind}|${encodeURIComponent(reasonText)}`;
+    check(null, { [retryMarker]: false });
+    retryCandidateCount.add(1);
 }
 
 // ---------- 5. 数据校验逻辑 ----------
@@ -272,15 +309,57 @@ function buildCountMismatchError(total, healthyCount, existingErrors) {
     return { type: 'mismatch', msg: `[计数] 健康集数(${healthyCount}) 与标称总条目(${total}) 对不上`, count: 1 };
 }
 
-function buildUnlockTypeRuleErrors(dramaId) {
+function buildUnlockTypeConfirmationIssue(dramaId) {
     const meta = getDramaMeta(dramaId);
-    const cnNameHasIAA = hasStrictIAA(meta.cnName);
-    const groupNames = getMatchedAppGroupNames(meta.appGroups);
-    const groupHasIAA = groupNames.some(name => String(name).includes('IAA'));
-    const groupHasShortsWave = groupNames.some(name => String(name).includes('ShortsWave'));
-    const groupHasAllowedAdUnlockName = groupNames.some(name => AD_UNLOCK_ALLOWED_GROUP_NAME_KEYS.includes(normalizeGroupNameForRule(name)));
     const unlockType = meta.unlockType.toLowerCase();
-    const errors = [];
+    if (!SUPPORTED_UNLOCK_TYPES.includes(unlockType)) {
+        return unlockType ? `unlock_type 未知值: ${meta.unlockType}` : 'unlock_type 为空';
+    }
+    return '';
+}
+
+function buildUnlockTypeRuleErrors(dramaId, includeAppGroupMetadataError) {
+    const meta = getDramaMeta(dramaId);
+    const cnNameHasIAA = hasLooseIAA(meta.cnName);
+    const cnNameHasDS = hasLooseDSMarker(meta.cnName);
+    const appGroupIds = normalizeAppGroupIds(meta.appGroups);
+    const groupNames = getMatchedAppGroupNames(meta.appGroups);
+    const groupMetadataAvailable = APP_GROUP_METADATA_AVAILABLE;
+    const groupHasIAA = groupNames.some(hasLooseIAA);
+    const groupHasShortsWave = groupNames.some(hasLooseShortsWave);
+    const groupHasAllowedAdUnlockName = groupNames.some(name => AD_UNLOCK_ALLOWED_GROUP_NAMES.some(canonical => matchesCanonicalGroupName(name, canonical)));
+    const hasOnlyDSExclusiveGroup = appGroupIds.length === 1
+        && groupNames.length === 1
+        && matchesCanonicalGroupName(groupNames[0], DS_EXCLUSIVE_GROUP_NAME);
+    const hasOnlyMDProductGroup = appGroupIds.length === 1
+        && groupNames.length === 1
+        && matchesCanonicalGroupName(groupNames[0], MD_PRODUCT_GROUP_NAME);
+    const unlockType = meta.unlockType.toLowerCase();
+    const errors = buildNamingRuleErrors(meta, groupNames);
+
+    if (isRetryPhase && includeAppGroupMetadataError && !groupMetadataAvailable) {
+        errors.push({
+            type: 'metadata',
+            msg: `[App Group元数据] 二次确认后仍不可用，无法完成分组与解锁类型校验${APP_GROUP_METADATA_ERROR ? `。原因=${APP_GROUP_METADATA_ERROR}` : ''}`,
+            count: 1
+        });
+    }
+
+    if (isRetryPhase && !SUPPORTED_UNLOCK_TYPES.includes(unlockType)) {
+        errors.push({
+            type: 'unlock',
+            msg: `[解锁类型] 二次确认后 unlock_type ${unlockType ? `仍为未知值 ${formatEmpty(meta.unlockType)}` : '仍为空'}`,
+            count: 1
+        });
+    }
+
+    if (cnNameHasDS && groupMetadataAvailable && !hasOnlyDSExclusiveGroup) {
+        errors.push({
+            type: 'unlock',
+            msg: `[分组规则] cn_name 包含 -DS 时，App Group 必须且只能为 ${DS_EXCLUSIVE_GROUP_NAME}。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`,
+            count: 1
+        });
+    }
 
     if (unlockType === 'coin' && (cnNameHasIAA || groupHasIAA)) {
         errors.push({
@@ -290,13 +369,13 @@ function buildUnlockTypeRuleErrors(dramaId) {
         });
     }
 
-    if (unlockType === 'ad' && groupHasShortsWave) {
+    if (!cnNameHasDS && groupMetadataAvailable && unlockType === 'ad' && groupHasShortsWave) {
         errors.push({
             type: 'unlock',
             msg: `[解锁类型] unlock_type=ad，但 App Group 命中 ShortsWave。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`,
             count: 1
         });
-    } else if (unlockType === 'ad' && !groupHasAllowedAdUnlockName) {
+    } else if (!cnNameHasDS && groupMetadataAvailable && unlockType === 'ad' && !groupHasAllowedAdUnlockName && !hasOnlyMDProductGroup) {
         errors.push({
             type: 'unlock',
             msg: `[解锁类型] unlock_type=ad，但 App Group 未命中允许的广告解锁分组（${AD_UNLOCK_ALLOWED_GROUP_NAMES.join('、')}）。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`,
@@ -307,8 +386,152 @@ function buildUnlockTypeRuleErrors(dramaId) {
     return errors;
 }
 
+function buildMarketingPositionRuleErrors(dramaId) {
+    const meta = getDramaMeta(dramaId);
+    if (!isClassificationCheckDateEligible(meta.createdAt) || meta.cnName.includes('番茄')) {
+        return [];
+    }
+    const dubbingMarker = findDubbingNameMarker(meta.cnName);
+    const isDubbingCategory = meta.marketingPosition === DUBBING_MARKETING_POSITION;
+
+    if (dubbingMarker && !isDubbingCategory) {
+        return [{
+            type: 'classification',
+            msg: `[分类规则] cn_name 包含配音标识 ${dubbingMarker}，但短剧分类 marketing_position 未命中配音剧。cn_name=${formatEmpty(meta.cnName)}，marketing_position=${formatEmpty(meta.marketingPosition)}`,
+            count: 1
+        }];
+    }
+    if (!dubbingMarker && isDubbingCategory) {
+        return [{
+            type: 'classification',
+            msg: `[分类规则] marketing_position=配音剧，但 cn_name 未包含 X配 标识。cn_name=${formatEmpty(meta.cnName)}`,
+            count: 1
+        }];
+    }
+    return [];
+}
+
+function isClassificationCheckDateEligible(value) {
+    const dateMatch = String(value || '').trim().match(/^(\d{4}-\d{2}-\d{2})/);
+    if (!dateMatch) return false;
+    return dateMatch[1] >= CLASSIFICATION_CHECK_START_DATE;
+}
+
+function findDubbingNameMarker(value) {
+    const text = String(value || '');
+    for (const prefix of DUBBING_LANGUAGE_PREFIXES) {
+        const candidates = [`${prefix}配`];
+        if (!prefix.endsWith('语')) {
+            candidates.push(`${prefix}语配`);
+        }
+        for (const candidate of candidates) {
+            const index = text.indexOf(candidate);
+            if (index >= 0) {
+                return text[index + candidate.length] === '音' ? `${candidate}音` : candidate;
+            }
+        }
+    }
+
+    const latinMarker = text.match(/(?:^|[^A-Za-z])([A-Za-z]{1,4}配)(?=$|[^A-Za-z])/i);
+    if (latinMarker) {
+        return latinMarker[1];
+    }
+    return '';
+}
+
 function hasStrictIAA(value) {
     return /(^|[^A-Za-z0-9])IAA([^A-Za-z0-9]|$)/.test(String(value || ''));
+}
+
+function hasLooseIAA(value) {
+    return /(^|[^A-Za-z0-9])iaa([^A-Za-z0-9]|$)/i.test(String(value || ''));
+}
+
+function hasLooseDSMarker(value) {
+    return /(^|[^A-Za-z0-9])ds(?=$|[^A-Za-z0-9])/i.test(String(value || ''));
+}
+
+function hasLooseShortsWave(value) {
+    return normalizeGroupNameForFuzzyRule(value).includes('shortswave');
+}
+
+function buildNamingRuleErrors(meta, groupNames) {
+    const errors = [];
+    const seen = {};
+    const add = message => {
+        if (seen[message]) return;
+        seen[message] = true;
+        errors.push({ type: 'naming', msg: message, count: 1 });
+    };
+
+    if (hasLooseIAA(meta.cnName) && !hasStrictIAA(meta.cnName)) {
+        add(`[命名规范] cn_name 中 IAA 大小写不规范，应使用 IAA。cn_name=${formatEmpty(meta.cnName)}`);
+    }
+    groupNames.forEach(groupName => {
+        let hasSpecificNamingIssue = false;
+        if (hasLooseIAA(groupName) && !hasStrictIAA(groupName)) {
+            add(`[命名规范] App Group 中 IAA 大小写不规范，应使用 IAA。app_group=${groupName}`);
+            hasSpecificNamingIssue = true;
+        }
+        if (hasLooseShortsWave(groupName) && !String(groupName).includes('ShortsWave')) {
+            add(`[命名规范] App Group 中 ShortsWave 命名大小写或分隔不规范。app_group=${groupName}`);
+            hasSpecificNamingIssue = true;
+        }
+
+        const canonicalName = findClosestCanonicalGroupName(groupName, CANONICAL_RULE_GROUP_NAMES);
+        if (!hasSpecificNamingIssue && canonicalName && normalizeGroupNameForRule(groupName) !== normalizeGroupNameForRule(canonicalName)) {
+            add(`[命名规范] App Group 名称与标准名称相近，建议修正为 ${canonicalName}。当前=${groupName}`);
+        }
+    });
+    return errors;
+}
+
+function matchesCanonicalGroupName(value, canonicalName) {
+    return findClosestCanonicalGroupName(value, [canonicalName]) === canonicalName;
+}
+
+function findClosestCanonicalGroupName(value, canonicalNames) {
+    const source = normalizeGroupNameForFuzzyRule(value);
+    if (!source) return '';
+
+    let bestName = '';
+    let bestDistance = Number.POSITIVE_INFINITY;
+    (canonicalNames || []).forEach(canonicalName => {
+        const target = normalizeGroupNameForFuzzyRule(canonicalName);
+        if (!target) return;
+        const distance = source === target ? 0 : levenshteinDistance(source, target);
+        const threshold = target.length >= 10 ? 2 : 1;
+        if (distance <= threshold && distance < bestDistance) {
+            bestDistance = distance;
+            bestName = canonicalName;
+        }
+    });
+    return bestName;
+}
+
+function normalizeGroupNameForFuzzyRule(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[\s\u00a0\-_—–·.，,()（）\[\]【】]+/g, '');
+}
+
+function levenshteinDistance(left, right) {
+    const rows = Array.from({ length: left.length + 1 }, (_, index) => index);
+    for (let column = 1; column <= right.length; column++) {
+        let previousDiagonal = rows[0];
+        rows[0] = column;
+        for (let row = 1; row <= left.length; row++) {
+            const previousRowValue = rows[row];
+            const substitutionCost = left[row - 1] === right[column - 1] ? 0 : 1;
+            rows[row] = Math.min(
+                rows[row] + 1,
+                rows[row - 1] + 1,
+                previousDiagonal + substitutionCost
+            );
+            previousDiagonal = previousRowValue;
+        }
+    }
+    return rows[left.length];
 }
 
 function getMatchedAppGroupNames(appGroups) {
@@ -380,7 +603,9 @@ function getDramaMeta(dramaId) {
         title: String(meta.title || meta.name || '').trim(),
         cnTitle: String(meta.cn_title || meta.cnTitle || meta.cn_name || meta.cnName || '').trim(),
         cnName: String(meta.cn_name || meta.cnName || meta.cn_title || meta.cnTitle || '').trim(),
+        createdAt: String(meta.created_at || meta.createdAt || '').trim(),
         unlockType: String(meta.unlock_type || meta.unlockType || '').trim(),
+        marketingPosition: String(meta.marketing_position || meta.marketingPosition || '').trim(),
         appGroups: meta.app_groups || meta.appGroups || meta.app_group_ids || meta.appGroupIds || [],
     };
 }
@@ -392,31 +617,48 @@ export default function () {
     const dramaId = DRAMA_LIST[index];
     if (!dramaId) return;
 
+    const ownsGlobalMetadataConfirmation = index === 0;
+    if (!isRetryPhase && ownsGlobalMetadataConfirmation && !APP_GROUP_METADATA_AVAILABLE) {
+        const reason = `App Group 元数据不可用${APP_GROUP_METADATA_ERROR ? `: ${APP_GROUP_METADATA_ERROR}` : ''}`;
+        queueSecondConfirmation(dramaId, 'app_group_metadata', [reason]);
+        console.warn(`[↻] ${reason}，加入全局二次确认队列。`);
+    }
+    const unlockTypeConfirmationIssue = buildUnlockTypeConfirmationIssue(dramaId);
+    if (!isRetryPhase && unlockTypeConfirmationIssue) {
+        queueSecondConfirmation(dramaId, 'unlock_type', [unlockTypeConfirmationIssue]);
+        console.warn(`[↻] 剧集 ${dramaId} ${unlockTypeConfirmationIssue}，加入二次确认队列。`);
+    }
+    const validationRuleErrors = [
+        ...buildUnlockTypeRuleErrors(dramaId, ownsGlobalMetadataConfirmation),
+        ...buildMarketingPositionRuleErrors(dramaId),
+    ];
+
     const res720 = fetchDramaData(dramaId, '720p');
     if (!res720.success) {
         if (!isRetryPhase) {
-            const retryMarker = `${RETRY_MARKER_PREFIX}${dramaId}|${encodeURIComponent(res720.msg)}`;
-            check(null, { [retryMarker]: false });
-            retryCandidateCount.add(1);
+            queueSecondConfirmation(dramaId, '720_fetch', [res720.msg]);
             console.warn(`[↻] 剧集 ${dramaId} 720p 第一轮网络请求失败，加入二次尝试队列: ${res720.msg}`);
+            if (validationRuleErrors.length > 0) {
+                reportFaults(dramaId, validationRuleErrors, 0, 0);
+            }
             markDramaCaseDone(dramaId);
             return;
         }
 
-        const errorMsg = `<details style="cursor: pointer;"><summary><b>${formatDramaIdentity(dramaId)}</b></summary><div style="margin-left: 20px; padding: 5px; border-left: 2px solid #eee; font-size: 0.9em;">• [接口抓取失败] 720p 网络请求失败<br>错误原因: ${res720.msg}</div></details>`;
         console.error(`[🔥] 剧集 ${dramaId} 720p 二次尝试仍网络请求失败: ${res720.msg}`);
-        check(null, { [errorMsg]: false });
-        fetchErrors.add(1);
+        reportFaults(dramaId, [
+            { type: 'fetch', msg: `[接口抓取失败] 720p 二次确认仍失败。错误原因: ${res720.msg}`, count: 1 },
+            ...validationRuleErrors,
+        ], 0, 0);
         markDramaCaseDone(dramaId);
         return;
     }
     totalDramaEpisodeCount.add(res720.total || res720.items.length || 0);
 
-    const unlockRuleErrors = buildUnlockTypeRuleErrors(dramaId);
     const health720 = analyzeHealth(res720.items, { includeDirectJump: true });
     if (health720.healthy && res720.total === res720.items.length) {
-        if (unlockRuleErrors.length > 0) {
-            reportFaults(dramaId, unlockRuleErrors, res720.total, res720.items.length);
+        if (validationRuleErrors.length > 0) {
+            reportFaults(dramaId, validationRuleErrors, res720.total, res720.items.length);
         }
         sleep(0.1);
         markDramaCaseDone(dramaId);
@@ -425,7 +667,7 @@ export default function () {
 
     const res540 = fetchDramaData(dramaId, '540p');
     if (!res540.success) {
-        reportFaults(dramaId, [...health720.errors, ...unlockRuleErrors], res720.total, res720.items.length);
+        reportFaults(dramaId, [...health720.errors, ...validationRuleErrors], res720.total, res720.items.length);
         markDramaCaseDone(dramaId);
         return;
     }
@@ -440,7 +682,7 @@ export default function () {
     if (countMismatch) {
         unionErrors.push(countMismatch);
     }
-    const finalErrors = [...unionErrors, ...unlockRuleErrors];
+    const finalErrors = [...unionErrors, ...validationRuleErrors];
 
     if (finalErrors.length > 0) {
         const errorDetails = [];
@@ -451,6 +693,10 @@ export default function () {
             if (err.type === 'conversion') updateStatusErrors.add(err.count);
             if (err.type === 'mismatch') totalMismatchErrors.add(1);
             if (err.type === 'unlock') unlockTypeRuleErrors.add(err.count);
+            if (err.type === 'metadata') appGroupMetadataErrors.add(err.count);
+            if (err.type === 'naming') namingRuleErrors.add(err.count);
+            if (err.type === 'classification') classificationRuleErrors.add(err.count);
+            if (err.type === 'fetch') fetchErrors.add(err.count);
         });
 
         const summaryLabel = buildDramaSummaryLabel(dramaId, finalErrors);
@@ -475,6 +721,10 @@ function reportFaults(dramaId, errors, total, actualLen) {
         if (err.type === 'conversion') updateStatusErrors.add(err.count);
         if (err.type === 'mismatch') totalMismatchErrors.add(1);
         if (err.type === 'unlock') unlockTypeRuleErrors.add(err.count);
+        if (err.type === 'metadata') appGroupMetadataErrors.add(err.count);
+        if (err.type === 'naming') namingRuleErrors.add(err.count);
+        if (err.type === 'classification') classificationRuleErrors.add(err.count);
+        if (err.type === 'fetch') fetchErrors.add(err.count);
     });
     const summaryLabel = buildDramaSummaryLabel(dramaId, errors, true);
     const detailLines = errorDetails.join('<br>');
@@ -485,18 +735,22 @@ function reportFaults(dramaId, errors, total, actualLen) {
 
 export function handleSummary(data) {
     const retryCandidates = collectRetryCandidates(data);
-    const failedChecks = collectFailedChecks(data, name => !name.startsWith(RETRY_MARKER_PREFIX));
+    const retryMarkerFailCount = countRetryCandidateChecks(data);
+    const failedChecks = collectFailedChecks(data, name => !isRetryMarkerName(name));
     const structuredFailures = collectDramaFailureSummaries(data);
     const totalEpisodes = getMetricCount(data, 'total_drama_episode_count') || totalIds;
-    stripRetryCandidateChecks(data, retryCandidates.length);
+    stripRetryCandidateChecks(data, retryMarkerFailCount);
 
     const summaryText = `[📊] 执行完毕。汇总结果: 
         抓取失败数: ${data.metrics.fetch_fail_count ? data.metrics.fetch_fail_count.values.count : 0}
-        720p网络失败待复验数: ${data.metrics.retry_candidate_count ? data.metrics.retry_candidate_count.values.count : 0}
+        二次确认候选异常数: ${data.metrics.retry_candidate_count ? data.metrics.retry_candidate_count.values.count : 0}
         直接跳集剧集数: ${data.metrics.continuity_fail_count ? data.metrics.continuity_fail_count.values.count : 0}
         出错章节总数: ${data.metrics.offline_chapter_count ? data.metrics.offline_chapter_count.values.count : 0}
         转换中章节总数: ${data.metrics.update_status_fail_count ? data.metrics.update_status_fail_count.values.count : 0}
         解锁类型规则异常剧集数: ${data.metrics.unlock_type_rule_fail_count ? data.metrics.unlock_type_rule_fail_count.values.count : 0}
+        App Group元数据异常剧集数: ${data.metrics.app_group_metadata_fail_count ? data.metrics.app_group_metadata_fail_count.values.count : 0}
+        命名规范异常数: ${data.metrics.naming_rule_fail_count ? data.metrics.naming_rule_fail_count.values.count : 0}
+        分类规则异常剧集数: ${data.metrics.classification_rule_fail_count ? data.metrics.classification_rule_fail_count.values.count : 0}
         检查剧集总量: ${totalEpisodes}（${totalIds}部剧）
         计数不符剧集数: ${data.metrics.total_mismatch_count ? data.metrics.total_mismatch_count.values.count : 0}`;
 
@@ -509,9 +763,12 @@ export function handleSummary(data) {
         'fetch_fail_count': 'Fetch Failures (接口抓取失败数)',
         'update_status_fail_count': 'Converting Chapters (转换中章节总数)',
         'transport_retry_count': 'Transport Retries (网络重试次数)',
-        'retry_candidate_count': 'Retry Candidates (720p网络失败待复验数)',
+        'retry_candidate_count': 'Retry Candidates (二次确认候选异常数)',
         'total_drama_episode_count': 'Total Drama Episodes (总剧集数)',
         'unlock_type_rule_fail_count': 'Unlock Type Rule Failures (解锁类型规则异常剧集数)',
+        'app_group_metadata_fail_count': 'App Group Metadata Failures (App Group元数据异常剧集数)',
+        'naming_rule_fail_count': 'Naming Rule Failures (命名规范异常数)',
+        'classification_rule_fail_count': 'Classification Rule Failures (分类规则异常剧集数)',
     };
 
     const finalMetrics = {};
@@ -618,8 +875,14 @@ function decorateCounterCountBadges(reportHtml) {
         { label: 'Converting Chapters (转换中章节总数)', type: 'errorWhenPositive' },
         { label: 'Direct Skips (直接跳集剧集数)', type: 'errorWhenPositive' },
         { label: 'Errored Chapters (出错章节总数)', type: 'errorWhenPositive' },
+        { label: 'Fetch Failures (接口抓取失败数)', type: 'errorWhenPositive' },
+        { label: 'Unlock Type Rule Failures (解锁类型规则异常剧集数)', type: 'errorWhenPositive' },
+        { label: 'App Group Metadata Failures (App Group元数据异常剧集数)', type: 'errorWhenPositive' },
+        { label: 'Naming Rule Failures (命名规范异常数)', type: 'errorWhenPositive' },
+        { label: 'Classification Rule Failures (分类规则异常剧集数)', type: 'errorWhenPositive' },
         { label: 'Total Drama Episodes (总剧集数)', type: 'alwaysSuccess' },
         { label: 'Transport Retries (网络重试次数)', type: 'warningWhenPositive' },
+        { label: 'Retry Candidates (二次确认候选异常数)', type: 'warningWhenPositive' },
     ];
 
     return reportHtml.replace(/<tr>[\s\S]*?<\/tr>/g, rowHtml => {
@@ -664,6 +927,11 @@ function highlightDramaErrorKeywords(reportHtml) {
         .replace(/\[出错\]/g, '<span class="drama-error-keyword">[出错]</span>')
         .replace(/\[转换中\]/g, '<span class="drama-error-keyword">[转换中]</span>')
         .replace(/\[直接跳集\]/g, '<span class="drama-error-keyword">[直接跳集]</span>')
+        .replace(/\[App Group元数据\]/g, '<span class="drama-error-keyword">[App Group元数据]</span>')
+        .replace(/\[解锁类型\]/g, '<span class="drama-error-keyword">[解锁类型]</span>')
+        .replace(/\[分组规则\]/g, '<span class="drama-error-keyword">[分组规则]</span>')
+        .replace(/\[命名规范\]/g, '<span class="drama-error-keyword">[命名规范]</span>')
+        .replace(/\[分类规则\]/g, '<span class="drama-error-keyword">[分类规则]</span>')
         .replace('</head>', `<style>
   .drama-error-keyword {
     color: #dc2626;
@@ -724,22 +992,68 @@ function highlightDramaErrorKeywords(reportHtml) {
 }
 
 function collectRetryCandidates(data) {
-    const candidates = [];
-    const seen = {};
+    const byDrama = {};
     walkChecks(data.root_group, checkItem => {
         const name = checkItem.name || '';
-        if (!name.startsWith(RETRY_MARKER_PREFIX) || !checkItem.fails) return;
-        const rest = name.substring(RETRY_MARKER_PREFIX.length);
-        const parts = rest.split('|');
-        const dramaId = parts[0];
-        if (!dramaId || seen[dramaId]) return;
-        seen[dramaId] = true;
-        candidates.push({
-            dramaId,
-            reason: decodeURIComponent(parts.slice(1).join('|') || ''),
-        });
+        if (!checkItem.fails) return;
+        const marker = parseRetryMarkerName(name);
+        if (!marker || !marker.dramaId) return;
+        if (!byDrama[marker.dramaId]) {
+            byDrama[marker.dramaId] = { dramaId: marker.dramaId, kinds: [], reasons: [] };
+        }
+        if (marker.kind && !byDrama[marker.dramaId].kinds.includes(marker.kind)) {
+            byDrama[marker.dramaId].kinds.push(marker.kind);
+        }
+        if (marker.reason && !byDrama[marker.dramaId].reasons.includes(marker.reason)) {
+            byDrama[marker.dramaId].reasons.push(marker.reason);
+        }
     });
-    return candidates;
+    return Object.values(byDrama).map(item => ({
+        dramaId: item.dramaId,
+        kind: item.kinds.join(','),
+        reason: item.reasons.join('；'),
+    }));
+}
+
+function parseRetryMarkerName(name) {
+    const value = String(name || '');
+    let prefix = '';
+    let legacy = false;
+    if (value.startsWith(RETRY_MARKER_PREFIX)) {
+        prefix = RETRY_MARKER_PREFIX;
+    } else if (value.startsWith(LEGACY_RETRY_MARKER_PREFIX)) {
+        prefix = LEGACY_RETRY_MARKER_PREFIX;
+        legacy = true;
+    } else {
+        return null;
+    }
+
+    const parts = value.substring(prefix.length).split('|');
+    const dramaId = parts[0] || '';
+    const kind = legacy ? '720_fetch' : (parts[1] || 'unknown');
+    const encodedReason = legacy ? parts.slice(1).join('|') : parts.slice(2).join('|');
+    let reason = encodedReason;
+    try {
+        reason = decodeURIComponent(encodedReason || '');
+    } catch (e) {
+        // Keep malformed legacy text readable instead of dropping the retry candidate.
+    }
+    return { dramaId, kind, reason };
+}
+
+function isRetryMarkerName(name) {
+    const value = String(name || '');
+    return value.startsWith(RETRY_MARKER_PREFIX) || value.startsWith(LEGACY_RETRY_MARKER_PREFIX);
+}
+
+function countRetryCandidateChecks(data) {
+    let count = 0;
+    walkChecks(data.root_group, checkItem => {
+        if (checkItem.fails && isRetryMarkerName(checkItem.name)) {
+            count += Number(checkItem.fails) || 0;
+        }
+    });
+    return count;
 }
 
 function collectFailedChecks(data, shouldInclude) {
@@ -760,7 +1074,7 @@ function collectDramaFailureSummaries(data) {
     const byDrama = {};
     walkChecks(data.root_group, checkItem => {
         const name = checkItem.name || '';
-        if (!checkItem.fails || name.startsWith(RETRY_MARKER_PREFIX)) return;
+        if (!checkItem.fails || isRetryMarkerName(name)) return;
 
         const dramaId = extractDramaIdFromCheckName(name);
         if (!dramaId) return;
@@ -852,7 +1166,7 @@ function stripRetryCandidateChecks(data, removedFailCount) {
 function stripRetryCandidateChecksFromGroup(group) {
     if (!group) return;
     if (Array.isArray(group.checks)) {
-        group.checks = group.checks.filter(checkItem => !(checkItem.name || '').startsWith(RETRY_MARKER_PREFIX));
+        group.checks = group.checks.filter(checkItem => !isRetryMarkerName(checkItem.name));
     }
     if (Array.isArray(group.groups)) {
         group.groups.forEach(stripRetryCandidateChecksFromGroup);

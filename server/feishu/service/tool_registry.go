@@ -463,10 +463,11 @@ func init() {
 				"%s"+
 				"本次测试覆盖率： 100%%\n\n"+
 				"测试结论：当前版本Pass！\n"+
-				"正式版本缺陷修复验证情况：\n"+
+				"正式版本缺陷修复验证情况：\n%s"+
 				"本次预提审版本缺陷提交情况：\n%s"+
 				"版本更新测试需求点：\n%s",
-				projectActualCode, projectName, displayVersion, testOwner, formattedPeriod, testEnv, devicesLine, formattedBugStatus, formattedStories)
+				projectActualCode, projectName, displayVersion, testOwner, formattedPeriod, testEnv, devicesLine,
+				formatAcceptanceReportToolSection(""), formattedBugStatus, formattedStories)
 
 			operatorName := testOwner
 			operatorID := senderID
@@ -490,8 +491,8 @@ func init() {
 					TestEnv:             testEnv,
 					TestDevices:         testDevices,
 					TestConclusion:      "Pass",
-					BugFixStatus:        formattedFixed,
-					BugSubmissionStatus: formattedUnfixed,
+					BugFixStatus:        formattedUnfixed + formattedFixed,
+					BugSubmissionStatus: "",
 					UpdateRequirements:  formattedStories,
 					CreatedAt:           time.Now().Format(time.RFC3339),
 					UpdatedAt:           time.Now().Format(time.RFC3339),
