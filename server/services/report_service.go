@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -68,8 +69,15 @@ var (
 
 func SaveAcceptanceReport(report AcceptanceReport) error {
 	reportMutex.Lock()
-	defer reportMutex.Unlock()
-	return sqlUpsertJSON("acceptance_reports", report)
+	err := sqlUpsertJSON("acceptance_reports", report)
+	reportMutex.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := QueueAcceptanceTodoReminder(report); err != nil {
+		log.Printf("[AcceptanceTodo] queue report %s failed: %v", report.ID, err)
+	}
+	return nil
 }
 
 func GetAcceptanceReports() ([]AcceptanceReport, error) {

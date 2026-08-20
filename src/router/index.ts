@@ -90,6 +90,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/ProfileSettings/index.vue'),
         meta: { title: '个人设置', hidden: true }
       },
+	  {
+		path: 'my-todos',
+		name: 'MyTodos',
+		component: () => import('@/views/MyTodos/index.vue'),
+		meta: { title: '我的待办', hidden: true }
+	  },
       {
         path: 'ui_auto_jungle',
         name: 'JungleChess',
@@ -215,7 +221,7 @@ router.beforeEach(async (to, _from, next) => {
   }
 
   if (authStore.status === 'anonymous') {
-    next('/login')
+		next({ path: '/login', query: { redirect: to.fullPath } })
     return
   }
 
@@ -226,7 +232,7 @@ router.beforeEach(async (to, _from, next) => {
         next()
         return
       }
-      next('/login')
+			next({ path: '/login', query: { redirect: to.fullPath } })
       return
     }
   }

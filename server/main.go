@@ -128,6 +128,23 @@ func main() {
 			reports.POST("/fetch-project-items", services.FetchAcceptanceReportProjectItemsHandler)
 		}
 
+		// Personal acceptance follow-ups and manual todos (Protected)
+		acceptanceTodos := api.Group("/acceptance-todos")
+		acceptanceTodos.Use(func(c *gin.Context) {
+			_, err := services.CurrentUserFromRequest(c)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid token"})
+				c.Abort()
+				return
+			}
+			c.Next()
+		})
+		{
+			acceptanceTodos.GET("/mine", services.ListMyTodoRemindersHandler)
+			acceptanceTodos.POST("/manual", services.CreateMyManualTodoReminderHandler)
+			acceptanceTodos.POST("/:id/complete", services.CompleteMyTodoReminderHandler)
+		}
+
 		// Performance Monitoring Routes
 		performance := api.Group("/performance")
 		{
@@ -148,6 +165,8 @@ func main() {
 		{
 			testRuns.GET("/analytics/drama-failed-checks", services.ListDramaRunAnalyticsHandler)
 			testRuns.POST("/:runId/send-feishu", services.SendDramaRunFeishuReportHandler)
+			testRuns.POST("/:runId/issue-dispositions/resolve", services.ResolveDramaIssueDispositionsHandler)
+			testRuns.PUT("/:runId/issue-dispositions", services.SaveDramaIssueDispositionHandler)
 			testRuns.GET("/:runId/logs", services.GetTestRunLogsHandler)
 			testRuns.GET("/:runId/artifacts/:artifact", services.GetTestRunArtifactHandler)
 		}
@@ -238,6 +257,7 @@ func main() {
 	// Initialize Feishu Bot Bridge
 	feishu.InitFeishuBridge(r)
 	services.InitScheduledTaskService()
+	services.InitAcceptanceTodoReminderService()
 	services.InitMonkeyRetentionService()
 	services.InitMonkeyWirelessADBService()
 

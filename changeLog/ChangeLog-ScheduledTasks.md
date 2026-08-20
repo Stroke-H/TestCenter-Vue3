@@ -1,5 +1,21 @@
 # ChangeLog - Scheduled Tasks
 
+## 2026-08-19
+
+### Added
+- **TTmins Acceptance Follow-up Reminder**: 新增 TTmins 验收报告次日待办；报告保存后于次日上午 10:00 由 TesterByClaw 向报告提交者发送交互式飞书卡片，列出版本更新测试需求点。待办未完成时每天提醒一次，点击 `Done` 后持久化完成状态、更新卡片并停止后续提醒。
+- **Feishu Card Done Callback**: 飞书长连接新增 `card.action.trigger` 处理，校验卡片操作人与提醒接收人一致后完成待办，避免其他用户误操作。
+- **Personal Todo Center**: 顶部个人菜单新增“我的待办”入口，按当前登录人展示剩余 TTmins 验收跟进任务、待验证功能和提醒次数，并支持在平台内逐项完成后停止飞书提醒。
+- **Manual Personal Todos**: “我的待办”支持手动选择现有项目、指定提醒时间并填写自定义事件；到时由 TesterByClaw 向当前账号绑定的飞书用户发送一次提醒，电脑待机错过时间时会在服务恢复后补发，待办完成前持续保留在平台列表。
+
+### Fixed
+- **Exact Reminder Recipient Routing**: TTmins 待办发送时只按验收报告实际操作人的平台用户名精确查找当前绑定的飞书 `open_id`，不再使用模糊用户名匹配、历史收件人或默认账号兜底。
+- **Feishu Report Operator Attribution**: 通过飞书工具生成验收报告时，`reporter` 改为记录已绑定的平台操作人，避免把“测试负责人”误记为报告提交者并导致待办发错人。
+- **Daily Reminder Aggregation**: 同一操作人在同一提醒批次内的 TTmins 验收报告改为聚合到一张飞书卡片，每个项目独立展示验证功能并提供独立 `Done`；完成单个项目后会保留其余未完成项目并继续提醒。
+- **Callback-free Todo Card**: 飞书待办卡片移除依赖应用回调配置的 `Done` 动作，统一改为“查看我的待办”链接按钮并跳转平台 `/my-todos`；未登录时会在登录成功后返回该页面。
+- **Compact Personal Todo Layout**: “我的待办”页面改为桌面端三列、平板两列、移动端单列的紧凑卡片布局，缩小顶部统计区与卡片留白，并重新整理项目状态、提醒时间、功能项和完成操作的视觉层级。
+- **Uniform Todo Cards and Detail Dialog**: 个人待办卡片统一固定为 A1177 三行功能内容的尺寸，超出三行的预览使用省略号截断；点击卡片会以缩放动效打开居中的待办详情弹窗，完整展示全部验证功能。
+
 ## 2026-06-30
 
 ### Changed

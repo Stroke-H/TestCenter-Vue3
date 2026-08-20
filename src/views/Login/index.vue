@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { ElMessage } from 'element-plus'
 import { User, Lock, ArrowRight } from '@element-plus/icons-vue'
 import request from '@/api/request'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 const loginForm = reactive({
@@ -28,7 +29,10 @@ const handleLogin = async () => {
     
     authStore.setUser(data.user)
     ElMessage.success('登录成功')
-    router.push('/dashboard')
+		const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
+			? route.query.redirect
+			: '/dashboard'
+		router.push(redirect)
   } catch (err: any) {
     const errorMsg = err.customMessage || '登录流程出现异常'
     ElMessage({

@@ -469,7 +469,7 @@ func init() {
 				projectActualCode, projectName, displayVersion, testOwner, formattedPeriod, testEnv, devicesLine,
 				formatAcceptanceReportToolSection(""), formattedBugStatus, formattedStories)
 
-			operatorName := testOwner
+			operatorName := ""
 			operatorID := senderID
 			if boundUser, err := services.FindUserByFeishuOpenID(senderID); err == nil && boundUser != nil {
 				operatorID = boundUser.ID
@@ -486,7 +486,7 @@ func init() {
 					ProjectCode:         projectActualCode,
 					Version:             displayVersion,
 					TestOwner:           testOwner,
-					Reporter:            testOwner,
+					Reporter:            operatorName,
 					TestTime:            formattedPeriod,
 					TestEnv:             testEnv,
 					TestDevices:         testDevices,

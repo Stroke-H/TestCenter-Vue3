@@ -18,7 +18,8 @@ import {
   SwitchButton,
   Collection,
   Iphone,
-  Lock
+  Lock,
+  Bell
 } from '@element-plus/icons-vue'
 import { User as UserMenuIcon } from '@element-plus/icons-vue'
 
@@ -110,6 +111,11 @@ const handleMenuSelect = (path: string) => {
 }
 
 const handleUserCommand = async (command: string) => {
+	if (command === 'todos') {
+		router.push('/my-todos')
+		return
+	}
+
   if (command === 'profile') {
     router.push('/profile')
     return
@@ -207,6 +213,7 @@ const handleUserCommand = async (command: string) => {
             </div>
             <template #dropdown>
               <el-dropdown-menu>
+				<el-dropdown-item command="todos" :icon="Bell">我的待办</el-dropdown-item>
                 <el-dropdown-item command="profile" :icon="Setting">个人设置</el-dropdown-item>
                 <el-dropdown-item divided command="logout" :icon="SwitchButton">
                   退出登录

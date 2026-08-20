@@ -1,5 +1,12 @@
 # ChangeLog - Test Reports
 
+## 2026-08-12
+
+### Added
+- **Drama Issue Operating Column**: 剧集检测 HTML5 报告的 `Other Checks` 表格新增 `OPERATING` 列，可将完整异常标记为“数据问题”或“暂时忽略”。
+- **Exact Temporary Ignore Signature**: “暂时忽略”按剧集 ID 与该行全部异常明细生成精确签名；任一错误细节发生变化都会视为新异常并重新上报。
+- **Feishu Duplicate Suppression**: 被暂时忽略的完全相同异常继续保留在 HTML 报告中，但后续飞书结构化明细和 AI 总结不再重复上报；“数据问题”仅展示标记，不影响飞书发送。
+
 ## 2026-06-17
 
 ### Changed

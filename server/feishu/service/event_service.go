@@ -15,6 +15,7 @@ import (
 
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
+	larkcallback "github.com/larksuite/oapi-sdk-go/v3/event/dispatcher/callback"
 	larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkwiki "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
@@ -32,7 +33,53 @@ func NewEventDispatcher(verifyToken, encryptKey string) *dispatcher.EventDispatc
 		OnP2MessageReadV1(func(ctx context.Context, event *larkim.P2MessageReadV1) error {
 			// Dummy handler to ignore read receipts
 			return nil
-		})
+		}).
+		OnP2CardActionTrigger(handleCardActionTrigger)
+
+}
+
+func handleCardActionTrigger(_ context.Context, event *larkcallback.CardActionTriggerEvent) (*larkcallback.CardActionTriggerResponse, error) {
+	if event == nil || event.Event == nil || event.Event.Action == nil {
+		return nil, nil
+	}
+	action := event.Event.Action.Value
+	actionName, _ := action["action"].(string)
+	if actionName != "acceptance_todo_done" {
+		return nil, nil
+	}
+
+	reminderID, _ := action["reminder_id"].(string)
+	groupReminderIDs, _ := action["group_reminder_ids"].(string)
+	operatorOpenID := ""
+	if event.Event.Operator != nil {
+		operatorOpenID = event.Event.Operator.OpenID
+	}
+	reminder, err := services.CompleteAcceptanceTodoReminder(reminderID, operatorOpenID)
+	if err != nil {
+		log.Printf("[AcceptanceTodo] Done callback failed: %v", err)
+		return &larkcallback.CardActionTriggerResponse{
+			Toast: &larkcallback.Toast{Type: "error", Content: err.Error()},
+		}, nil
+	}
+
+	reminderIDs := []string{reminderID}
+	if strings.TrimSpace(groupReminderIDs) != "" {
+		reminderIDs = strings.Split(groupReminderIDs, ",")
+	}
+	group, groupErr := services.GetAcceptanceTodoRemindersForCard(reminderIDs, operatorOpenID)
+	if groupErr != nil {
+		log.Printf("[AcceptanceTodo] reload card group failed: %v", groupErr)
+		group = []services.AcceptanceTodoReminder{reminder}
+	}
+
+	log.Printf("[AcceptanceTodo] completed: id=%s project=%s", reminder.ID, reminder.ProjectCode)
+	return &larkcallback.CardActionTriggerResponse{
+		Toast: &larkcallback.Toast{Type: "success", Content: "已完成，后续不再提醒"},
+		Card: &larkcallback.Card{
+			Type: "card_json",
+			Data: services.BuildAcceptanceTodoReminderGroupCard(group),
+		},
+	}, nil
 }
 
 // handleMessageReceive processes the incoming message and converts it to standardized output

@@ -760,13 +760,20 @@ func runCommand(ctx context.Context, dir string, env []string, name string, args
 }
 
 func buildScheduledTaskNotice(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time, reportDir string) (string, map[string]any) {
-	analysis, err := analyzeScheduledTaskReportWithAI(task, status, result, duration, startedAt, reportDir)
+	failures := loadScheduledDramaFailures(reportDir)
+	feishuFailures, ignoredCount := filterTemporarilyIgnoredDramaFailures(failures)
+	var analysis string
+	var err error
+	if ignoredCount > 0 {
+		analysis, err = analyzeScheduledReportTextWithAI(task, status, result, duration, buildDramaFailuresForAI(feishuFailures))
+	} else {
+		analysis, err = analyzeScheduledTaskReportWithAI(task, status, result, duration, startedAt, reportDir)
+	}
 	if err != nil {
 		log.Printf("[ScheduledTask] report analysis skipped: %v", err)
 		analysis = "报告分析暂未生成，请打开平台查看完整报告。"
 	}
-	failures := loadScheduledDramaFailures(reportDir)
-	dramaFailures, groupFailures, classificationFailures, otherFailures := splitScheduledDramaFailures(failures)
+	dramaFailures, groupFailures, classificationFailures, otherFailures := splitScheduledDramaFailures(feishuFailures)
 	failureDetail := formatScheduledDramaFailureDetail(dramaFailures)
 	groupFailureDetail := formatScheduledDramaFailureDetail(groupFailures)
 	classificationFailureDetail := formatScheduledDramaFailureDetail(classificationFailures)
@@ -931,9 +938,14 @@ func SendDramaRunFeishuReportHandler(c *gin.Context) {
 	task := scheduledTaskFromDramaArchive(archive)
 	status := firstNonEmpty(archive.Status, "Passed")
 	duration := firstNonEmpty(archive.Duration, "-")
+	failures := loadArchivedDramaFailures(runDir, string(reportContent))
+	feishuFailures, ignoredCount := filterTemporarilyIgnoredDramaFailures(failures)
 	reportText := htmlToPlainText(string(reportContent))
 	if retryContent, err := os.ReadFile(filepath.Join(runDir, "artifacts", "drama_retry_result.json")); err == nil {
 		reportText += "\n\nRetry result JSON:\n" + string(retryContent)
+	}
+	if ignoredCount > 0 {
+		reportText = buildDramaFailuresForAI(feishuFailures)
 	}
 
 	analysis, err := analyzeScheduledReportTextWithAI(task, status, "", duration, reportText)
@@ -942,8 +954,7 @@ func SendDramaRunFeishuReportHandler(c *gin.Context) {
 		analysis = "报告分析暂未生成，请打开平台查看完整报告。"
 	}
 
-	failures := loadArchivedDramaFailures(runDir, string(reportContent))
-	dramaFailures, groupFailures, classificationFailures, otherFailures := splitScheduledDramaFailures(failures)
+	dramaFailures, groupFailures, classificationFailures, otherFailures := splitScheduledDramaFailures(feishuFailures)
 	statusText := "通过"
 	if !isDramaArchiveSuccessStatus(status) {
 		statusText = "失败"
@@ -1051,6 +1062,13 @@ func formatScheduledDramaFailureDetail(failures []dramaFailureSummary) string {
 		}
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func buildDramaFailuresForAI(failures []dramaFailureSummary) string {
+	if len(failures) == 0 {
+		return "本次没有需要在飞书中重复上报的异常。完整检测结果仍保留在 HTML 报告中。"
+	}
+	return "以下仅包含本次允许发送到飞书的异常，飞书总结不得提及未列出的异常：\n\n" + formatScheduledDramaFailureDetail(failures)
 }
 
 func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duration string, reportURL string, analysis string, dramaFailures []dramaFailureSummary, groupFailures []dramaFailureSummary, classificationFailures []dramaFailureSummary, otherFailures []dramaFailureSummary) map[string]any {
