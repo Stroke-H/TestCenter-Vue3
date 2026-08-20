@@ -38,19 +38,20 @@ type ManualTodoReminder struct {
 // MyTodoItem is the common response shape used by the personal todo page.
 // Acceptance follow-ups and user-created reminders stay separately persisted.
 type MyTodoItem struct {
-	ID                string     `json:"id"`
-	TodoType          string     `json:"todo_type"`
-	ReportID          string     `json:"report_id,omitempty"`
-	ProjectCode       string     `json:"project_code"`
-	ProjectName       string     `json:"project_name"`
-	Reporter          string     `json:"reporter"`
-	FeatureItems      []string   `json:"feature_items"`
-	DueAt             time.Time  `json:"due_at"`
-	Status            string     `json:"status"`
-	LastNotifiedAt    *time.Time `json:"last_notified_at,omitempty"`
-	NotificationCount int        `json:"notification_count"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ID                         string     `json:"id"`
+	TodoType                   string     `json:"todo_type"`
+	ReportID                   string     `json:"report_id,omitempty"`
+	ProjectCode                string     `json:"project_code"`
+	ProjectName                string     `json:"project_name"`
+	Reporter                   string     `json:"reporter"`
+	FeatureItems               []string   `json:"feature_items"`
+	DueAt                      time.Time  `json:"due_at"`
+	Status                     string     `json:"status"`
+	LastNotifiedAt             *time.Time `json:"last_notified_at,omitempty"`
+	NotificationCount          int        `json:"notification_count"`
+	PreviousVersionNotApproved bool       `json:"previous_version_not_approved"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	UpdatedAt                  time.Time  `json:"updated_at"`
 }
 
 type CreateManualTodoRequest struct {
@@ -158,6 +159,9 @@ func CreateManualTodoReminder(ownerUsername string, request CreateManualTodoRequ
 		return ManualTodoReminder{}, err
 	}
 	if err := ensureManualTodoReminderTable(); err != nil {
+		return ManualTodoReminder{}, err
+	}
+	if err := ensureTodoProjectReviewStateTable(); err != nil {
 		return ManualTodoReminder{}, err
 	}
 
@@ -366,6 +370,9 @@ func CompleteManualTodoReminderForOwner(reminderID string, ownerUsername string)
 	if err := ensureManualTodoReminderTable(); err != nil {
 		return ManualTodoReminder{}, err
 	}
+	if err := ensureTodoProjectReviewStateTable(); err != nil {
+		return ManualTodoReminder{}, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	db, _, err := DatabaseManager.DB(ctx)
@@ -382,11 +389,85 @@ func CompleteManualTodoReminderForOwner(reminderID string, ownerUsername string)
 	if reminder.Status == acceptanceTodoStatusDone {
 		return reminder, nil
 	}
+	if reminder.Status != acceptanceTodoStatusPending {
+		return ManualTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
 	now := time.Now().In(acceptanceTodoLocation())
-	if _, err := db.ExecContext(ctx, `
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return ManualTodoReminder{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 		UPDATE manual_todo_reminders SET status = ?, done_at = ?, updated_at = ?
 		WHERE id = ? AND status = ?
-	`, acceptanceTodoStatusDone, now, now, reminderID, acceptanceTodoStatusPending); err != nil {
+	`, acceptanceTodoStatusDone, now, now, reminderID, acceptanceTodoStatusPending)
+	if err != nil {
+		return ManualTodoReminder{}, err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return ManualTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
+	if err := clearTodoProjectNotApproved(ctx, tx, ownerUsername, reminder.ProjectCode); err != nil {
+		return ManualTodoReminder{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ManualTodoReminder{}, err
+	}
+	return getManualTodoReminder(ctx, db, reminderID)
+}
+
+func MarkManualTodoNotApprovedForOwner(reminderID string, ownerUsername string) (ManualTodoReminder, error) {
+	reminderID = strings.TrimSpace(reminderID)
+	ownerUsername = strings.TrimSpace(ownerUsername)
+	if reminderID == "" || ownerUsername == "" {
+		return ManualTodoReminder{}, fmt.Errorf("待办编号和操作人不能为空")
+	}
+	if err := ensureManualTodoReminderTable(); err != nil {
+		return ManualTodoReminder{}, err
+	}
+	if err := ensureTodoProjectReviewStateTable(); err != nil {
+		return ManualTodoReminder{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	db, _, err := DatabaseManager.DB(ctx)
+	if err != nil {
+		return ManualTodoReminder{}, err
+	}
+	reminder, err := getManualTodoReminder(ctx, db, reminderID)
+	if err != nil {
+		return ManualTodoReminder{}, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(reminder.OwnerUsername), ownerUsername) {
+		return ManualTodoReminder{}, fmt.Errorf("只能处理自己的待办")
+	}
+	if reminder.Status == acceptanceTodoStatusNotApproved {
+		return reminder, nil
+	}
+	if reminder.Status != acceptanceTodoStatusPending {
+		return ManualTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
+	now := time.Now().In(acceptanceTodoLocation())
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return ManualTodoReminder{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE manual_todo_reminders SET status = ?, done_at = ?, updated_at = ?
+		WHERE id = ? AND status = ?
+	`, acceptanceTodoStatusNotApproved, now, now, reminderID, acceptanceTodoStatusPending)
+	if err != nil {
+		return ManualTodoReminder{}, err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return ManualTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
+	if err := markTodoProjectNotApproved(ctx, tx, ownerUsername, reminder.ProjectCode, myTodoTypeManual, reminder.ID, now); err != nil {
+		return ManualTodoReminder{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return ManualTodoReminder{}, err
 	}
 	return getManualTodoReminder(ctx, db, reminderID)
@@ -445,6 +526,12 @@ func ListMyTodoRemindersHandler(c *gin.Context) {
 	for _, reminder := range manualItems {
 		items = append(items, manualTodoToMyTodo(reminder))
 	}
+	projectStates, err := listTodoProjectNotApprovedStates(user.Username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	attachTodoProjectReviewStates(items, projectStates)
 	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].DueAt.Before(items[j].DueAt)
 	})
@@ -516,4 +603,47 @@ func CompleteMyTodoReminderHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "待办已完成，后续不再提醒", "item": acceptanceTodoToMyTodo(reminder)})
+}
+
+func MarkMyTodoNotApprovedHandler(c *gin.Context) {
+	user, err := CurrentUserFromRequest(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid token"})
+		return
+	}
+	var request struct {
+		TodoType string `json:"todo_type"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "待办类型参数不正确"})
+		return
+	}
+	todoType := strings.ToLower(strings.TrimSpace(request.TodoType))
+	if todoType == myTodoTypeManual {
+		reminder, err := MarkManualTodoNotApprovedForOwner(c.Param("id"), user.Username)
+		if err != nil {
+			status := http.StatusBadRequest
+			if strings.Contains(err.Error(), "自己的待办") {
+				status = http.StatusForbidden
+			}
+			c.JSON(status, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "已标记为版本未过审", "item": manualTodoToMyTodo(reminder)})
+		return
+	}
+	if todoType != myTodoTypeAcceptance {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "未知的待办类型"})
+		return
+	}
+	reminder, err := MarkAcceptanceTodoNotApprovedForReporter(c.Param("id"), user.Username, user.FeishuOpenID)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "自己的待办") {
+			status = http.StatusForbidden
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已标记为版本未过审", "item": acceptanceTodoToMyTodo(reminder)})
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Check, Clock, DocumentChecked, Plus, Refresh } from '@element-plus/icons-vue'
+import { Check, CircleClose, Clock, DocumentChecked, Plus, Refresh } from '@element-plus/icons-vue'
 import request from '@/api/request'
 
 interface TodoItem {
@@ -16,6 +16,7 @@ interface TodoItem {
   status: string
   last_notified_at?: string
   notification_count: number
+  previous_version_not_approved: boolean
   created_at: string
   updated_at: string
 }
@@ -35,6 +36,7 @@ const loading = ref(false)
 const projectLoading = ref(false)
 const creating = ref(false)
 const completingID = ref('')
+const rejectingID = ref('')
 const items = ref<TodoItem[]>([])
 const projects = ref<Project[]>([])
 const detailVisible = ref(false)
@@ -173,6 +175,11 @@ async function completeTodo(item: TodoItem) {
       todo_type: item.todo_type
     })
     items.value = items.value.filter((todo) => todo.id !== item.id)
+    items.value.forEach((todo) => {
+      if (todo.project_code.toLowerCase() === item.project_code.toLowerCase()) {
+        todo.previous_version_not_approved = false
+      }
+    })
     if (selectedTodo.value?.id === item.id) {
       detailVisible.value = false
       selectedTodo.value = null
@@ -183,6 +190,45 @@ async function completeTodo(item: TodoItem) {
     ElMessage.error('完成待办失败，请稍后重试')
   } finally {
     completingID.value = ''
+  }
+}
+
+async function markNotApproved(item: TodoItem) {
+  try {
+    await ElMessageBox.confirm(
+      `确认「${item.project_name || item.project_code}」当前版本未过审吗？当前待办将结束，下次该项目待办会显示“上版未过审”角标。`,
+      '版本未过审',
+      {
+        confirmButtonText: '确认未过审',
+        cancelButtonText: '暂不处理',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+
+  rejectingID.value = item.id
+  try {
+    await request.post(`/acceptance-todos/${encodeURIComponent(item.id)}/not-approved`, {
+      todo_type: item.todo_type
+    })
+    items.value = items.value.filter((todo) => todo.id !== item.id)
+    items.value.forEach((todo) => {
+      if (todo.project_code.toLowerCase() === item.project_code.toLowerCase()) {
+        todo.previous_version_not_approved = true
+      }
+    })
+    if (selectedTodo.value?.id === item.id) {
+      detailVisible.value = false
+      selectedTodo.value = null
+    }
+    ElMessage.success('已标记为版本未过审，下次该项目待办将显示提示角标')
+  } catch (error) {
+    console.error('Failed to mark todo as not approved', error)
+    ElMessage.error('标记版本未过审失败，请稍后重试')
+  } finally {
+    rejectingID.value = ''
   }
 }
 
@@ -215,7 +261,10 @@ onMounted(() => {
         v-for="item in items"
         :key="item.id"
         class="todo-card"
-        :class="{ 'todo-card--manual': item.todo_type === 'manual' }"
+        :class="{
+          'todo-card--manual': item.todo_type === 'manual',
+          'todo-card--has-history': item.previous_version_not_approved
+        }"
         role="button"
         tabindex="0"
         :aria-label="`查看 ${item.project_name || item.project_code} 待办详情`"
@@ -223,6 +272,7 @@ onMounted(() => {
         @keydown.enter="openTodoDetail(item)"
         @keydown.space.prevent="openTodoDetail(item)"
       >
+        <div v-if="item.previous_version_not_approved" class="previous-version-ribbon">上版未过审</div>
         <div class="todo-card__accent"></div>
         <div class="todo-card__body">
           <div class="todo-card__header">
@@ -252,16 +302,31 @@ onMounted(() => {
               <span>{{ item.todo_type === 'manual' ? '手动创建' : `报告 ${item.report_id}` }}</span>
               <span>{{ item.notification_count ? `已提醒 ${item.notification_count} 次` : '尚未提醒' }}</span>
             </div>
-            <el-button
-              type="success"
-              :icon="Check"
-              size="small"
-              :loading="completingID === item.id"
-              @click.stop="completeTodo(item)"
-              @keydown.stop
-            >
-              标记完成
-            </el-button>
+            <div class="todo-card__actions">
+              <el-button
+                type="warning"
+                plain
+                :icon="CircleClose"
+                size="small"
+                :loading="rejectingID === item.id"
+                :disabled="completingID === item.id"
+                @click.stop="markNotApproved(item)"
+                @keydown.stop
+              >
+                版本未过审
+              </el-button>
+              <el-button
+                type="success"
+                :icon="Check"
+                size="small"
+                :loading="completingID === item.id"
+                :disabled="rejectingID === item.id"
+                @click.stop="completeTodo(item)"
+                @keydown.stop
+              >
+                标记完成
+              </el-button>
+            </div>
           </div>
         </div>
       </article>
@@ -292,6 +357,7 @@ onMounted(() => {
             <span class="todo-status" :class="{ 'todo-status--manual': selectedTodo.todo_type === 'manual' }">
               {{ selectedTodo.todo_type === 'manual' ? '手动待办' : '验收跟进' }}
             </span>
+            <span v-if="selectedTodo.previous_version_not_approved" class="previous-version-tag">上版未过审</span>
           </div>
           <h2>{{ selectedTodo.project_name || selectedTodo.project_code }}</h2>
         </div>
@@ -329,9 +395,21 @@ onMounted(() => {
           <el-button @click="detailVisible = false">关闭</el-button>
           <el-button
             v-if="selectedTodo"
+            type="warning"
+            plain
+            :icon="CircleClose"
+            :loading="rejectingID === selectedTodo.id"
+            :disabled="completingID === selectedTodo.id"
+            @click="markNotApproved(selectedTodo)"
+          >
+            版本未过审
+          </el-button>
+          <el-button
+            v-if="selectedTodo"
             type="success"
             :icon="Check"
             :loading="completingID === selectedTodo.id"
+            :disabled="rejectingID === selectedTodo.id"
             @click="completeTodo(selectedTodo)"
           >
             标记完成
@@ -506,6 +584,24 @@ onMounted(() => {
 
 .todo-card:active { transform: translateY(0) scale(0.988); }
 
+.previous-version-ribbon {
+  position: absolute;
+  top: 13px;
+  right: -34px;
+  z-index: 2;
+  width: 126px;
+  padding: 4px 0;
+  transform: rotate(39deg);
+  color: #fff;
+  background: linear-gradient(90deg, #f97316, #ef4444);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.24);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-align: center;
+  pointer-events: none;
+}
+
 .todo-card__accent { width: 3px; background: linear-gradient(180deg, #6366f1, #8b5cf6); }
 .todo-card--manual .todo-card__accent { background: linear-gradient(180deg, #0ea5e9, #14b8a6); }
 .todo-card__body {
@@ -516,6 +612,7 @@ onMounted(() => {
   padding: 15px 16px;
 }
 .todo-card__header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.todo-card--has-history .todo-card__header { padding-right: 36px; }
 .todo-card__meta { display: flex; align-items: center; gap: 6px; }
 
 .project-code,
@@ -529,6 +626,14 @@ onMounted(() => {
 .project-code { color: #4f46e5; background: #eef2ff; }
 .todo-status { color: #b45309; background: #fff7ed; }
 .todo-status--manual { color: #0369a1; background: #e0f2fe; }
+.previous-version-tag {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #c2410c;
+  background: #fff1e8;
+  font-size: 11px;
+  font-weight: 750;
+}
 .todo-card h2 {
   margin: 11px 0 0;
   overflow: hidden;
@@ -607,6 +712,15 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.todo-card__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.todo-card__actions :deep(.el-button + .el-button) { margin-left: 0; }
+.todo-card__actions :deep(.el-button) { padding-right: 8px; padding-left: 8px; }
 
 .todo-empty {
   margin-top: 20px;
@@ -775,7 +889,8 @@ onMounted(() => {
   .todo-hero { padding: 18px; }
   .todo-hero__actions { justify-content: space-between; }
   .due-chip { align-self: flex-start; }
-  .todo-card__footer :deep(.el-button) { width: 100%; }
+  .todo-card__actions { width: 100%; }
+  .todo-card__actions :deep(.el-button) { flex: 1; }
   .todo-list { grid-template-columns: 1fr; }
   .todo-card__header { flex-direction: row; align-items: center; }
   :global(.todo-detail-dialog.el-dialog) {

@@ -55,6 +55,9 @@ func InitAcceptanceTodoReminderService() {
 		if err := ensureManualTodoReminderTable(); err != nil {
 			log.Printf("[ManualTodo] initialize table failed: %v", err)
 		}
+		if err := ensureTodoProjectReviewStateTable(); err != nil {
+			log.Printf("[TodoReviewState] initialize table failed: %v", err)
+		}
 
 		go func() {
 			runDueAcceptanceTodoReminders(time.Now())
@@ -550,6 +553,9 @@ func CompleteAcceptanceTodoReminder(reminderID string, operatorOpenID string) (A
 	if err := ensureAcceptanceTodoReminderTable(); err != nil {
 		return AcceptanceTodoReminder{}, err
 	}
+	if err := ensureTodoProjectReviewStateTable(); err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -567,14 +573,31 @@ func CompleteAcceptanceTodoReminder(reminderID string, operatorOpenID string) (A
 	if reminder.Status == acceptanceTodoStatusDone {
 		return reminder, nil
 	}
+	if reminder.Status != acceptanceTodoStatusPending {
+		return AcceptanceTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
 
 	now := time.Now()
-	_, err = db.ExecContext(ctx, `
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 		UPDATE acceptance_todo_reminders
 		SET status = ?, done_at = ?, done_by_open_id = ?, updated_at = ?
 		WHERE id = ? AND status = ?
 	`, acceptanceTodoStatusDone, now, operatorOpenID, now, reminderID, acceptanceTodoStatusPending)
 	if err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return AcceptanceTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
+	if err := clearTodoProjectNotApproved(ctx, tx, reminder.Reporter, reminder.ProjectCode); err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return AcceptanceTodoReminder{}, err
 	}
 	return getAcceptanceTodoReminder(ctx, db, reminderID)
@@ -626,6 +649,9 @@ func CompleteAcceptanceTodoReminderForReporter(reminderID string, reporter strin
 	if err := ensureAcceptanceTodoReminderTable(); err != nil {
 		return AcceptanceTodoReminder{}, err
 	}
+	if err := ensureTodoProjectReviewStateTable(); err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	db, _, err := DatabaseManager.DB(ctx)
@@ -642,15 +668,93 @@ func CompleteAcceptanceTodoReminderForReporter(reminderID string, reporter strin
 	if reminder.Status == acceptanceTodoStatusDone {
 		return reminder, nil
 	}
+	if reminder.Status != acceptanceTodoStatusPending {
+		return AcceptanceTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
 	if strings.TrimSpace(operatorOpenID) == "" {
 		operatorOpenID = "platform:" + reporter
 	}
 	now := time.Now()
-	if _, err := db.ExecContext(ctx, `
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
 		UPDATE acceptance_todo_reminders
 		SET status = ?, done_at = ?, done_by_open_id = ?, updated_at = ?
 		WHERE id = ? AND status = ?
-	`, acceptanceTodoStatusDone, now, operatorOpenID, now, reminderID, acceptanceTodoStatusPending); err != nil {
+	`, acceptanceTodoStatusDone, now, operatorOpenID, now, reminderID, acceptanceTodoStatusPending)
+	if err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return AcceptanceTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
+	if err := clearTodoProjectNotApproved(ctx, tx, reporter, reminder.ProjectCode); err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	return getAcceptanceTodoReminder(ctx, db, reminderID)
+}
+
+func MarkAcceptanceTodoNotApprovedForReporter(reminderID string, reporter string, operatorOpenID string) (AcceptanceTodoReminder, error) {
+	reminderID = strings.TrimSpace(reminderID)
+	reporter = strings.TrimSpace(reporter)
+	if reminderID == "" || reporter == "" {
+		return AcceptanceTodoReminder{}, fmt.Errorf("reminder_id and reporter are required")
+	}
+	if err := ensureAcceptanceTodoReminderTable(); err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	if err := ensureTodoProjectReviewStateTable(); err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	db, _, err := DatabaseManager.DB(ctx)
+	if err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	reminder, err := getAcceptanceTodoReminder(ctx, db, reminderID)
+	if err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(reminder.Reporter), reporter) {
+		return AcceptanceTodoReminder{}, fmt.Errorf("只能处理自己的待办")
+	}
+	if reminder.Status == acceptanceTodoStatusNotApproved {
+		return reminder, nil
+	}
+	if reminder.Status != acceptanceTodoStatusPending {
+		return AcceptanceTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
+	if strings.TrimSpace(operatorOpenID) == "" {
+		operatorOpenID = "platform:" + reporter
+	}
+	now := time.Now().In(acceptanceTodoLocation())
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE acceptance_todo_reminders
+		SET status = ?, done_at = ?, done_by_open_id = ?, updated_at = ?
+		WHERE id = ? AND status = ?
+	`, acceptanceTodoStatusNotApproved, now, operatorOpenID, now, reminderID, acceptanceTodoStatusPending)
+	if err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return AcceptanceTodoReminder{}, fmt.Errorf("该待办已处理")
+	}
+	if err := markTodoProjectNotApproved(ctx, tx, reporter, reminder.ProjectCode, myTodoTypeAcceptance, reminder.ID, now); err != nil {
+		return AcceptanceTodoReminder{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return AcceptanceTodoReminder{}, err
 	}
 	return getAcceptanceTodoReminder(ctx, db, reminderID)

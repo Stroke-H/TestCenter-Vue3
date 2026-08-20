@@ -143,6 +143,7 @@ func main() {
 			acceptanceTodos.GET("/mine", services.ListMyTodoRemindersHandler)
 			acceptanceTodos.POST("/manual", services.CreateMyManualTodoReminderHandler)
 			acceptanceTodos.POST("/:id/complete", services.CompleteMyTodoReminderHandler)
+			acceptanceTodos.POST("/:id/not-approved", services.MarkMyTodoNotApprovedHandler)
 		}
 
 		// Performance Monitoring Routes
