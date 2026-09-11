@@ -86,10 +86,264 @@ watch(() => props.projectCode, () => { visible.value = false; draft.value = null
 </template>
 
 <style scoped>
-.ledger-entry { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;margin:12px 0;border:1px solid #dbeafe;border-radius:10px;background:#eff6ff; }
-.ledger-entry strong {font-size:13px;color:#1e293b}.ledger-entry span {margin-left:12px;color:#64748b;font-size:12px}
-.ledger {max-height:68vh;overflow:auto;color:#334155}.ledger-toolbar {display:flex;flex-wrap:wrap;gap:8px}.ledger-toolbar .el-select {width:320px;max-width:100%}
-.ledger-hint,.ledger small {font-size:12px;color:#64748b;line-height:1.7}.ledger-list {display:grid;gap:12px;margin-top:14px}.ledger-item {padding:16px;border:1px solid #e2e8f0;border-radius:10px;overflow-wrap:anywhere}.ledger-item header {display:flex;justify-content:space-between;gap:8px}.ledger p {font-size:13px;line-height:1.7}.ledger-values {display:flex;gap:18px;flex-wrap:wrap;padding:8px;background:#f8fafc;font-size:12px;margin-bottom:8px}.ledger-values b {color:#2563eb}.ledger summary {cursor:pointer;color:#2563eb;font-size:12px;padding-top:8px}.ledger blockquote {margin:10px 0;padding:10px;border-left:3px solid #93c5fd;background:#f8fafc;white-space:pre-wrap;font-size:12px}.ledger blockquote small,.ledger-comparison small {display:block}.ledger-preview {margin-top:14px;padding:16px;border:1px solid #bfdbfe;border-radius:10px}.ledger-comparison {display:grid;grid-template-columns:1fr 1fr;gap:16px;max-height:300px;overflow:auto}.ledger-comparison section {min-width:0;overflow-wrap:anywhere}.ledger .el-alert {margin-top:8px}@media(max-width:600px){.ledger-comparison{grid-template-columns:1fr}.ledger-entry span{display:block;margin:4px 0}}
-.ledger-entry{margin:18px 0 8px;padding:12px 14px;border:1px solid #e8edf3;border-radius:9px;background:#f8fafc}
-.ledger-entry strong{font-weight:600;font-size:12px}.ledger-entry span{font-size:11px;color:#7b8595}
+/* Ledger Entry Banner in Memo Card */
+.ledger-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  margin: 14px 0 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
+  box-sizing: border-box;
+}
+
+.ledger-entry > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ledger-entry strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.ledger-entry span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Ledger Modal Container */
+.ledger {
+  max-height: 68vh;
+  overflow-y: auto;
+  color: #334155;
+  padding-right: 4px;
+}
+
+.ledger-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.ledger-toolbar .el-select {
+  width: 340px;
+  max-width: 100%;
+}
+
+.ledger-hint {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.6;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  margin: 0 0 12px;
+}
+
+.ledger small {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.ledger .el-alert {
+  margin-bottom: 10px;
+  border-radius: 8px;
+}
+
+/* AI Draft Preview */
+.ledger-preview {
+  margin: 14px 0;
+  padding: 18px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.ledger-preview h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.ledger-preview > p {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.ledger-comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  max-height: 300px;
+  overflow-y: auto;
+  margin-bottom: 14px;
+}
+
+.ledger-comparison section {
+  min-width: 0;
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.ledger-comparison section:first-child {
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+}
+
+.ledger-comparison section:last-child {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.ledger-comparison h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ledger-comparison section:first-child h4 {
+  color: #9f1239;
+}
+
+.ledger-comparison section:last-child h4 {
+  color: #14532d;
+}
+
+.ledger-comparison p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ledger-comparison small {
+  display: block;
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+/* Ledger Items List */
+.ledger-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.ledger-item {
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  overflow-wrap: anywhere;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.ledger-item:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px -2px rgba(15, 23, 42, 0.05);
+}
+
+.ledger-item header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ledger-item header strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ledger p {
+  font-size: 13px;
+  line-height: 1.65;
+  color: #334155;
+  margin: 0 0 10px;
+}
+
+.ledger-values {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.ledger-values span {
+  color: #64748b;
+}
+
+.ledger-values b {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.ledger summary {
+  cursor: pointer;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 500;
+  padding-top: 6px;
+  user-select: none;
+}
+
+.ledger summary:hover {
+  text-decoration: underline;
+}
+
+.ledger blockquote {
+  margin: 10px 0;
+  padding: 10px 14px;
+  border-left: 3px solid #3b82f6;
+  border-radius: 0 8px 8px 0;
+  background: #f8fafc;
+  white-space: pre-wrap;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.ledger blockquote small {
+  display: block;
+  margin-top: 4px;
+  color: #94a3b8;
+}
+
+@media (max-width: 600px) {
+  .ledger-comparison {
+    grid-template-columns: 1fr;
+  }
+  .ledger-entry {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
 </style>
