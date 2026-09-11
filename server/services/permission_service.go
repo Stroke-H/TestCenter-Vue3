@@ -67,6 +67,15 @@ func DefaultDashboardPermissions(username string) map[string]bool {
 		"reports.test_reports.visible":       true,
 		"reports.acceptance_reports.visible": true,
 		"reports.testcase_gen.visible":       true,
+		"defects.visible":                    true,
+		"defects.create":                     true,
+		"defects.edit":                       true,
+		"defects.process":                    true,
+		"defects.verify":                     true,
+		"defects.manage":                     false,
+	}
+	if isPermissionAdminUsername(username) {
+		permissions["defects.manage"] = true
 	}
 	permissions["settings.permissions.visible"] = isPermissionAdminUsername(username)
 	return permissions

@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import { CollectionTag, Refresh, Search, Plus, Delete, Edit, Check, Close, DocumentCopy } from '@element-plus/icons-vue'
 import ProjectTreeBoard from './components/ProjectTreeBoard.vue'
 import ProjectConfigRecordsDialog from './components/ProjectConfigRecordsDialog.vue'
+import ProjectConfigLedger from './components/ProjectConfigLedger.vue'
 import { useAcceptanceProjectTree } from './composables/useAcceptanceProjectTree'
 import type { ProjectMemoColor, ProjectMemoItem } from './types'
 import {
@@ -225,6 +226,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="project-tree-page">
+    <header class="project-workspace-title">
+      <span class="project-workspace-title__icon"><el-icon><CollectionTag /></el-icon></span>
+      <div><h1>项目树</h1><p>追踪版本演进，查看项目配置与验收记录</p></div>
+      <span class="project-workspace-title__count">{{ projectOptions.length }} 个项目</span>
+    </header>
     <div class="project-tree-page__header">
       <el-button
         type="primary"
@@ -308,12 +314,14 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <ProjectConfigLedger v-if="selectedProjectCode" :project-code="selectedProjectCode" :record="selectedProjectMemo || undefined" @refresh="fetchReports" />
+      <div class="memo-section-heading"><strong>当前配置与便签 <span>{{ selectedProjectMemo?.items.filter(item => !item.removed).length || 0 }}</span></strong><small>点击编辑 · 拖动排序 · 悬停查看历史</small></div>
       <div
         v-if="selectedProjectMemo && selectedProjectMemo.items.length > 0"
         class="project-memos-list"
       >
         <div
-          v-for="note in selectedProjectMemo.items"
+          v-for="note in selectedProjectMemo.items.filter(item => !item.removed)"
           :key="note.id"
           class="memo-sticky-note"
           :class="[
@@ -433,6 +441,7 @@ onBeforeUnmount(() => {
 
     </section>
 
+    <div class="version-section-heading"><h2>版本与验收记录</h2><span>按版本追溯需求变化与测试记录</span></div>
     <ProjectTreeBoard
       :projects="projectTree"
       :loading="loading"
@@ -989,4 +998,42 @@ onBeforeUnmount(() => {
     width: 100%;
   }
 }
+.project-tree-page{padding:28px;background:#f7f8fa}
+.project-workspace-title{display:flex;align-items:center;gap:14px;margin-bottom:24px;color:#172033}
+.project-workspace-title__icon{display:grid;place-items:center;width:44px;height:44px;border:1px solid #dbe6f5;border-radius:13px;background:#fff;color:#4263b8;font-size:22px}
+.project-workspace-title h1{font-size:24px;letter-spacing:-.5px;margin:0 0 6px}
+.project-workspace-title p{font-size:13px;color:#7b8595;margin:0}
+.project-workspace-title__count{margin-left:auto;padding:6px 11px;border:1px solid #e3e8ef;border-radius:7px;font-size:12px;background:#fff;color:#64748b}
+.project-tree-page__header{padding:14px 16px;gap:16px;background:#fff;border:1px solid #e5e9f0;border-radius:12px;margin-bottom:20px;flex-wrap:wrap}
+.project-tree-page__actions{flex:1;grid-template-columns:minmax(160px,240px) minmax(180px,1fr) auto}
+.project-memo-card{padding:22px;background:#fff;border:1px solid #e5e9f0;border-radius:14px;box-shadow:0 2px 6px #17203303}
+.project-memo-card__header{align-items:flex-start;flex-wrap:wrap;border-bottom:0;margin:0;padding:0}
+.project-memo-card__title{font-size:15px}
+.project-memo-card__actions{flex-wrap:wrap;gap:12px}
+.project-memo-card__meta{font-size:12px}
+.memo-section-heading{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:6px 0 10px}
+.memo-section-heading strong{font-size:12px;color:#475569;font-weight:600}
+.memo-section-heading strong span{margin-left:6px;padding:2px 7px;border-radius:5px;background:#f1f5f9;color:#64748b}
+.memo-section-heading small{font-size:11px;color:#94a3b8}
+.project-memos-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr));gap:8px;align-items:start}
+.memo-sticky-note{width:auto;min-width:0;border-radius:9px;box-shadow:none;border:1px solid #e5e9f0;border-left:3px solid var(--memo-accent);background:#fff;transition:border-color .18s,box-shadow .18s}
+.memo-sticky-note--green{--memo-accent:#34a77d}
+.memo-sticky-note--orange{--memo-accent:#d99b43}
+.memo-sticky-note--red{--memo-accent:#df7373}
+.memo-sticky-note--blue{--memo-accent:#7294d5}
+.memo-sticky-note:hover{transform:none;border-color:var(--memo-accent);box-shadow:0 3px 12px #17203308}
+.memo-sticky-note__view{display:grid;grid-template-columns:minmax(0,1fr) auto;width:auto;min-height:64px;padding:8px 10px;box-sizing:border-box;align-items:center;gap:4px 8px}
+.memo-sticky-note__content{display:contents}
+.memo-sticky-note .memo-sticky-note__text{grid-column:1/-1;min-width:0;font-size:12px;line-height:1.6;color:#334155;white-space:pre-wrap}
+.memo-sticky-note .memo-sticky-note__time{grid-column:1;grid-row:2;min-width:0;font-size:10px;color:#94a3b8;opacity:1}
+.memo-sticky-note__actions{grid-column:2;grid-row:2;margin:0;align-self:center;opacity:.55}
+.memo-sticky-note:focus-within .memo-sticky-note__actions,.memo-sticky-note:hover .memo-sticky-note__actions{opacity:1}
+.memo-sticky-note__edit{width:100%;box-sizing:border-box;min-width:0;flex-wrap:wrap;padding:8px 10px;gap:6px}
+.memo-sticky-note__input{min-width:0;flex:1 1 180px}
+.version-section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:28px 0 14px}
+.version-section-heading h2{font-size:15px;color:#334155;margin:0}
+.version-section-heading span{font-size:12px;color:#94a3b8}
+@media(max-width:900px){.project-tree-page{padding:16px}.project-tree-page__actions{width:100%;flex-basis:100%;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}.project-memo-card{padding:16px}}
+@media(max-width:600px){.project-tree-page__actions{grid-template-columns:minmax(0,1fr) auto}.project-tree-page__actions>.el-select{grid-column:1/-1}.project-workspace-title__count{display:none}.project-memo-card__actions{align-items:flex-start}.project-workspace-title h1{font-size:21px}}
+@media(prefers-reduced-motion:reduce){.memo-sticky-note{transition:none}}
 </style>

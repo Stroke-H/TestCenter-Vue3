@@ -7,7 +7,7 @@ export interface PermissionModule {
   key: string
   title: string
   description: string
-  group: '仪表盘' | '报告中心' | '系统设置'
+  group: '仪表盘' | '缺陷管理' | '报告中心' | '系统设置'
 }
 
 export interface UserPermissionRecord {
@@ -31,6 +31,12 @@ export const PERMISSION_MODULES: PermissionModule[] = [
   { key: 'dashboard.novel_reader.visible', title: '小说阅读器', description: '小说阅读器入口', group: '仪表盘' },
   { key: 'dashboard.video_player.visible', title: '视频播放器', description: '视频播放与摸鱼模式入口', group: '仪表盘' },
   { key: 'dashboard.feishu_assistant.visible', title: '飞书助手', description: '飞书助手入口', group: '仪表盘' },
+  { key: 'defects.visible', title: '查看缺陷', description: '查看缺陷管理入口和缺陷详情', group: '缺陷管理' },
+  { key: 'defects.create', title: '提交缺陷', description: '在平台提交新的缺陷', group: '缺陷管理' },
+  { key: 'defects.edit', title: '编辑缺陷', description: '编辑本人提交或负责的缺陷并上传附件', group: '缺陷管理' },
+  { key: 'defects.process', title: '处理缺陷', description: '确认、解决和重新激活缺陷', group: '缺陷管理' },
+  { key: 'defects.verify', title: '验证缺陷', description: '验证解决结果并关闭缺陷', group: '缺陷管理' },
+  { key: 'defects.manage', title: '缺陷管理员', description: '编辑全部缺陷并拥有完整管理能力', group: '缺陷管理' },
   { key: 'reports.test_reports.visible', title: '测试报告', description: '测试报告入口', group: '报告中心' },
   { key: 'reports.acceptance_reports.visible', title: '验收报告', description: '验收报告入口', group: '报告中心' },
   { key: 'reports.testcase_gen.visible', title: '用例报告', description: '用例报告入口', group: '报告中心' },
@@ -46,6 +52,7 @@ function defaultPermissions(username?: string) {
   defaults['dashboard.jungle.visible'] = false
   defaults['dashboard.novel_reader.visible'] = false
   defaults['dashboard.video_player.visible'] = false
+  defaults['defects.manage'] = isPermissionAdminUsername(username)
   defaults['settings.permissions.visible'] = isPermissionAdminUsername(username)
   return defaults
 }
@@ -72,7 +79,7 @@ export const usePermissionStore = defineStore('permissions', () => {
   })
 
   const groupedModules = computed(() => {
-    return ['仪表盘', '报告中心', '系统设置'].map((group) => ({
+    return ['仪表盘', '缺陷管理', '报告中心', '系统设置'].map((group) => ({
       group,
       items: PERMISSION_MODULES.filter((item) => item.group === group)
     }))

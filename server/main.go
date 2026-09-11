@@ -33,6 +33,9 @@ func main() {
 	// API Routes
 	services.StartMatchmaker() // Start the matching worker
 	api := r.Group("/api")
+	if err := services.RegisterTTminsLogsRoutes(r, api); err != nil {
+		log.Fatalf("[TTminsLogs] initialize assets failed: %v", err)
+	}
 	{
 		// WebSocket endpoint for streaming K6 execution
 		api.GET("/ws/k6", services.RunK6TestHandler)
@@ -55,8 +58,28 @@ func main() {
 		// Generic HTTP proxy to avoid CORS for external APIs
 		api.POST("/proxy", services.ProxyHandler)
 
+		// GoFCM push test tool (Protected)
+		pushTest := api.Group("/push-test")
+		pushTest.Use(func(c *gin.Context) {
+			_, err := services.CurrentUserFromRequest(c)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized: Invalid token"})
+				c.Abort()
+				return
+			}
+			c.Next()
+		})
+		{
+			pushTest.POST("/health", services.PushTestHealthHandler)
+			pushTest.POST("/execute", services.PushTestExecuteHandler)
+			pushTest.POST("/stats", services.PushTestStatsHandler)
+		}
+
 		// System Configuration
 		services.InitConfigService()
+		if err := services.InitDefectManagementService(); err != nil {
+			log.Printf("[DefectManagement] schema initialization deferred: %v", err)
+		}
 		configGroup := api.Group("/config")
 		{
 			configGroup.GET("/projects", services.GetProjectsHandler)
@@ -77,6 +100,30 @@ func main() {
 			configGroup.POST("/sandbox-accounts", services.SaveSandboxAccountHandler)
 			configGroup.DELETE("/sandbox-accounts/:id", services.DeleteSandboxAccountHandler)
 			configGroup.PUT("/sandbox-accounts/:id", services.UpdateSandboxAccountHandler)
+		}
+
+		// Native Defect Management (Protected and isolated from existing report flows)
+		defects := api.Group("/defects")
+		defects.Use(services.RequireDefectPermission("defects.visible"))
+		{
+			defects.GET("/meta", services.GetDefectMetaHandler)
+			defects.PUT("/versions/:project_code", services.RequireDefectPermission("defects.manage"), services.SaveDefectVersionsHandler)
+			defects.PUT("/testing-version/:project_code", services.UpdateDefectTestingVersionHandler)
+			defects.GET("/stats", services.GetDefectStatsHandler)
+			defects.POST("/batch", services.BatchDefectsHandler)
+			defects.GET("/fields", services.RequireDefectPermission("defects.manage"), services.ListDefectFieldsHandler)
+			defects.POST("/fields", services.RequireDefectPermission("defects.manage"), services.CreateDefectFieldHandler)
+			defects.PUT("/fields/:field_id", services.RequireDefectPermission("defects.manage"), services.UpdateDefectFieldHandler)
+			defects.GET("/project-permissions", services.RequireDefectPermission("defects.manage"), services.ListDefectProjectPermissionsHandler)
+			defects.PUT("/project-permissions/:project_code", services.RequireDefectPermission("defects.manage"), services.SaveDefectProjectPermissionHandler)
+			defects.GET("", services.ListDefectsHandler)
+			defects.POST("", services.RequireDefectPermission("defects.create"), services.CreateDefectHandler)
+			defects.GET("/:id", services.GetDefectHandler)
+			defects.PUT("/:id", services.RequireDefectPermission("defects.edit"), services.UpdateDefectHandler)
+			defects.POST("/:id/transition", services.TransitionDefectHandler)
+			defects.POST("/:id/comments", services.AddDefectCommentHandler)
+			defects.POST("/:id/attachments", services.RequireDefectPermission("defects.edit"), services.UploadDefectAttachmentHandler)
+			defects.GET("/:id/attachments/:attachment_id", services.DownloadDefectAttachmentHandler)
 		}
 
 		// Database Infrastructure

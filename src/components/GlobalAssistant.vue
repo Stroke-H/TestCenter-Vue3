@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
@@ -49,7 +49,7 @@ const isComposingInput = ref(false)
 const assistantMessages = ref<Message[]>([
   { role: 'assistant', text: '你好！我是你的智能助手，有什么可以帮你的吗？' }
 ])
-const assistantQuickEntryIds = ref<string[]>(getAssistantQuickEntryIds())
+const assistantQuickEntryIds = ref<string[]>(getAssistantQuickEntryIds(authStore.user?.id || ''))
 const messageContainer = ref<HTMLElement | null>(null)
 const fabContainer = ref<HTMLElement | null>(null)
 const fabPosition = ref({ top: 0, left: 0 })
@@ -277,7 +277,9 @@ const saveReport = async () => {
       })
     })
     if (res.ok) {
-      ElMessage.success('验收报告已成功入库！')
+      const saved = await res.json()
+      if (saved.version_sync_warning) ElMessage.warning(saved.version_sync_warning)
+      else ElMessage.success('验收报告已成功入库！')
       notifyAcceptanceReportsChanged()
       showReportDialog.value = false
     } else {
@@ -423,8 +425,10 @@ const getFabFanEntryStyle = (index: number, total: number) => {
 }
 
 const syncAssistantQuickEntries = () => {
-  assistantQuickEntryIds.value = getAssistantQuickEntryIds()
+  assistantQuickEntryIds.value = getAssistantQuickEntryIds(authStore.user?.id || '')
 }
+
+watch(() => authStore.user?.id, syncAssistantQuickEntries)
 
 const syncFabPositionWithinViewport = () => {
   const buttonWidth = 140

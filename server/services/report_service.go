@@ -1110,11 +1110,17 @@ func SaveAcceptanceReportHandler(c *gin.Context) {
 	if isNewReport {
 		queueAcceptanceReportConfigAnalysis(req)
 	}
+	versionSyncWarning := ""
+	if err := SyncAcceptanceProjectVersion(req.ProjectCode); err != nil {
+		versionSyncWarning = "验收报告已保存，但项目版本同步失败：" + err.Error()
+		log.Printf("[AcceptanceVersion] %s: %v", req.ProjectCode, err)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":             "Acceptance report saved successfully",
-		"config_ai_queued":    isNewReport,
-		"config_project_code": strings.TrimSpace(req.ProjectCode),
+		"message":              "Acceptance report saved successfully",
+		"version_sync_warning": versionSyncWarning,
+		"config_ai_queued":     isNewReport,
+		"config_project_code":  strings.TrimSpace(req.ProjectCode),
 	})
 }
 

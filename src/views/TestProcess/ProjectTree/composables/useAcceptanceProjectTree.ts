@@ -147,6 +147,7 @@ const loadProjectMemos = (): Record<string, ProjectMemoRecord> => {
         if (Array.isArray(val.items)) {
           migrated[key] = {
             items: val.items.map((item: any) => ({
+              ...item,
               id: item.id || `memo-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
               content: item.content || '',
               color: item.color || 'green',
@@ -159,6 +160,11 @@ const loadProjectMemos = (): Record<string, ProjectMemoRecord> => {
                   })).filter((historyItem: any) => normalizeText(historyItem.content))
                 : []
             })),
+            schema: val.schema,
+            current_version: val.current_version,
+            versions: val.versions || [],
+            warnings: val.warnings || [],
+            legacy_items: val.legacy_items || [],
             updatedAt: val.updatedAt || new Date().toISOString()
           }
         } else if (typeof val.content === 'string') {
@@ -194,6 +200,7 @@ const mergeProjectMemoRecords = (
 
   Object.entries(localRecords).forEach(([projectCode, localRecord]) => {
     const remoteRecord = merged[projectCode]
+    if (remoteRecord?.schema === 2) return
     if (!remoteRecord) {
       merged[projectCode] = localRecord
       migratedProjectCodes.push(projectCode)
@@ -218,66 +225,10 @@ const mergeProjectMemoRecords = (
   return { merged, migratedProjectCodes }
 }
 
-const isTTminsProject = (project: ProjectTreeNode) => {
-  const projectText = `${project.projectCode} ${project.projectName}`.toLowerCase()
-  return projectText.includes('ttmins')
-}
-
-const hasSameMemoItem = (items: ProjectMemoItem[], source: ProjectMemoItem) => {
-  const sourceContent = normalizeText(source.content)
-  if (!sourceContent) return true
-  return items.some((item) => normalizeText(item.content) === sourceContent && item.color === source.color)
-}
-
-const copyA1160MemosToTTminsProjects = (
-  projectTree: ProjectTreeNode[],
-  projectMemos: Record<string, ProjectMemoRecord>
-) => {
-  const sourceRecord = projectMemos.A1160
-  const sourceItems = (sourceRecord?.items || [])
-    .filter((item) => normalizeText(item.content))
-    .slice(0, 4)
-
-  if (!sourceItems.length) return projectMemos
-
-  const now = new Date().toISOString()
-  let changed = false
-  const next = { ...projectMemos }
-
-  projectTree
-    .filter((project) => project.projectCode !== 'A1160' && isTTminsProject(project))
-    .forEach((project) => {
-      const currentRecord = next[project.projectCode] || { items: [], updatedAt: '' }
-      const currentItems = currentRecord.items || []
-      const missingItems = sourceItems.filter((item) => !hasSameMemoItem(currentItems, item))
-
-      if (!missingItems.length) return
-
-      next[project.projectCode] = {
-        items: [
-          ...currentItems,
-          ...missingItems.map((item, index) => ({
-            id: `memo-${Date.now()}-${project.projectCode}-${index}-${Math.random().toString(36).substring(2, 8)}`,
-            content: item.content,
-            color: item.color,
-            updatedAt: now,
-            history: [],
-            kind: item.kind || (item.color === 'blue' ? 'ai' : 'manual'),
-            configKey: item.configKey,
-            sourceReportId: item.sourceReportId,
-            sourceHash: item.sourceHash
-          }))
-        ],
-        updatedAt: now
-      }
-      changed = true
-    })
-
-  return changed ? next : projectMemos
-}
 
 
 export function useAcceptanceProjectTree() {
+  const remoteMemoRevisions: Record<string, string> = {}
   const authStore = useAuthStore()
   const reports = shallowRef<AcceptanceReportRecord[]>([])
   const projectMemos = shallowRef<Record<string, ProjectMemoRecord>>(loadProjectMemos())
@@ -373,12 +324,21 @@ export function useAcceptanceProjectTree() {
         body: JSON.stringify({
           project_code: projectCode,
           items: targetRecord.items,
-          updated_at: targetRecord.updatedAt
+          updated_at: remoteMemoRevisions[projectCode] || ''
         })
       })
       if (!response.ok) {
+        if (response.status === 409) {
+          ElMessage.warning('项目配置已被更新，正在刷新，请核对后重新编辑')
+          await fetchProjectMemos()
+          return
+        }
         throw new Error(await response.text())
       }
+      const saved = await response.json()
+      remoteMemoRevisions[projectCode] = saved.updated_at || ''
+      projectMemos.value = { ...projectMemos.value, [projectCode]: { ...saved, items: saved.items || [], updatedAt: saved.updated_at } }
+      saveProjectMemos(projectMemos.value)
     } catch (error) {
       console.error('Failed to persist project config record', error)
       ElMessage.error('项目配置记录同步失败，请稍后重试')
@@ -400,6 +360,7 @@ export function useAcceptanceProjectTree() {
     }
 
     next[selectedProjectCode.value] = {
+      ...currentRecord,
       items: [...currentRecord.items, newItem],
       updatedAt: new Date().toISOString()
     }
@@ -426,6 +387,7 @@ export function useAcceptanceProjectTree() {
         return {
           ...item,
           ...updates,
+          ...(nextContent !== item.content ? {kind: 'manual' as const, feature: '', configKey: '', category: '', value: '', previousValue: '', evidence: '', sourceHash: ''} : {}),
           history: contentChanged
             ? [
                 ...(item.history || []),
@@ -443,6 +405,7 @@ export function useAcceptanceProjectTree() {
     })
 
     next[selectedProjectCode.value] = {
+      ...currentRecord,
       items: updatedItems,
       updatedAt: new Date().toISOString()
     }
@@ -469,6 +432,7 @@ export function useAcceptanceProjectTree() {
     currentItems.splice(targetIndex, 0, sourceItem)
 
     next[selectedProjectCode.value] = {
+      ...currentRecord,
       items: currentItems,
       updatedAt: new Date().toISOString()
     }
@@ -489,6 +453,7 @@ export function useAcceptanceProjectTree() {
 
     if (updatedItems.length > 0) {
       next[selectedProjectCode.value] = {
+        ...currentRecord,
         items: updatedItems,
         updatedAt: new Date().toISOString()
       }
@@ -530,6 +495,7 @@ export function useAcceptanceProjectTree() {
       }
 
       next[projectCode] = {
+        ...currentRecord,
         items: [...(currentRecord.items || []), newItem],
         updatedAt: now
       }
@@ -562,9 +528,15 @@ export function useAcceptanceProjectTree() {
           const projectCode = normalizeText(record?.project_code)
           if (!projectCode) return
           remoteRecords[projectCode] = {
+            schema: record.schema,
+            current_version: record.current_version,
+            versions: record.versions || [],
+            warnings: record.warnings || [],
+            legacy_items: record.legacy_items || [],
             items: Array.isArray(record.items) ? record.items : [],
             updatedAt: record.updated_at || new Date().toISOString()
           }
+          remoteMemoRevisions[projectCode] = record.updated_at || ''
         })
       }
 
@@ -599,11 +571,6 @@ export function useAcceptanceProjectTree() {
       reports.value = Array.isArray(data) ? data : []
       void fetchProjectMemos()
       const nextProjectTree = buildProjectTree(reports.value)
-      const syncedProjectMemos = copyA1160MemosToTTminsProjects(nextProjectTree, projectMemos.value)
-      if (syncedProjectMemos !== projectMemos.value) {
-        projectMemos.value = syncedProjectMemos
-        saveProjectMemos(syncedProjectMemos)
-      }
       if (!nextProjectTree.some((project) => project.projectCode === selectedProjectCode.value)) {
         selectedProjectCode.value = nextProjectTree[0]?.projectCode || ''
       }

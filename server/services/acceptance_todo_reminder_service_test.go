@@ -82,6 +82,36 @@ func TestShouldSendAcceptanceTodoReminderOncePerDay(t *testing.T) {
 	}
 }
 
+func TestAcceptanceTodoReminderDailyWindow(t *testing.T) {
+	loc := acceptanceTodoLocation()
+	due := time.Date(2026, time.September, 2, 10, 0, 0, 0, loc)
+	yesterday := time.Date(2026, time.September, 9, 10, 0, 0, 0, loc)
+	today := time.Date(2026, time.September, 10, 10, 0, 0, 0, loc)
+	for _, test := range []struct {
+		name string
+		now  time.Time
+		last *time.Time
+		want bool
+	}{
+		{"midnight repeat", today.Add(-10 * time.Hour), &yesterday, false},
+		{"before ten repeat", today.Add(-time.Second), &yesterday, false},
+		{"at ten repeat", today, &yesterday, true},
+		{"late recovery", today.Add(6 * time.Hour), &yesterday, true},
+		{"same day duplicate", today.Add(time.Hour), &today, false},
+		{"overdue first notification before ten", today.Add(-time.Hour), nil, false},
+		{"overdue first notification at ten", today, nil, true},
+		{"UTC before Shanghai ten", today.Add(-time.Second).UTC(), &yesterday, false},
+		{"UTC at Shanghai ten", today.UTC(), &yesterday, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reminder := AcceptanceTodoReminder{Status: acceptanceTodoStatusPending, DueAt: due, LastNotifiedAt: test.last}
+			if got := shouldSendAcceptanceTodoReminder(reminder, test.now); got != test.want {
+				t.Fatalf("shouldSendAcceptanceTodoReminder() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestBuildAcceptanceTodoReminderCard(t *testing.T) {
 	reminder := AcceptanceTodoReminder{
 		ID:           "todo-1",

@@ -615,7 +615,9 @@ const saveReport = async () => {
       throw new Error(data?.error || 'Save failed')
     }
 
-    ElMessage.success(isEditMode ? '验收报告修改成功' : '验收报告创建成功')
+    const saved = await res.json()
+    if (saved.version_sync_warning) ElMessage.warning(saved.version_sync_warning)
+    else ElMessage.success(isEditMode ? '验收报告修改成功' : '验收报告创建成功')
     notifyAcceptanceReportsChanged()
     previewVisible.value = false
     previewMode.value = 'view'

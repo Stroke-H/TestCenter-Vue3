@@ -91,7 +91,7 @@ const configRecords = computed<ProjectConfigRecord[]>(() => {
     .map(([projectCode, record]) => ({
       projectCode,
       projectName: projectNames.get(projectCode) || '未命名项目',
-      items: [...(record.items || [])].sort((left, right) => (
+      items: [...(record.items || [])].filter(item => !item.removed).sort((left, right) => (
         Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
       ))
     }))
@@ -117,6 +117,8 @@ const summarizeTagLabel = (value: string) => {
 }
 
 const getItemTags = (item: ProjectMemoItem): ConfigTag[] => {
+  if (item.category) return [{ key: `category:${item.category}`, label: item.category }]
+  if (item.kind !== 'ai' && !item.feature) return [{ key: 'manual-notes', label: '人工便签（未分类）' }]
   const source = `${item.configKey || ''} ${item.content || ''}`
     .toLowerCase()
     .replace(/\s+/g, '')
@@ -837,4 +839,18 @@ watch(tagGroups, (groups) => {
     justify-content: space-between;
   }
 }
+.config-dialog__heading{align-items:flex-start}
+.config-dialog__title-row{display:flex;flex-direction:column;align-items:stretch;gap:16px}
+.config-dialog__tags{flex:none;flex-wrap:wrap;gap:8px;padding:12px;background:#f8fafc;border:1px solid #e8edf3;border-radius:10px;max-height:160px;overflow-y:auto}
+.config-tag{background:#fff;border-radius:7px;padding:7px 10px;max-width:100%;line-height:1.4;white-space:normal;align-items:center}
+.config-tag span{overflow-wrap:anywhere}
+.config-tag strong{flex-shrink:0}
+.config-tag--active{background:#edf3ff;border-color:#b9cbee;color:#315ab2;box-shadow:none}
+.config-tag:hover{transform:none}
+.config-dialog__summary{margin-top:12px;color:#8490a1}
+.config-project{border:1px solid #e5e9f0;border-radius:12px;box-shadow:none}
+.config-project__records{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(270px,100%),1fr));gap:10px}
+.config-record{width:auto;min-width:0;box-shadow:none;border-radius:8px}
+.config-record__content{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
+:global(.project-config-records-dialog.el-dialog){border-radius:16px}
 </style>

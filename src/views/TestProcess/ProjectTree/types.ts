@@ -29,6 +29,16 @@ export interface ProjectTreeNode {
 }
 
 export interface ProjectMemoItem {
+  feature?: string
+  audience?: string
+  platform?: string
+  variant?: string
+  value?: string
+  previousValue?: string
+  category?: string
+  version?: string
+  evidence?: string
+  removed?: boolean
   id: string
   content: string
   color: ProjectMemoColor
@@ -49,6 +59,18 @@ export interface ProjectMemoHistoryItem {
 }
 
 export interface ProjectMemoRecord {
+  schema?: number
+  current_version?: string
+  versions?: ProjectConfigVersion[]
+  warnings?: string[]
+  legacy_items?: ProjectMemoItem[]
   items: ProjectMemoItem[]
   updatedAt: string
+}
+
+export interface ProjectConfigVersion {
+  version: string
+  submittedAt: string
+  reportId: string
+  items: ProjectMemoItem[]
 }

@@ -33,6 +33,7 @@ const authStore = useAuthStore()
 const permissionStore = usePermissionStore()
 
 import GlobalAssistant from '@/components/GlobalAssistant.vue'
+import DefectIcon from '@/components/icons/DefectIcon.vue'
 import VideoPlayerFloat from '@/components/VideoPlayerFloat.vue'
 import FishReaderFloat from '@/views/NovelReader/components/FishReaderFloat.vue'
 
@@ -65,6 +66,7 @@ function canDisplayMenuItem(item: MenuItem) {
 const menuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [
     { path: '/dashboard', title: '仪表盘', icon: Odometer },
+    { path: '/defects', title: '缺陷管理', icon: DefectIcon, permissionKey: 'defects.visible' },
     {
       path: '/report_center',
       title: '报告中心',
@@ -84,7 +86,7 @@ const menuItems = computed<MenuItem[]>(() => {
         { path: '/settings/projects', title: '项目代码', icon: Collection },
         { path: '/settings/devices', title: '测试设备', icon: Iphone },
         { path: '/settings/accounts', title: '账号管理', icon: UserMenuIcon },
-        { path: '/settings/permissions', title: '权限管理', icon: Lock, permissionKey: 'settings.permissions.visible', adminOnly: true }
+        { path: '/settings/permissions', title: '权限管理', icon: Lock }
       ]
     }
   ]

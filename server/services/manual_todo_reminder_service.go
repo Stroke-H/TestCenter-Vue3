@@ -197,6 +197,10 @@ func runDueManualTodoReminders(now time.Time) error {
 		return err
 	}
 	for _, reminder := range reminders {
+		// 未绑定飞书时仅保留平台待办；完成绑定后由后续调度自动发送。
+		if resolveExactFeishuOpenID(reminder.OwnerUsername) == "" {
+			continue
+		}
 		if err := sendManualTodoReminder(reminder, now); err != nil {
 			// Keep notification_count at zero so the next minute can retry.
 			log.Printf("[ManualTodo] reminder for %s send failed: %v", reminder.OwnerUsername, err)

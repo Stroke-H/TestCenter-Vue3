@@ -47,8 +47,10 @@ const TOKEN = config.auth.x_token;
 const API_BASE = config.apiBase || "http://35.225.224.94:8080";
 const DS_EXCLUSIVE_GROUP_NAME = 'TT-Minis 分销组';
 const MD_PRODUCT_GROUP_NAME = 'MD-产品组';
-const AD_UNLOCK_ALLOWED_GROUP_NAMES = ['IAA组', '漫剧产品组-IAA', 'AIGC组', '内容二组-觉醒纪元', DS_EXCLUSIVE_GROUP_NAME];
-const SUPPORTED_UNLOCK_TYPES = ['coin', 'ad'];
+const NEW_AD_UNLOCK_GROUP_NAMES = ['网赚短剧', 'TT_IAA_媒资库组'];
+const COIN_UNLOCK_GROUP_NAME = 'TT_IAP_媒资库组';
+const AD_UNLOCK_ALLOWED_GROUP_NAMES = ['IAA组', '漫剧产品组-IAA', 'AIGC组', '内容二组-觉醒纪元', DS_EXCLUSIVE_GROUP_NAME, ...NEW_AD_UNLOCK_GROUP_NAMES];
+const SUPPORTED_UNLOCK_TYPES = ['coin', 'coins', 'ad'];
 const DUBBING_MARKETING_POSITION = '配音剧';
 const CLASSIFICATION_CHECK_START_DATE = '2026-06-01';
 const DUBBING_LANGUAGE_PREFIXES = [
@@ -66,6 +68,7 @@ const DUBBING_LANGUAGE_PREFIXES = [
 const CANONICAL_RULE_GROUP_NAMES = Array.from(new Set([
     ...AD_UNLOCK_ALLOWED_GROUP_NAMES,
     MD_PRODUCT_GROUP_NAME,
+    COIN_UNLOCK_GROUP_NAME,
 ]));
 
 // ---------- 3. 动态负载逻辑 ----------
@@ -361,7 +364,7 @@ function buildUnlockTypeRuleErrors(dramaId, includeAppGroupMetadataError) {
         });
     }
 
-    if (unlockType === 'coin' && (cnNameHasIAA || groupHasIAA)) {
+    if (['coin', 'coins'].includes(unlockType) && (cnNameHasIAA || groupHasIAA)) {
         errors.push({
             type: 'unlock',
             msg: `[解锁类型] unlock_type=coin，但 cn_name 或 App Group 命中 IAA。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`,
@@ -383,6 +386,20 @@ function buildUnlockTypeRuleErrors(dramaId, includeAppGroupMetadataError) {
         });
     }
 
+    // 新组独立校验，避免多分组中的广告白名单或 DS 分支绕过要求。
+    // 空值和未知值仍由已有二次确认流程处理。
+    if (groupMetadataAvailable && SUPPORTED_UNLOCK_TYPES.includes(unlockType)) {
+        const newAdGroups = groupNames.filter(name => NEW_AD_UNLOCK_GROUP_NAMES.some(canonical => matchesCanonicalGroupName(name, canonical)));
+        if (newAdGroups.length > 0 && unlockType !== 'ad' && !(cnNameHasIAA || groupHasIAA)) {
+            errors.push({ type: 'unlock', msg: `[解锁类型] App Group 命中 ${newAdGroups.join('、')}，要求 unlock_type=ad，实际=${meta.unlockType}。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`, count: 1 });
+        }
+        if (unlockType === 'ad' && groupNames.some(name => matchesCanonicalGroupName(name, COIN_UNLOCK_GROUP_NAME))) {
+            // 使用明确的付费组错误替代本次通用广告分组错误，避免重复上报。
+            const genericIndex = errors.findIndex(error => error.type === 'unlock' && error.msg.includes('App Group 未命中允许的广告解锁分组'));
+            if (genericIndex >= 0) errors.splice(genericIndex, 1);
+            errors.push({ type: 'unlock', msg: `[解锁类型] App Group 命中 ${COIN_UNLOCK_GROUP_NAME}，要求 unlock_type=coins（兼容 coin），实际=${meta.unlockType}。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`, count: 1 });
+        }
+    }
     return errors;
 }
 
@@ -487,6 +504,10 @@ function buildNamingRuleErrors(meta, groupNames) {
 }
 
 function matchesCanonicalGroupName(value, canonicalName) {
+    if (NEW_AD_UNLOCK_GROUP_NAMES.includes(canonicalName) || canonicalName === COIN_UNLOCK_GROUP_NAME) {
+        // IAA 与 IAP 只差一个字母，必须在完整名单中优先选最接近的标准组。
+        return findClosestCanonicalGroupName(value, CANONICAL_RULE_GROUP_NAMES) === canonicalName;
+    }
     return findClosestCanonicalGroupName(value, [canonicalName]) === canonicalName;
 }
 

@@ -103,7 +103,14 @@ func ensureAcceptanceTodoReminderTable() error {
 	return err
 }
 
+func acceptanceTodoReporterEnabled(reporter string) bool {
+	return strings.EqualFold(strings.TrimSpace(reporter), "minghong")
+}
+
 func QueueAcceptanceTodoReminder(report AcceptanceReport) error {
+	if !acceptanceTodoReporterEnabled(report.Reporter) {
+		return nil
+	}
 	projectName := resolveAcceptanceTodoProjectName(report.ProjectCode, report.ProjectName)
 	if !isTTminsProjectText(report.ProjectCode, projectName) {
 		return nil
@@ -242,6 +249,14 @@ func runDueAcceptanceTodoReminders(now time.Time) {
 		log.Printf("[AcceptanceTodo] load due reminders failed: %v", err)
 	} else {
 		for _, group := range groupAcceptanceTodoRemindersByReporter(reminders) {
+			if !acceptanceTodoReporterEnabled(group[0].Reporter) {
+				continue
+			}
+			// 未绑定飞书的用户只保留平台待办，不发起卡片请求，也不记录发送失败。
+			// 待用户完成绑定后，后续调度会自动重新识别并发送仍处于 pending 的待办。
+			if resolveExactFeishuOpenID(group[0].Reporter) == "" {
+				continue
+			}
 			if err := sendAcceptanceTodoReminderGroup(group, now); err != nil {
 				log.Printf("[AcceptanceTodo] reminder group for %s send failed: %v", group[0].Reporter, err)
 			}
@@ -351,12 +366,16 @@ func shouldSendAcceptanceTodoReminder(reminder AcceptanceTodoReminder, now time.
 	if reminder.Status != acceptanceTodoStatusPending || reminder.DueAt.After(now) {
 		return false
 	}
+	loc := acceptanceTodoLocation()
+	current := now.In(loc)
+	// Overdue reminders also wait until the daily reminder hour, not midnight.
+	if current.Hour() < acceptanceTodoReminderHour {
+		return false
+	}
 	if reminder.LastNotifiedAt == nil {
 		return true
 	}
-	loc := acceptanceTodoLocation()
 	last := reminder.LastNotifiedAt.In(loc)
-	current := now.In(loc)
 	return last.Year() != current.Year() || last.YearDay() != current.YearDay()
 }
 
@@ -369,6 +388,9 @@ func sendAcceptanceTodoReminderGroup(reminders []AcceptanceTodoReminder, now tim
 		return fmt.Errorf("acceptance reminder group is empty")
 	}
 	reporter := strings.TrimSpace(reminders[0].Reporter)
+	if !acceptanceTodoReporterEnabled(reporter) {
+		return fmt.Errorf("acceptance todo reminders are only enabled for minghong")
+	}
 	for _, reminder := range reminders {
 		if !strings.EqualFold(strings.TrimSpace(reminder.Reporter), reporter) {
 			return fmt.Errorf("acceptance reminder group contains multiple operators")

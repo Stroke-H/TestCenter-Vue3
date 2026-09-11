@@ -30,10 +30,28 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '仪表盘', icon: 'Odometer' }
       },
       {
+        path: 'defects',
+        name: 'DefectManagement',
+        component: () => import('@/views/DefectManagement/index.vue'),
+        meta: { title: '缺陷管理', icon: 'WarningFilled', permissionKey: 'defects.visible' }
+      },
+      {
         path: 'com_api_commit',
         name: 'ComApiCommit',
         component: () => import('@/views/ComApiCommit/index.vue'),
         meta: { title: '执行测试', icon: 'VideoPlay', permissionKey: 'dashboard.com_api_commit.visible' }
+      },
+      {
+        path: 'push_test',
+        name: 'PushTest',
+        component: () => import('@/views/PushTest/index.vue'),
+        meta: { title: '推送测试', hidden: true, permissionKey: 'dashboard.com_api_commit.visible' }
+      },
+      {
+        path: 'ttmins_logs',
+        name: 'TTminsLogs',
+        component: () => import('@/views/TTminsLogs/index.vue'),
+        meta: { title: 'TTmins日志', hidden: true, permissionKey: 'dashboard.com_api_commit.visible' }
       },
       {
         path: 'reports',
@@ -198,7 +216,7 @@ if (settingsRoute && settingsRoute.children) {
     path: 'permissions',
     name: 'PermissionManagement',
     component: () => import('@/views/Settings/PermissionManagement.vue'),
-    meta: { title: '权限管理', icon: 'Lock', permissionKey: 'settings.permissions.visible', adminOnly: true }
+    meta: { title: '权限管理', icon: 'Lock' }
   })
 }
 

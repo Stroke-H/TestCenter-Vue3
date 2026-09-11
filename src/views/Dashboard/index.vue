@@ -40,6 +40,14 @@ const recentTools = ref<RecentTool[]>([])
 const projectTreeDescription = '项目记录，快速查看测试时间与需求点'
 
 const normalizeRecentTool = (tool: RecentTool): RecentTool => {
+  if (tool.id === 'push-test' || tool.name === '推送测试') {
+    return {
+      ...tool,
+      id: 'push-test',
+      path: '/push_test',
+      permissionKey: 'dashboard.com_api_commit.visible'
+    }
+  }
   if (tool.id !== 'acceptance-project-tree' && tool.name !== '验收项目树') {
     return tool
   }
@@ -170,7 +178,20 @@ const apiTools = ref<ToolDef[]>([
     iconName: 'Promotion',
     iconColor: '#f59e0b',
     iconBg: 'rgba(245, 158, 11, 0.1)',
-    statusIndicator: 'on-hold'
+    path: '/push_test',
+    permissionKey: 'dashboard.com_api_commit.visible',
+    statusIndicator: 'ready'
+  },
+  {
+    id: 'ttmins-logs',
+    name: 'TTmins日志',
+    description: '连接 TikTok 小程序，实时查看 Console 与网络调试信息',
+    iconName: 'DataLine',
+    iconColor: '#06b6d4',
+    iconBg: 'rgba(6, 182, 212, 0.11)',
+    path: '/ttmins_logs',
+    permissionKey: 'dashboard.com_api_commit.visible',
+    statusIndicator: 'ready'
   },
   {
     id: 'rest-client',

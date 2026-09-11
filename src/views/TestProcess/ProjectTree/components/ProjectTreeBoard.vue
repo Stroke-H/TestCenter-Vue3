@@ -147,13 +147,10 @@ watch(
 
       <div class="version-tree">
         <article
-          v-for="(version, index) in project.versions"
+          v-for="version in project.versions"
           :key="`${project.projectCode}-${version.version}`"
           class="version-node"
-          :class="index % 2 === 0 ? 'version-node--left' : 'version-node--right'"
         >
-          <div class="version-node__spacer" />
-
           <div class="version-node__marker">
             <el-icon><CollectionTag /></el-icon>
           </div>
@@ -197,6 +194,7 @@ watch(
                   :aria-label="isReportExpanded(report.id) ? '收起内容' : '展开内容'"
                   @click="toggleReportExpanded(report.id)"
                 >
+                  <span>{{ isReportExpanded(report.id) ? '收起' : '展开' }}</span>
                   <span class="report-row__toggle-icon" />
                 </button>
               </div>
@@ -617,4 +615,49 @@ watch(
     margin-top: 2px;
   }
 }
+.project-card{border-color:#e5e9f0;border-radius:14px;box-shadow:none}
+.project-card:hover{box-shadow:none}
+.project-card__name{font-size:18px;font-weight:600}
+.project-card__code{border:1px solid #e1e7f0;background:#f8fafc;color:#536681}
+.version-node__body{box-shadow:none;border-radius:10px;background:#fff}
+.version-node__body:hover{transform:none;box-shadow:0 3px 12px #17203306}
+.version-node__marker{border-color:#8da7d4;color:#6185bf;box-shadow:0 0 0 4px #f3f6fb}
+.version-node__title{letter-spacing:-.3px}
+.report-row__time{font-variant-numeric:tabular-nums}
+/* One reading direction: release rail and full-width acceptance records. */
+.project-card{padding:24px 28px}
+.project-card__header{margin-bottom:8px}
+.project-card__header>div:first-child{display:flex;align-items:center;gap:12px;min-width:0}
+.project-card__name{margin:0;overflow-wrap:anywhere;font-size:16px}
+.project-card__meta :deep(.el-tag){background:#f3f5f8;color:#64748b;border-radius:6px;font-size:11px}
+.version-tree{gap:0;padding:20px 0 0}
+.version-tree::before{left:14px;top:35px;bottom:36px;width:1px;transform:none;background:#e0e7ef}
+.version-node{grid-template-columns:30px minmax(0,1fr);gap:18px;padding-bottom:24px}
+.version-node+.version-node{margin-top:0}
+.version-node:last-child{padding-bottom:0}
+.version-node__marker{grid-column:1;grid-row:1;width:26px;height:26px;margin-top:17px;border:1px solid #d4deed;background:#f8fafc;color:#7891b7;box-shadow:0 0 0 5px #fff}
+.version-node:hover .version-node__marker{background:#edf3ff;color:#4269ae;border-color:#b7c9e6;box-shadow:0 0 0 5px #fff}
+.version-node__body{grid-column:2;grid-row:1;padding:0;min-width:0;overflow:hidden;border:1px solid #e3e9f1;border-radius:12px;background:#fff;box-shadow:0 2px 4px #0f172a02}
+.version-node__body::before{display:none}
+.version-node__body:hover{transform:none;border-color:#cbd7e7;box-shadow:0 4px 16px #0f172a04}
+.version-node__header{margin:0;padding:16px 20px;border-bottom:1px solid #e9edf4;background:#f8fafc;gap:12px;flex-wrap:wrap}
+.version-node__header>div:first-child{display:flex;align-items:center;gap:10px}
+.version-node__label{margin:0;padding:3px 7px;border:1px solid #e1e7f0;border-radius:5px;background:#fff;font-size:10px;color:#8190a5;letter-spacing:0}
+.version-node__title{font-size:17px;font-weight:650;color:#243752;overflow-wrap:anywhere}
+.version-node__summary{flex-wrap:wrap;gap:8px;font-size:11px;color:#8a97aa;margin:0}
+.version-node__summary>span:last-child{padding-left:10px;margin-left:4px;border-left:1px solid #dce3ec;color:#52677f}
+.report-list{gap:0;padding:0 20px}
+.report-row,.report-row--toggleable{box-sizing:border-box;grid-template-columns:155px minmax(0,1fr) 64px;gap:20px;padding:17px 0;min-height:68px;border:0;border-bottom:1px solid #eef1f6;border-radius:0;background:#fff}
+.report-row:last-child{border-bottom:0}
+.report-row:hover{background:#fbfcfe;border-color:#eef1f6}
+.report-row__time{font-size:11px;color:#8190a5;white-space:normal;line-height:1.8;align-items:flex-start}
+.report-row__time :deep(.el-icon){margin-top:4px;flex-shrink:0}
+.report-row__requirements{font-size:13px;line-height:1.85;color:#475569;min-width:0}
+.report-row__toggle{width:60px;height:28px;gap:7px;border:0;border-radius:6px;background:#f3f6fb;font-size:11px;color:#58749e;align-self:start;margin-top:2px}
+.report-row__toggle:focus-visible{outline:2px solid #648ac6;outline-offset:3px}
+.report-row__toggle-icon{position:static;transform:rotate(45deg);width:5px;height:5px;margin-top:-3px}
+.report-row__toggle--expanded .report-row__toggle-icon{transform:rotate(225deg);margin-top:3px}
+@media(max-width:1000px){.report-row,.report-row--toggleable{grid-template-columns:125px minmax(0,1fr) 60px;gap:12px}.version-node__header{align-items:flex-start}}
+@media(max-width:600px){.project-card{padding:16px}.project-card__header>div:first-child{flex-wrap:wrap}.version-node{grid-template-columns:20px minmax(0,1fr);gap:10px}.version-tree::before{left:9px}.version-node__marker{width:18px;height:18px;margin-top:20px}.version-node__marker :deep(.el-icon){font-size:10px}.version-node__header{padding:13px}.report-list{padding:0 13px}.report-row,.report-row--toggleable{grid-template-columns:minmax(0,1fr) 60px;gap:8px}.report-row__time{grid-column:1;grid-row:1}.report-row__requirements{grid-column:1/-1;grid-row:2}.report-row__toggle{grid-column:2;grid-row:1;margin:0}.version-node__summary{line-height:1.7}}
+@media(prefers-reduced-motion:reduce){.version-node__body,.version-node__marker,.report-row{transition:none}}
 </style>

@@ -101,11 +101,7 @@ export const ASSISTANT_QUICK_ENTRIES: AssistantQuickEntry[] = [
     iconName: 'Promotion',
     iconColor: '#f59e0b',
     iconBg: 'rgba(245, 158, 11, 0.1)',
-    path: '/com_api_commit',
-    query: {
-      name: '推送测试',
-      desc: '测试应用推送功能'
-    },
+    path: '/push_test',
     permissionKey: 'dashboard.com_api_commit.visible',
     group: 'API 工具'
   },
@@ -311,23 +307,23 @@ export const ASSISTANT_QUICK_ENTRIES: AssistantQuickEntry[] = [
   }
 ]
 
-export function getAssistantQuickEntryIds() {
+export function getAssistantQuickEntryIds(userId: string) {
   try {
-    const raw = localStorage.getItem(ASSISTANT_QUICK_ENTRY_STORAGE_KEY)
+    const raw = localStorage.getItem(`${ASSISTANT_QUICK_ENTRY_STORAGE_KEY}:${userId}`)
     const ids = raw ? JSON.parse(raw) : DEFAULT_ASSISTANT_QUICK_ENTRY_IDS
     if (!Array.isArray(ids)) return DEFAULT_ASSISTANT_QUICK_ENTRY_IDS
     const validIds = new Set(ASSISTANT_QUICK_ENTRIES.map((entry) => entry.id))
     const normalized = ids.filter((id): id is string => typeof id === 'string' && validIds.has(id))
-    return normalized.length ? normalized.slice(0, ASSISTANT_QUICK_ENTRY_LIMIT) : DEFAULT_ASSISTANT_QUICK_ENTRY_IDS
+    return [...new Set(normalized)].slice(0, ASSISTANT_QUICK_ENTRY_LIMIT)
   } catch {
     return DEFAULT_ASSISTANT_QUICK_ENTRY_IDS
   }
 }
 
-export function saveAssistantQuickEntryIds(ids: string[]) {
+export function saveAssistantQuickEntryIds(ids: string[], userId: string) {
   const validIds = new Set(ASSISTANT_QUICK_ENTRIES.map((entry) => entry.id))
-  const nextIds = ids.filter((id) => validIds.has(id)).slice(0, ASSISTANT_QUICK_ENTRY_LIMIT)
-  localStorage.setItem(ASSISTANT_QUICK_ENTRY_STORAGE_KEY, JSON.stringify(nextIds))
+  const nextIds = [...new Set(ids)].filter((id) => validIds.has(id)).slice(0, ASSISTANT_QUICK_ENTRY_LIMIT)
+  localStorage.setItem(`${ASSISTANT_QUICK_ENTRY_STORAGE_KEY}:${userId}`, JSON.stringify(nextIds))
   window.dispatchEvent(new CustomEvent(ASSISTANT_QUICK_ENTRY_CHANGED_EVENT, { detail: nextIds }))
 }
 

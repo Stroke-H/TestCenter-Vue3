@@ -1,221 +1,103 @@
 <script setup lang="ts">
-import { computed, onMounted, shallowRef } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, ref, watch } from 'vue'
 import * as Icons from '@element-plus/icons-vue'
-import { Refresh, Lock, User } from '@element-plus/icons-vue'
-import { PERMISSION_MODULES, usePermissionStore } from '@/stores/modules/permissions'
-import {
-  ASSISTANT_QUICK_ENTRIES,
-  ASSISTANT_QUICK_ENTRY_LIMIT,
-  getAssistantQuickEntryIds,
-  saveAssistantQuickEntryIds
-} from '@/config/assistantQuickEntries'
+import { ElMessage } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
+import { usePermissionStore } from '@/stores/modules/permissions'
+import DashboardPermissionPanel from './DashboardPermissionPanel.vue'
+import DefectFieldConfig from '@/views/DefectManagement/components/DefectFieldConfig.vue'
+import DefectProjectPermissions from '@/views/DefectManagement/components/DefectProjectPermissions.vue'
+import { defectApi } from '@/views/DefectManagement/api'
+import type { DefectMeta } from '@/views/DefectManagement/types'
+import { ASSISTANT_QUICK_ENTRIES, ASSISTANT_QUICK_ENTRY_LIMIT, getAssistantQuickEntryIds, saveAssistantQuickEntryIds, ASSISTANT_QUICK_ENTRY_CHANGED_EVENT } from '@/config/assistantQuickEntries'
+import { onMounted, onBeforeUnmount } from 'vue'
 
 defineOptions({ name: 'PermissionManagement' })
-
+const auth = useAuthStore()
 const permissionStore = usePermissionStore()
-const loading = shallowRef(false)
-const selectedUserId = shallowRef('')
-const draftPermissions = shallowRef<Record<string, boolean>>({})
-const savingPermissionKey = shallowRef('')
-const selectedQuickEntryIds = shallowRef<string[]>(getAssistantQuickEntryIds())
-
-const users = computed(() => permissionStore.permissionList)
-const selectedUser = computed(() => {
-  return users.value.find((item) => item.user_id === selectedUserId.value) || null
-})
-const groupedModules = computed(() => {
-  return ['仪表盘', '报告中心', '系统设置'].map((group) => ({
-    group,
-    items: PERMISSION_MODULES.filter((item) => item.group === group)
-  }))
-})
-const selectedUserIsPermissionAdmin = computed(() => selectedUser.value?.username?.trim().toLowerCase() === 'minghong')
-const groupedQuickEntries = computed(() => {
-  const groupOrder = ['API 工具', '测试流程工具', 'UI 自动化', '性能测试', '其他拓展']
-  return groupOrder.map((group) => ({
-    group,
-    items: ASSISTANT_QUICK_ENTRIES.filter((entry) => entry.group === group)
-  })).filter((group) => group.items.length)
-})
-
-function syncDraftPermissions() {
-  draftPermissions.value = { ...(selectedUser.value?.permissions || {}) }
-}
-
-async function fetchData() {
-  loading.value = true
+const isAdmin = computed(() => permissionStore.isPermissionAdmin)
+type Tab = 'dashboard' | 'quick' | 'fields' | 'permissions'
+const activeTab = ref<Tab>(isAdmin.value ? 'dashboard' : 'quick')
+const tabs = computed(() => [
+  ...(isAdmin.value ? [{ id: 'dashboard' as Tab, label: '仪表盘管理', icon: Icons.Grid, detail: '用户与模块访问' }] : []),
+  { id: 'quick' as Tab, label: '快捷入口配置', icon: Icons.Lightning, detail: '我的常用工具' },
+  ...(isAdmin.value ? [
+    { id: 'fields' as Tab, label: '字段配置', icon: Icons.SetUp, detail: '缺陷自定义字段' },
+    { id: 'permissions' as Tab, label: '权限配置', icon: Icons.Key, detail: '缺陷项目权限' }
+  ] : [])
+])
+const selectedQuickEntryIds = ref<string[]>(getAssistantQuickEntryIds(auth.user?.id || ''))
+const groupedQuickEntries = computed(() => ['API 工具', '测试流程工具', 'UI 自动化', '性能测试', '其他拓展'].map(group => ({
+  group, items: ASSISTANT_QUICK_ENTRIES.filter(entry => entry.group === group)
+})).filter(group => group.items.length))
+const meta = ref<DefectMeta | null>(null)
+const metaLoading = ref(false)
+const metaError = ref(false)
+let metaRequest = 0
+async function loadMeta() {
+  if (!isAdmin.value) return
+  const request = ++metaRequest
+  metaLoading.value = true
+  metaError.value = false
   try {
-    await permissionStore.fetchPermissionList()
-    const firstUser = users.value[0]
-    if (!selectedUserId.value && firstUser) {
-      selectedUserId.value = firstUser.user_id
-    }
-    if (selectedUserId.value && !users.value.some((item) => item.user_id === selectedUserId.value)) {
-      selectedUserId.value = firstUser?.user_id || ''
-    }
-    syncDraftPermissions()
-  } finally {
-    loading.value = false
-  }
-}
-
-function selectUser(userId: string) {
-  selectedUserId.value = userId
-  syncDraftPermissions()
-}
-
-async function togglePermission(permissionKey: string) {
-  const user = selectedUser.value
-  if (!user || savingPermissionKey.value) {
-    return
-  }
-  if (selectedUserIsPermissionAdmin.value && permissionKey === 'settings.permissions.visible') {
-    return
-  }
-  const previousPermissions = { ...draftPermissions.value }
-  const nextPermissions = {
-    ...draftPermissions.value,
-    [permissionKey]: !(draftPermissions.value[permissionKey] !== false)
-  }
-  if (selectedUserIsPermissionAdmin.value) {
-    nextPermissions['settings.permissions.visible'] = true
-  }
-
-  savingPermissionKey.value = permissionKey
-  draftPermissions.value = {
-    ...nextPermissions
-  }
-
-  try {
-    await permissionStore.saveUserPermissions(user.user_id, nextPermissions)
-    ElMessage.success(`已更新 ${user.username} 的权限`)
-    if (selectedUserId.value === user.user_id) {
-      syncDraftPermissions()
-    }
+    const result = await defectApi.meta()
+    if (request === metaRequest && isAdmin.value) meta.value = result
   } catch {
-    draftPermissions.value = previousPermissions
-    ElMessage.error('权限更新失败，已恢复为修改前状态')
-  } finally {
-    if (savingPermissionKey.value === permissionKey) {
-      savingPermissionKey.value = ''
-    }
-  }
+    if (request === metaRequest) { metaError.value = true; ElMessage.error('缺陷配置加载失败，请重试') }
+  } finally { if (request === metaRequest) metaLoading.value = false }
 }
-
-async function resetCurrentUserPermissions() {
-  if (!selectedUser.value) return
-  try {
-    await ElMessageBox.confirm(`确认重置 ${selectedUser.value.username} 的权限吗？`, '重置权限', {
-      type: 'warning',
-      confirmButtonText: '重置',
-      cancelButtonText: '取消'
-    })
-    await permissionStore.resetUserPermissions(selectedUser.value.user_id)
-    ElMessage.success('已恢复默认权限')
-    await fetchData()
-  } catch {
-    // noop
-  }
+function syncQuickEntries() {
+  selectedQuickEntryIds.value = getAssistantQuickEntryIds(auth.user?.id || '')
 }
-
 function toggleQuickEntry(entryId: string) {
+  if (!auth.user?.id) return
   const exists = selectedQuickEntryIds.value.includes(entryId)
-  if (exists) {
-    selectedQuickEntryIds.value = selectedQuickEntryIds.value.filter((id) => id !== entryId)
-    saveAssistantQuickEntryIds(selectedQuickEntryIds.value)
-    ElMessage.success('已更新智能助手快捷入口')
-    return
-  }
-  if (selectedQuickEntryIds.value.length >= ASSISTANT_QUICK_ENTRY_LIMIT) {
+  if (!exists && selectedQuickEntryIds.value.length >= ASSISTANT_QUICK_ENTRY_LIMIT) {
     ElMessage.warning(`最多选择 ${ASSISTANT_QUICK_ENTRY_LIMIT} 个快捷入口`)
     return
   }
-  selectedQuickEntryIds.value = [...selectedQuickEntryIds.value, entryId]
-  saveAssistantQuickEntryIds(selectedQuickEntryIds.value)
-  ElMessage.success('已更新智能助手快捷入口')
+  const next = exists ? selectedQuickEntryIds.value.filter(id => id !== entryId) : [...selectedQuickEntryIds.value, entryId]
+  try {
+    saveAssistantQuickEntryIds(next, auth.user.id)
+    selectedQuickEntryIds.value = next
+    ElMessage.success('已保存我的快捷入口')
+  } catch { ElMessage.error('浏览器存储不可用，配置未保存') }
 }
-
-onMounted(fetchData)
+watch(() => auth.user?.id, () => {
+  ++metaRequest
+  meta.value = null
+  metaLoading.value = false
+  metaError.value = false
+  activeTab.value = isAdmin.value ? 'dashboard' : 'quick'
+  syncQuickEntries()
+})
+watch(activeTab, tab => {
+  if (!isAdmin.value && tab !== 'quick') { activeTab.value = 'quick'; return }
+  if ((tab === 'fields' || tab === 'permissions') && !meta.value) loadMeta()
+})
+onMounted(() => {
+  window.addEventListener(ASSISTANT_QUICK_ENTRY_CHANGED_EVENT, syncQuickEntries)
+  window.addEventListener('storage', syncQuickEntries)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener(ASSISTANT_QUICK_ENTRY_CHANGED_EVENT, syncQuickEntries)
+  window.removeEventListener('storage', syncQuickEntries)
+})
 </script>
 
 <template>
-  <main class="permission-page" v-loading="loading">
-    <header class="permission-page__header">
-      <div>
-        <p class="permission-page__eyebrow">仅管理员可见</p>
-        <h1>权限管理</h1>
-        <p class="permission-page__subtitle">管理用户可访问的仪表盘模块、报告入口和系统权限。</p>
-      </div>
-      <el-button :icon="Refresh" @click="fetchData">刷新</el-button>
-    </header>
-
-    <section class="permission-layout">
-      <aside class="permission-users">
-        <div class="permission-users__title">
-          <el-icon><User /></el-icon>
-          <span>用户列表</span>
-        </div>
-        <button
-          v-for="item in users"
-          :key="item.user_id"
-          type="button"
-          class="permission-user-card"
-          :class="{ 'is-active': item.user_id === selectedUserId }"
-          @click="selectUser(item.user_id)"
-        >
-          <strong>{{ item.username }}</strong>
+  <main class="settings-hub">
+    <header class="hub-heading"><span class="hub-heading__icon"><el-icon><Icons.Lock /></el-icon></span><div><h1>权限管理</h1><p>管理平台访问权限与个人快捷入口偏好</p></div></header>
+    <div class="hub-layout">
+      <nav class="hub-sidebar" aria-label="权限管理配置分类">
+        <button v-for="tab in tabs" :key="tab.id" :class="{ 'is-active': activeTab === tab.id }" :aria-current="activeTab === tab.id ? 'page' : undefined" @click="activeTab = tab.id">
+          <el-icon><component :is="tab.icon" /></el-icon><span><strong>{{ tab.label }}</strong><small>{{ tab.detail }}</small></span><el-icon class="nav-arrow"><Icons.ArrowRight /></el-icon>
         </button>
-      </aside>
-
-      <section class="permission-editor">
-        <template v-if="selectedUser">
-          <div class="permission-editor__top">
-            <div class="permission-editor__identity">
-              <el-icon><Lock /></el-icon>
-              <div>
-                <strong>{{ selectedUser.username }}</strong>
-                <span>按模块控制访问权限</span>
-              </div>
-            </div>
-            <div class="permission-editor__actions">
-              <span class="permission-editor__autosave">点击卡片后自动保存</span>
-              <el-button @click="resetCurrentUserPermissions">恢复默认</el-button>
-            </div>
-          </div>
-
-          <div class="permission-groups">
-            <section v-for="group in groupedModules" :key="group.group" class="permission-group">
-              <h2>{{ group.group }}</h2>
-              <div class="permission-grid">
-                <button
-                  v-for="item in group.items"
-                  :key="item.key"
-                  type="button"
-                  class="permission-item"
-                  :class="{
-                    'is-enabled': draftPermissions[item.key] !== false,
-                    'is-locked': selectedUserIsPermissionAdmin && item.key === 'settings.permissions.visible',
-                    'is-saving': savingPermissionKey === item.key
-                  }"
-                  :disabled="Boolean(savingPermissionKey) || (selectedUserIsPermissionAdmin && item.key === 'settings.permissions.visible')"
-                  @click="togglePermission(item.key)"
-                >
-                  <div class="permission-item__content">
-                    <strong>{{ item.title }}</strong>
-                    <span>{{ item.description }}</span>
-                  </div>
-                  <em>{{
-                    savingPermissionKey === item.key
-                      ? '保存中'
-                      : selectedUserIsPermissionAdmin && item.key === 'settings.permissions.visible'
-                      ? '始终开启'
-                      : draftPermissions[item.key] !== false ? '已开启' : '已关闭'
-                  }}</em>
-                </button>
-              </div>
-            </section>
-
+      </nav>
+      <section class="hub-content">
+        <DashboardPermissionPanel v-if="isAdmin && activeTab === 'dashboard'" :key="auth.user?.id" />
+        <div v-else-if="activeTab === 'quick'" class="personal-config">
+          <p class="personal-note">仅配置当前账号 {{ auth.user?.username }} 的快捷入口，保存在当前浏览器，可随时调整。</p>
             <section class="permission-group quick-entry-config">
               <div class="quick-entry-config__header">
                 <div>
@@ -253,14 +135,20 @@ onMounted(fetchData)
                 </section>
               </div>
             </section>
-          </div>
-        </template>
+        </div>
+        <div v-else-if="isAdmin" v-loading="metaLoading" class="defect-config">
+          <el-empty v-if="metaError" description="配置加载失败"><el-button @click="loadMeta">重新加载</el-button></el-empty>
+          <template v-else-if="meta">
+            <DefectFieldConfig v-if="activeTab === 'fields'" :meta="meta" @changed="loadMeta" />
+            <DefectProjectPermissions v-else-if="activeTab === 'permissions'" :meta="meta" />
+          </template>
+        </div>
       </section>
-    </section>
+    </div>
   </main>
 </template>
-
 <style scoped>
+
 .permission-page {
   display: grid;
   gap: 18px;
@@ -603,4 +491,19 @@ onMounted(fetchData)
     flex-direction: column;
   }
 }
+
+.settings-hub{padding:28px;max-width:1680px;margin:0 auto;color:#1e293b}
+.hub-heading{display:flex;align-items:center;gap:14px;margin-bottom:24px}
+.hub-heading__icon{display:grid;place-items:center;width:46px;height:46px;border-radius:14px;background:#eff6ff;color:#2563eb;font-size:23px}
+.hub-heading h1{font-size:24px;margin:0 0 6px}.hub-heading p{margin:0;color:#64748b;font-size:13px}
+.hub-layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:22px;align-items:start}
+.hub-sidebar{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid #e2e8f0;border-radius:16px;background:#fff;position:sticky;top:20px}
+.hub-sidebar button{display:flex;align-items:center;gap:12px;padding:14px 10px;border:0;border-radius:11px;background:transparent;color:#64748b;text-align:left;cursor:pointer;transition:.2s}
+.hub-sidebar button:hover{background:#f8fafc}.hub-sidebar button.is-active{background:#eff6ff;color:#2563eb}
+.hub-sidebar button>span{flex:1}.hub-sidebar strong,.hub-sidebar small{display:block}.hub-sidebar strong{font-size:14px}.hub-sidebar small{font-size:11px;margin-top:6px;color:#94a3b8}.nav-arrow{font-size:12px}
+.hub-content{min-width:0}.personal-config{padding:24px;background:#fff;border:1px solid #e2e8f0;border-radius:16px}.personal-note{margin:0 0 22px;color:#64748b;font-size:13px;line-height:1.7}.defect-config{min-height:300px}
+.hub-content :deep(.permission-page){padding:0}.hub-content :deep(.permission-page__eyebrow){display:none}
+.hub-content :deep(.field-config),.hub-content :deep(.project-permission){min-width:0}
+@media(max-width:1000px){.hub-layout{grid-template-columns:1fr}.hub-sidebar{position:static;flex-direction:row;flex-wrap:wrap}.hub-sidebar button{flex:1;min-width:150px}}
+@media(max-width:600px){.settings-hub{padding:14px}.personal-config{padding:16px}}
 </style>

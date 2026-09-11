@@ -7,6 +7,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { buildBackendUrl, buildBackendWsUrl, normalizeBackendUrl } from '@/utils/runtimeUrl'
 import MonkeyHologram3D from './components/MonkeyHologram3D.vue'
 import MonkeyNodeSummary from './components/MonkeyNodeSummary.vue'
+import DramaRulesDialog from './components/DramaRulesDialog.vue'
 import { useAuthenticatedImage } from './composables/useAuthenticatedImage'
 import { useMonkeyRunStream } from './composables/useMonkeyRunStream'
 import {
@@ -23,6 +24,7 @@ import {
   Cpu,
   Check,
   Edit,
+  ArrowDown,
   ArrowRight
 } from '@element-plus/icons-vue'
 
@@ -47,6 +49,8 @@ if (toolTypeName === 'Web前端压测') {
 
 // 是否是剧集播放自检工具
 const isDramaCheck = toolTypeName.includes('播放')
+const showDramaRulesEntry = toolTypeName === '剧集播放接口测试'
+const dramaRulesVisible = ref(false)
 const isSubtitleCheck = toolTypeName === '剧集外挂字幕测试' || toolTypeName.includes('外挂字幕')
 // 是否是Web前端压测
 const isWebFrontendStressTest = toolTypeName === 'WebFrontend性能' || toolTypeName === 'Web前端压测'
@@ -54,12 +58,46 @@ const isWebFrontendStressTest = toolTypeName === 'WebFrontend性能' || toolType
 const isMonkeyTest = toolTypeName === 'Monkey测试'
 // 是否是删除账号工具
 const isDeleteAccount = toolTypeName === '删除账号'
-const deleteAccountParam = ref('')
+const deleteAccountActiveTab = ref<'status' | 'payload' | 'logs'>('status')
 
 // ===== 短剧类接口测试专属状态 =====
 const isShortDramaApiTest = computed(() => toolTypeName === '短剧类接口测试')
 const shortDramaActiveTab = ref('pipeline')
 // ===== 通用接口测试：类型定义与状态管理 =====
+type ApiVariableSource = 'body' | 'header' | 'cookie' | 'text'
+
+interface ApiVariableExtractor {
+  id: number
+  name: string
+  source: ApiVariableSource
+  path: string
+  required: boolean
+  sensitive: boolean
+}
+
+interface ApiRuntimeVariable {
+  name: string
+  value: unknown
+  sourceCaseId: number
+  sourceCaseName: string
+  sensitive: boolean
+}
+
+interface ApiExtractedVariable {
+  name: string
+  displayValue: string
+  source: ApiVariableSource
+  path: string
+  sensitive: boolean
+}
+
+interface ApiProxyEnvelope {
+  status: number
+  headers: Record<string, string[]>
+  cookies: Record<string, string>
+  body: unknown
+}
+
 // ApiInterface 描述一个可测试的 HTTP 接口条目
 interface ApiInterface {
   id: number          // 唯一标识
@@ -68,12 +106,14 @@ interface ApiInterface {
   url: string         // 请求接口路径
   headers: string     // JSON 格式的请求头
   body: string        // JSON 格式的请求体
-  status: 'pending' | 'running' | 'success' | 'failed'  // 执行状态
+  extractors: ApiVariableExtractor[]
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped'  // 执行状态
   code?: number       // HTTP 响应状态码
   latency?: number    // 响应耗时（毫秒）
   errorMsg?: string   // 错误信息
   requestData?: any   // 发送的请求数据（用于 Payload 展示）
   responseData?: any  // 接收的响应数据（用于 Payload 展示）
+  extractedVariables?: ApiExtractedVariable[]
 }
 
 interface ApiTestSuite {
@@ -85,13 +125,16 @@ interface ApiTestSuite {
 }
 
 type ApiEnvironment = 'test' | 'prod' | 'gray'
+type DeleteAccountEnvironment = ApiEnvironment | 'custom'
 type ApiJsonField = 'headers' | 'body'
 
 const SHORT_DRAMA_API_CONFIG_STORAGE_KEY = 'testcenter.shortDramaApi.interfaces.v1'
+const DELETE_ACCOUNT_API_CONFIG_STORAGE_KEY = 'testcenter.deleteAccountApi.singleCase.v1'
 
 // 自增 ID 计数器，确保每个接口条目有唯一标识
 let apiInterfaceIdCounter = 1
 let apiTestSuiteIdCounter = 1
+let apiVariableExtractorIdCounter = 1
 
 const shortDramaAnonymousLoginHeaders = {
   contype: '2',
@@ -126,6 +169,7 @@ const createEmptyInterface = (): ApiInterface => ({
   url: '',
   headers: '',
   body: '',
+  extractors: [],
   status: 'pending'
 })
 
@@ -137,6 +181,39 @@ const createShortDramaAnonymousLoginInterface = (): ApiInterface => ({
   url: '/login/anonymous',
   headers: JSON.stringify(shortDramaAnonymousLoginHeaders, null, 2),
   body: '{}',
+  extractors: [{
+    id: apiVariableExtractorIdCounter++,
+    name: 'session_token',
+    source: 'body',
+    path: '$.data.session_token',
+    required: true,
+    sensitive: true
+  }],
+  status: 'pending'
+})
+
+const createDeleteAccountLoginCase = (): ApiInterface => ({
+  id: -1,
+  name: '匿名登录',
+  method: 'POST',
+  url: '/login/anonymous',
+  headers: JSON.stringify(shortDramaAnonymousLoginHeaders, null, 2),
+  body: '{}',
+  extractors: [],
+  status: 'pending'
+})
+
+const createDeleteAccountDeleteCase = (): ApiInterface => ({
+  id: -2,
+  name: '删除账号',
+  method: 'GET',
+  url: '/user/delete',
+  headers: JSON.stringify({
+    ...shortDramaAnonymousLoginHeaders,
+    'X-SESSION-TOKEN': '{{session_token}}'
+  }, null, 2),
+  body: '',
+  extractors: [],
   status: 'pending'
 })
 
@@ -146,6 +223,37 @@ const createApiTestSuite = (name: string, interfaces: ApiInterface[], isNameEdit
   interfaces,
   isExpanded,
   isNameEditing
+})
+
+const isSensitiveVariableName = (name: string) => /(token|secret|password|cookie|authorization|session|key)/i.test(name)
+
+const normalizeApiVariableExtractors = (value: unknown): ApiVariableExtractor[] => {
+  if (!Array.isArray(value)) return []
+  const supportedSources: ApiVariableSource[] = ['body', 'header', 'cookie', 'text']
+  return value
+    .filter(item => item && typeof item === 'object')
+    .map((item: Partial<ApiVariableExtractor>) => {
+      const id = typeof item.id === 'number' ? item.id : apiVariableExtractorIdCounter++
+      apiVariableExtractorIdCounter = Math.max(apiVariableExtractorIdCounter, id + 1)
+      const name = typeof item.name === 'string' ? item.name.trim() : ''
+      return {
+        id,
+        name,
+        source: supportedSources.includes(item.source as ApiVariableSource) ? item.source as ApiVariableSource : 'body',
+        path: typeof item.path === 'string' ? item.path.trim() : '',
+        required: item.required !== false,
+        sensitive: typeof item.sensitive === 'boolean' ? item.sensitive : isSensitiveVariableName(name)
+      }
+    })
+}
+
+const createApiVariableExtractor = (): ApiVariableExtractor => ({
+  id: apiVariableExtractorIdCounter++,
+  name: '',
+  source: 'body',
+  path: '$.data.session_token',
+  required: true,
+  sensitive: true
 })
 
 const normalizeInterfacePath = (value: string) => {
@@ -161,6 +269,44 @@ const normalizeInterfacePath = (value: string) => {
   }
 }
 
+const normalizeDeleteAccountCustomDomain = (value: string) => {
+  const rawValue = value.trim()
+  if (!rawValue) throw new Error('请输入自定义域名')
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(rawValue) ? rawValue : `https://${rawValue}`
+  const parsed = new URL(candidate)
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('自定义域名仅支持 HTTP 或 HTTPS')
+  }
+  if (!parsed.hostname) throw new Error('自定义域名格式不正确')
+  const basePath = parsed.pathname.replace(/\/+$/, '')
+  return `${parsed.protocol}//${parsed.host}${basePath === '/' ? '' : basePath}`
+}
+
+const finishDeleteAccountCustomDomainEditing = () => {
+  if (!deleteAccountCustomDomain.value.trim()) return
+  try {
+    deleteAccountCustomDomain.value = normalizeDeleteAccountCustomDomain(deleteAccountCustomDomain.value)
+    persistDeleteAccountConfig()
+  } catch (error: any) {
+    ElMessage.warning(error.message || '自定义域名格式不正确')
+  }
+}
+
+const getSavedApiVariableExtractors = (item: Partial<ApiInterface>) => {
+  if (Array.isArray(item.extractors)) return normalizeApiVariableExtractors(item.extractors)
+  if (normalizeInterfacePath(item.url || '') === '/login/anonymous') {
+    return [{
+      id: apiVariableExtractorIdCounter++,
+      name: 'session_token',
+      source: 'body' as ApiVariableSource,
+      path: '$.data.session_token',
+      required: true,
+      sensitive: true
+    }]
+  }
+  return []
+}
+
 const resetApiRuntimeState = (item: ApiInterface): ApiInterface => ({
   ...item,
   url: normalizeInterfacePath(item.url),
@@ -169,8 +315,85 @@ const resetApiRuntimeState = (item: ApiInterface): ApiInterface => ({
   latency: undefined,
   errorMsg: undefined,
   requestData: undefined,
-  responseData: undefined
+  responseData: undefined,
+  extractedVariables: undefined
 })
+
+interface DeleteAccountSavedConfig {
+  environment?: DeleteAccountEnvironment
+  customDomain?: string
+  project?: string
+  cases?: Partial<ApiInterface>[]
+  // 兼容上一版只有一张复合卡片的本地配置。
+  case?: Partial<ApiInterface>
+}
+
+const loadSavedDeleteAccountConfig = (): DeleteAccountSavedConfig | null => {
+  if (typeof window === 'undefined') return null
+  try {
+    const rawData = window.localStorage.getItem(DELETE_ACCOUNT_API_CONFIG_STORAGE_KEY)
+    if (!rawData) return null
+    const parsed = JSON.parse(rawData)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+const savedDeleteAccountConfig = loadSavedDeleteAccountConfig()
+const deleteAccountEnvironment = ref<DeleteAccountEnvironment>(
+  ['test', 'prod', 'gray', 'custom'].includes(savedDeleteAccountConfig?.environment || '')
+    ? savedDeleteAccountConfig!.environment as DeleteAccountEnvironment
+    : 'test'
+)
+const deleteAccountCustomDomain = ref(savedDeleteAccountConfig?.customDomain || '')
+if (isDeleteAccount && ['ShortsWave', 'NovelNova'].includes(savedDeleteAccountConfig?.project || '')) {
+  projectName.value = savedDeleteAccountConfig!.project!
+}
+
+const savedDeleteAccountCases = Array.isArray(savedDeleteAccountConfig?.cases)
+  ? savedDeleteAccountConfig!.cases!
+  : []
+const savedDeleteAccountLoginCase = savedDeleteAccountCases[0] || savedDeleteAccountConfig?.case || {}
+const savedDeleteAccountDeleteCase = savedDeleteAccountCases[1] || {}
+
+const deleteAccountCases = ref<ApiInterface[]>([
+  resetApiRuntimeState({
+    ...createDeleteAccountLoginCase(),
+    ...savedDeleteAccountLoginCase,
+    id: -1,
+    name: savedDeleteAccountLoginCase.name?.trim() || '匿名登录',
+    method: savedDeleteAccountLoginCase.method || 'POST',
+    url: normalizeInterfacePath(savedDeleteAccountLoginCase.url || '/login/anonymous'),
+    headers: savedDeleteAccountLoginCase.headers || JSON.stringify(shortDramaAnonymousLoginHeaders, null, 2),
+    body: savedDeleteAccountLoginCase.body ?? '{}',
+    extractors: []
+  }),
+  resetApiRuntimeState({
+    ...createDeleteAccountDeleteCase(),
+    ...savedDeleteAccountDeleteCase,
+    id: -2,
+    name: savedDeleteAccountDeleteCase.name?.trim() || '删除账号',
+    method: savedDeleteAccountDeleteCase.method || 'GET',
+    url: normalizeInterfacePath(savedDeleteAccountDeleteCase.url || '/user/delete'),
+    headers: savedDeleteAccountDeleteCase.headers || createDeleteAccountDeleteCase().headers,
+    body: savedDeleteAccountDeleteCase.body ?? '',
+    extractors: []
+  })
+])
+const deleteAccountLoginCase = computed<ApiInterface>(() => deleteAccountCases.value[0]!)
+const deleteAccountDeleteCase = computed<ApiInterface>(() => deleteAccountCases.value[1]!)
+const deleteAccountSelectedCaseId = ref(-1)
+const selectedDeleteAccountCase = computed<ApiInterface>(() => (
+  deleteAccountCases.value.find(item => item.id === deleteAccountSelectedCaseId.value) || deleteAccountCases.value[0]!
+))
+const deleteAccountEditingBlock = ref<string | null>(null)
+const deleteAccountLoginInfo = ref('')
+const deleteAccountLoginInfoSummary = ref('粘贴抓取到的 Optional([...]) 或 JSON 信息后自动解析')
+const deleteAccountLoginInfoState = ref<'idle' | 'success' | 'error'>('idle')
+let lastSavedDeleteAccountConfigSnapshot = ''
+let deleteAccountAbortController: AbortController | null = null
+let deleteAccountManuallyStopped = false
 
 const loadSavedShortDramaEnvironment = (): ApiEnvironment | null => {
   if (typeof window === 'undefined') return null
@@ -201,6 +424,7 @@ const loadSavedShortDramaInterfaces = (): ApiInterface[] => {
         url: item.url || '',
         headers: item.headers || '',
         body: item.body || '',
+        extractors: getSavedApiVariableExtractors(item),
         status: 'pending'
       }))
 
@@ -221,6 +445,17 @@ const loadSavedShortDramaTestName = () => {
     return typeof parsed?.testName === 'string' ? parsed.testName.trim() : ''
   } catch {
     return ''
+  }
+}
+
+const hasSavedShortDramaTestSuiteConfig = () => {
+  if (typeof window === 'undefined') return false
+  try {
+    const rawData = window.localStorage.getItem(SHORT_DRAMA_API_CONFIG_STORAGE_KEY)
+    if (!rawData) return false
+    return Array.isArray(JSON.parse(rawData)?.testSuites)
+  } catch {
+    return false
   }
 }
 
@@ -245,6 +480,7 @@ const loadSavedShortDramaTestSuites = (): ApiTestSuite[] => {
               url: item.url || '',
               headers: item.headers || '',
               body: item.body || '',
+              extractors: getSavedApiVariableExtractors(item),
               status: 'pending'
             }))
           : []
@@ -268,15 +504,20 @@ const loadSavedShortDramaTestSuites = (): ApiTestSuite[] => {
 }
 
 // 接口列表（替代原先固定的 shortDramaPipeline）
-const savedShortDramaTestSuites = loadSavedShortDramaTestSuites()
-const savedShortDramaInterfaces = savedShortDramaTestSuites.length > 0 ? [] : loadSavedShortDramaInterfaces()
-const savedShortDramaTestName = loadSavedShortDramaTestName()
-if (savedShortDramaTestName) {
+const hasSavedShortDramaTestSuites = isShortDramaApiTest.value && hasSavedShortDramaTestSuiteConfig()
+const savedShortDramaTestSuites = isShortDramaApiTest.value ? loadSavedShortDramaTestSuites() : []
+const savedShortDramaInterfaces = isShortDramaApiTest.value && !hasSavedShortDramaTestSuites ? loadSavedShortDramaInterfaces() : []
+const savedShortDramaTestName = isShortDramaApiTest.value ? loadSavedShortDramaTestName() : ''
+if (isShortDramaApiTest.value && savedShortDramaTestName) {
   toolName.value = savedShortDramaTestName
 }
-const apiInterfaces = ref<ApiInterface[]>(savedShortDramaInterfaces.length > 0 ? savedShortDramaInterfaces : [createShortDramaAnonymousLoginInterface()])
+const apiInterfaces = ref<ApiInterface[]>(
+  savedShortDramaInterfaces.length > 0
+    ? savedShortDramaInterfaces
+    : hasSavedShortDramaTestSuites ? [] : [createShortDramaAnonymousLoginInterface()]
+)
 const apiTestSuites = ref<ApiTestSuite[]>(
-  savedShortDramaTestSuites.length > 0
+  hasSavedShortDramaTestSuites
     ? savedShortDramaTestSuites
     : [createApiTestSuite(toolName.value, apiInterfaces.value, !savedShortDramaTestName)]
 )
@@ -306,49 +547,74 @@ const addApiTestSuite = () => {
   expandedInterfaceId.value = defaultInterface.id
 }
 
-// 删除指定接口条目（至少保留一个）
+// 删除指定接口条目；最后一个接口删除后，自动删除所属接口测试。
 const removeApiInterface = (id: number) => {
-  const targetSuite = apiTestSuites.value.find(suite => suite.interfaces.some(item => item.id === id))
+  const targetSuiteIndex = apiTestSuites.value.findIndex(suite => suite.interfaces.some(item => item.id === id))
+  if (targetSuiteIndex < 0) return
+  const targetSuite = apiTestSuites.value[targetSuiteIndex]
   if (!targetSuite) return
-  if (targetSuite.interfaces.length <= 1) {
-    ElMessage.warning('至少保留一个接口')
-    return
-  }
   const targetIndex = targetSuite.interfaces.findIndex(item => item.id === id)
+  const wasSuiteSelected = selectedApiTestSuiteId.value === targetSuite.id
   if (targetIndex >= 0) {
     targetSuite.interfaces.splice(targetIndex, 1)
   }
+
+  if (editingInterfaceNameId.value === id) editingInterfaceNameId.value = null
+  if (editingJsonBlock.value?.startsWith(`${id}:`)) editingJsonBlock.value = null
+
+  if (targetSuite.interfaces.length === 0) {
+    const removedSuiteName = targetSuite.name
+    apiTestSuites.value.splice(targetSuiteIndex, 1)
+    if (wasSuiteSelected || !apiTestSuites.value.some(suite => suite.id === selectedApiTestSuiteId.value)) {
+      const nextSuite = apiTestSuites.value[targetSuiteIndex] || apiTestSuites.value[targetSuiteIndex - 1] || null
+      const nextInterface = nextSuite?.interfaces[0] || null
+      selectedApiTestSuiteId.value = nextSuite?.id ?? null
+      selectedApiInterfaceId.value = nextInterface?.id ?? null
+      expandedInterfaceId.value = nextInterface?.id ?? null
+      selectedPipelineStepIndex.value = nextInterface ? 0 : null
+    }
+    toolName.value = apiTestSuites.value[0]?.name || toolTypeName
+    persistShortDramaApiConfig()
+    ElMessage.success(`“${removedSuiteName}”已无接口，已自动删除该接口测试`)
+    return
+  }
+
   if (selectedApiInterfaceId.value === id) {
-    selectedApiInterfaceId.value = targetSuite.interfaces[0]?.id ?? null
+    const nextInterface = targetSuite.interfaces[targetIndex] || targetSuite.interfaces[targetIndex - 1] || targetSuite.interfaces[0]
+    selectedApiInterfaceId.value = nextInterface?.id ?? null
+    selectedPipelineStepIndex.value = nextInterface ? targetSuite.interfaces.indexOf(nextInterface) : null
   }
   if (expandedInterfaceId.value === id) {
-    expandedInterfaceId.value = targetSuite.interfaces[0]?.id ?? null
+    expandedInterfaceId.value = selectedApiInterfaceId.value
   }
+  persistShortDramaApiConfig()
 }
 
 const buildShortDramaApiConfigSnapshot = () => JSON.stringify({
   environment: testServer.value,
   project: projectName.value,
   testName: apiTestSuites.value[0]?.name.trim() || toolName.value.trim() || toolTypeName,
-  interfaces: apiTestSuites.value[0]?.interfaces.map(({ id, name, method, url, headers, body }) => ({
+  interfaces: apiTestSuites.value[0]?.interfaces.map(({ id, name, method, url, headers, body, extractors }) => ({
     id,
     name,
     method,
     url: normalizeInterfacePath(url),
     headers,
-    body
+    body,
+    extractors
   })) || [],
   testSuites: apiTestSuites.value.map(suite => ({
     id: suite.id,
     name: suite.name.trim() || `接口测试 ${suite.id}`,
     isExpanded: suite.isExpanded,
-    interfaces: suite.interfaces.map(({ id, name, method, url, headers, body }) => ({
+    interfaces: suite.interfaces.map(({ id, name, method, url, headers, body, extractors }) => ({
       id,
       name,
       method,
       url: normalizeInterfacePath(url),
       headers,
-      body
+      body,
+      extractors
     }))
   }))
 })
@@ -361,6 +627,27 @@ const persistShortDramaApiConfig = () => {
     window.localStorage.setItem(SHORT_DRAMA_API_CONFIG_STORAGE_KEY, snapshot)
     lastSavedShortDramaConfigSnapshot = snapshot
   }
+}
+
+const buildDeleteAccountConfigSnapshot = () => JSON.stringify({
+  environment: deleteAccountEnvironment.value,
+  customDomain: deleteAccountCustomDomain.value.trim(),
+  project: projectName.value,
+  cases: deleteAccountCases.value.map((item, index) => ({
+    name: item.name.trim() || (index === 0 ? '匿名登录' : '删除账号'),
+    method: item.method,
+    url: normalizeInterfacePath(item.url),
+    headers: item.headers,
+    body: item.body
+  }))
+})
+
+const persistDeleteAccountConfig = () => {
+  if (!isDeleteAccount || typeof window === 'undefined') return
+  const snapshot = buildDeleteAccountConfigSnapshot()
+  if (snapshot === lastSavedDeleteAccountConfigSnapshot) return
+  window.localStorage.setItem(DELETE_ACCOUNT_API_CONFIG_STORAGE_KEY, snapshot)
+  lastSavedDeleteAccountConfigSnapshot = snapshot
 }
 
 const startApiTestSuiteNameEditing = (suite: ApiTestSuite) => {
@@ -446,9 +733,185 @@ const startJsonBlockEditing = (id: number, field: ApiJsonField) => {
   editingJsonBlock.value = getJsonBlockKey(id, field)
 }
 
-const stopJsonBlockEditing = () => {
+const parseApiHeaders = (value: string): Record<string, unknown> => {
+  if (!value.trim()) return {}
+  const parsed = JSON.parse(value)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('请求头必须是 JSON 对象，例如 {"X-Token": "xxx"}')
+  }
+  return parsed as Record<string, unknown>
+}
+
+const decodeCapturedJSONString = (value: string) => {
+  try {
+    return JSON.parse(`"${value}"`)
+  } catch {
+    return value.replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+  }
+}
+
+const parseDeleteAccountLoginInfo = (rawValue: string): Record<string, unknown> => {
+  let source = rawValue.trim()
+  if (!source) throw new Error('请先粘贴匿名登录信息')
+
+  // 兼容 Swift 控制台常见的 Optional(["key": "value"]) 输出。
+  if (/^Optional\s*\(/i.test(source) && source.endsWith(')')) {
+    source = source.replace(/^Optional\s*\(/i, '').slice(0, -1).trim()
+  }
+  source = source.replace(/\\_/g, '_')
+
+  const jsonCandidate = source.startsWith('[') && source.endsWith(']')
+    ? `{${source.slice(1, -1)}}`
+    : source
+
+  try {
+    const parsed = JSON.parse(jsonCandidate)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // 非标准控制台文本继续使用键值对提取，避免单个转义字符导致整段无法识别。
+  }
+
+  const parsedPairs: Record<string, unknown> = {}
+  const pairPattern = /"((?:\\.|[^"\\])*)"\s*:\s*(?:"((?:\\.|[^"\\])*)"|([^,\]\}\n]+))/g
+  let match: RegExpExecArray | null
+  while ((match = pairPattern.exec(source)) !== null) {
+    const key = decodeCapturedJSONString(match[1] || '').trim()
+    if (!key) continue
+    const quotedValue = match[2]
+    parsedPairs[key] = quotedValue !== undefined
+      ? decodeCapturedJSONString(quotedValue)
+      : String(match[3] || '').trim().replace(/^(?:null|nil)$/i, '')
+  }
+
+  if (Object.keys(parsedPairs).length === 0) {
+    throw new Error('未识别到有效键值，请检查粘贴内容是否完整')
+  }
+  return parsedPairs
+}
+
+const applyDeleteAccountLoginInfo = (quiet = false) => {
+  try {
+    const parsedInfo = parseDeleteAccountLoginInfo(deleteAccountLoginInfo.value)
+    const currentHeaders = parseApiHeaders(deleteAccountLoginCase.value.headers)
+    const knownHeaderNames = new Map(
+      [...Object.keys(shortDramaAnonymousLoginHeaders), ...Object.keys(currentHeaders)]
+        .map(key => [key.toLowerCase(), key])
+    )
+    const aliases: Record<string, string> = {
+      device_uuid: 'device-uuid',
+      advertising_id: 'advertising-id',
+      mobile_brand: 'mobile-brand',
+      x_session_token: 'X-SESSION-TOKEN',
+      'x-session-token': 'X-SESSION-TOKEN'
+    }
+    const managedHeaders = new Set(['content-length', 'host', 'connection', 'transfer-encoding'])
+    let appliedCount = 0
+    let ignoredCount = 0
+
+    Object.entries(parsedInfo).forEach(([rawKey, rawValue]) => {
+      const trimmedKey = rawKey.trim()
+      if (!trimmedKey) return
+      const lowerKey = trimmedKey.toLowerCase()
+      if (managedHeaders.has(lowerKey)) {
+        ignoredCount++
+        return
+      }
+      if (rawValue !== null && typeof rawValue === 'object') return
+
+      const normalizedKey = aliases[lowerKey] || knownHeaderNames.get(lowerKey) || trimmedKey
+      currentHeaders[normalizedKey] = rawValue == null ? '' : String(rawValue)
+      appliedCount++
+    })
+
+    if (appliedCount === 0) throw new Error('没有可用于匿名登录的请求头字段')
+
+    deleteAccountLoginCase.value.headers = JSON.stringify(currentHeaders, null, 2)
+    deleteAccountSelectedCaseId.value = deleteAccountLoginCase.value.id
+    deleteAccountEditingBlock.value = null
+    deleteAccountLoginInfoState.value = 'success'
+    deleteAccountLoginInfoSummary.value = `已识别并带入 ${appliedCount} 项请求头${ignoredCount ? `，忽略 ${ignoredCount} 项由系统维护的字段` : ''}`
+    persistDeleteAccountConfig()
+    if (!quiet) ElMessage.success(deleteAccountLoginInfoSummary.value)
+  } catch (error: any) {
+    deleteAccountLoginInfoState.value = 'error'
+    deleteAccountLoginInfoSummary.value = error.message || '匿名登录信息解析失败'
+    if (!quiet) ElMessage.warning(deleteAccountLoginInfoSummary.value)
+  }
+}
+
+const scheduleDeleteAccountLoginInfoParsing = () => {
+  window.setTimeout(() => applyDeleteAccountLoginInfo(true), 0)
+}
+
+const finishJsonBlockEditing = (item: ApiInterface, field: ApiJsonField) => {
+  const value = item[field].trim()
+  if (value) {
+    try {
+      const parsed = field === 'headers' ? parseApiHeaders(value) : JSON.parse(value)
+      item[field] = JSON.stringify(parsed, null, 2)
+    } catch (error: any) {
+      ElMessage.warning(`${field === 'headers' ? '请求头' : '请求体'} JSON 格式错误：${error.message}`)
+      return false
+    }
+  }
   editingJsonBlock.value = null
   persistShortDramaApiConfig()
+  return true
+}
+
+const isDeleteAccountJsonEditing = (item: ApiInterface, field: ApiJsonField) => (
+  deleteAccountEditingBlock.value === getJsonBlockKey(item.id, field)
+)
+
+const startDeleteAccountJsonEditing = (item: ApiInterface, field: ApiJsonField) => {
+  deleteAccountEditingBlock.value = getJsonBlockKey(item.id, field)
+}
+
+const finishDeleteAccountJsonEditing = (item: ApiInterface, field: ApiJsonField) => {
+  const value = item[field].trim()
+  if (value) {
+    try {
+      const parsed = field === 'headers' ? parseApiHeaders(value) : JSON.parse(value)
+      item[field] = JSON.stringify(parsed, null, 2)
+    } catch (error: any) {
+      ElMessage.warning(`${field === 'headers' ? '请求头' : '请求体'} JSON 格式错误：${error.message}`)
+      return false
+    }
+  }
+  deleteAccountEditingBlock.value = null
+  persistDeleteAccountConfig()
+  return true
+}
+
+const getPreviousJsonSources = (suite: ApiTestSuite, item: ApiInterface, field: ApiJsonField) => {
+  const currentIndex = suite.interfaces.findIndex(candidate => candidate.id === item.id)
+  if (currentIndex <= 0) return []
+  return suite.interfaces
+    .slice(0, currentIndex)
+    .filter(candidate => candidate[field].trim().length > 0)
+    .slice(-6)
+    .reverse()
+}
+
+const applyPreviousJsonSource = (
+  suite: ApiTestSuite,
+  item: ApiInterface,
+  field: ApiJsonField,
+  sourceId: number
+) => {
+  const source = suite.interfaces.find(candidate => candidate.id === sourceId)
+  if (!source) return
+  try {
+    const parsed = field === 'headers' ? parseApiHeaders(source[field]) : JSON.parse(source[field])
+    item[field] = JSON.stringify(parsed, null, 2)
+    startJsonBlockEditing(item.id, field)
+    persistShortDramaApiConfig()
+    ElMessage.success(`已带入“${source.name}”的${field === 'headers' ? '请求头' : '请求体'}`)
+  } catch (error: any) {
+    ElMessage.warning(`“${source.name}”的${field === 'headers' ? '请求头' : '请求体'}格式无效：${error.message}`)
+  }
 }
 
 const getJsonPreviewText = (value: string, emptyLabel: string) => {
@@ -463,6 +926,351 @@ const getJsonPreviewLines = (value: string, emptyLabel: string) => {
 const getJsonEditorRows = (value: string, minRows: number) => {
   return Math.max(minRows, getJsonPreviewText(value, '').split('\n').length)
 }
+
+const runtimeApiVariables = ref<Record<string, ApiRuntimeVariable>>({})
+const jsonEditorRefs = new Map<string, any>()
+const API_VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]*$/
+const BLOCKED_API_VARIABLE_NAMES = new Set(['__proto__', 'prototype', 'constructor'])
+
+const setJsonEditorRef = (id: number, field: ApiJsonField, element: any) => {
+  const key = getJsonBlockKey(id, field)
+  if (element) jsonEditorRefs.set(key, element)
+  else jsonEditorRefs.delete(key)
+}
+
+const addApiVariableExtractor = (item: ApiInterface) => {
+  item.extractors.push(createApiVariableExtractor())
+  persistShortDramaApiConfig()
+}
+
+const removeApiVariableExtractor = (item: ApiInterface, extractorId: number) => {
+  item.extractors = item.extractors.filter(extractor => extractor.id !== extractorId)
+  persistShortDramaApiConfig()
+}
+
+const finishApiVariableExtractorEditing = (extractor: ApiVariableExtractor) => {
+  extractor.name = extractor.name.trim()
+  extractor.path = extractor.path.trim()
+  if (isSensitiveVariableName(extractor.name)) extractor.sensitive = true
+  persistShortDramaApiConfig()
+}
+
+const getApiVariableSourceLabel = (source: ApiVariableSource) => ({
+  body: '响应体 JSON',
+  header: '响应头',
+  cookie: 'Cookie',
+  text: '纯文本正则'
+}[source])
+
+const formatApiVariablePlaceholder = (name: string) => `{{${name}}}`
+
+const getApiVariablePathPlaceholder = (source: ApiVariableSource) => ({
+  body: '$.data.session_token',
+  header: 'Authorization',
+  cookie: 'session_id',
+  text: 'token[=:]\\s*([^\\s]+)'
+}[source])
+
+const getAvailableApiVariables = (suite: ApiTestSuite, item: ApiInterface) => {
+  const currentIndex = suite.interfaces.findIndex(candidate => candidate.id === item.id)
+  if (currentIndex <= 0) return []
+  const variables = suite.interfaces
+    .slice(0, currentIndex)
+    .flatMap(sourceCase => sourceCase.extractors
+      .filter(extractor => extractor.name.trim())
+      .map(extractor => ({
+        ...extractor,
+        sourceCaseId: sourceCase.id,
+        sourceCaseName: sourceCase.name
+      })))
+
+  const latestByName = new Map<string, typeof variables[number]>()
+  variables.forEach(variable => latestByName.set(variable.name, variable))
+  return Array.from(latestByName.values())
+}
+
+const insertApiVariablePlaceholder = async (
+  item: ApiInterface,
+  field: ApiJsonField,
+  variableName: string
+) => {
+  const placeholder = `{{${variableName}}}`
+  const editor = jsonEditorRefs.get(getJsonBlockKey(item.id, field))
+  const textarea = editor?.textarea as HTMLTextAreaElement | undefined
+
+  if (!textarea) {
+    ElMessage.warning('请先打开编辑状态，再插入变量')
+    return
+  }
+
+  const start = textarea.selectionStart ?? item[field].length
+  const end = textarea.selectionEnd ?? start
+  item[field] = `${item[field].slice(0, start)}${placeholder}${item[field].slice(end)}`
+  await nextTick()
+  textarea.focus()
+  textarea.setSelectionRange(start + placeholder.length, start + placeholder.length)
+}
+
+const isValidApiVariableName = (name: string) => (
+  API_VARIABLE_NAME_PATTERN.test(name) && !BLOCKED_API_VARIABLE_NAMES.has(name)
+)
+
+const getRuntimeApiVariable = (name: string) => {
+  if (!Object.prototype.hasOwnProperty.call(runtimeApiVariables.value, name)) {
+    throw new Error(`变量 {{${name}}} 不存在，请确认前置 Case 已成功提取`)
+  }
+  return runtimeApiVariables.value[name]!
+}
+
+const stringifyTemplateValue = (value: unknown) => {
+  if (typeof value === 'string') return value
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+const resolveApiTemplate = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(resolveApiTemplate)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, resolveApiTemplate(child)]))
+  }
+  if (typeof value !== 'string') return value
+
+  const exactMatch = value.match(/^\{\{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*\}\}$/)
+  if (exactMatch?.[1]) return getRuntimeApiVariable(exactMatch[1]).value
+
+  return value.replace(/\{\{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*\}\}/g, (_match, name: string) => (
+    stringifyTemplateValue(getRuntimeApiVariable(name).value)
+  ))
+}
+
+const readApiJsonPath = (root: unknown, path: string): { found: boolean; value?: unknown } => {
+  const expression = path.trim()
+  if (expression === '$') return { found: true, value: root }
+  if (!expression.startsWith('$')) throw new Error('JSONPath 必须以 $ 开头')
+
+  const tokens: Array<string | number> = []
+  let cursor = 1
+  while (cursor < expression.length) {
+    if (expression[cursor] === '.') {
+      const start = ++cursor
+      while (cursor < expression.length && expression[cursor] !== '.' && expression[cursor] !== '[') cursor++
+      if (cursor === start) throw new Error('JSONPath 字段名不能为空')
+      tokens.push(expression.slice(start, cursor))
+      continue
+    }
+    if (expression[cursor] === '[') {
+      const closeIndex = expression.indexOf(']', cursor)
+      if (closeIndex < 0) throw new Error('JSONPath 缺少 ]')
+      let token = expression.slice(cursor + 1, closeIndex).trim()
+      if ((token.startsWith('"') && token.endsWith('"')) || (token.startsWith("'") && token.endsWith("'"))) {
+        token = token.slice(1, -1)
+        tokens.push(token)
+      } else if (/^\d+$/.test(token)) {
+        tokens.push(Number(token))
+      } else {
+        throw new Error(`暂不支持的 JSONPath 片段：[${token}]`)
+      }
+      cursor = closeIndex + 1
+      continue
+    }
+    throw new Error(`JSONPath 在第 ${cursor + 1} 个字符附近无效`)
+  }
+
+  let current = root
+  for (const token of tokens) {
+    if (current === null || current === undefined || typeof current !== 'object') return { found: false }
+    if (!Object.prototype.hasOwnProperty.call(current, token)) return { found: false }
+    current = (current as any)[token]
+  }
+  return { found: true, value: current }
+}
+
+const addExtractorFromResponse = async (item: ApiInterface) => {
+  if (item.responseData === undefined) {
+    ElMessage.warning('请先执行该 Case，获取响应后再创建提取规则')
+    return
+  }
+
+  try {
+    const pathResult = await ElMessageBox.prompt(
+      '输入需要提取字段的 JSONPath，例如 $.data.session_token',
+      '从响应创建变量',
+      {
+        confirmButtonText: '下一步',
+        cancelButtonText: '取消',
+        inputValue: '$.data.session_token',
+        inputPlaceholder: '$.data.session_token'
+      }
+    )
+    const path = pathResult.value.trim()
+    const extracted = readApiJsonPath(item.responseData, path)
+    if (!extracted.found) {
+      ElMessage.warning(`当前响应中没有找到 ${path}`)
+      return
+    }
+
+    const pathSegments = path.match(/[A-Za-z_][A-Za-z0-9_-]*/g) || []
+    const suggestedName = pathSegments[pathSegments.length - 1] || 'response_value'
+    const nameResult = await ElMessageBox.prompt(
+      `字段 ${path} 已找到，请设置后续 Case 使用的变量名`,
+      '设置变量名称',
+      {
+        confirmButtonText: '创建变量',
+        cancelButtonText: '取消',
+        inputValue: suggestedName,
+        inputPattern: API_VARIABLE_NAME_PATTERN,
+        inputErrorMessage: '变量名需以字母或下划线开头，只能包含字母、数字、点、横线和下划线'
+      }
+    )
+    const name = nameResult.value.trim()
+    if (!isValidApiVariableName(name)) {
+      ElMessage.warning('变量名格式无效')
+      return
+    }
+    if (item.extractors.some(extractor => extractor.name === name)) {
+      ElMessage.warning(`当前 Case 已存在变量 ${name}`)
+      return
+    }
+
+    item.extractors.push({
+      id: apiVariableExtractorIdCounter++,
+      name,
+      source: 'body',
+      path,
+      required: true,
+      sensitive: isSensitiveVariableName(name)
+    })
+    persistShortDramaApiConfig()
+    ElMessage.success(`已创建变量 ${formatApiVariablePlaceholder(name)}`)
+  } catch (action) {
+    if (action !== 'cancel' && action !== 'close') {
+      ElMessage.error('创建变量失败')
+    }
+  }
+}
+
+const getCaseInsensitiveRecordValue = (record: Record<string, any>, key: string) => {
+  const matchedKey = Object.keys(record || {}).find(candidate => candidate.toLowerCase() === key.toLowerCase())
+  if (!matchedKey) return { found: false as const }
+  const rawValue = record[matchedKey]
+  return { found: true as const, value: Array.isArray(rawValue) ? rawValue[0] : rawValue }
+}
+
+const extractApiVariableValue = (extractor: ApiVariableExtractor, response: ApiProxyEnvelope) => {
+  if (extractor.source === 'body') return readApiJsonPath(response.body, extractor.path)
+  if (extractor.source === 'header') return getCaseInsensitiveRecordValue(response.headers, extractor.path)
+  if (extractor.source === 'cookie') return getCaseInsensitiveRecordValue(response.cookies, extractor.path)
+
+  const responseText = typeof response.body === 'string' ? response.body : JSON.stringify(response.body)
+  const match = new RegExp(extractor.path).exec(responseText)
+  if (!match) return { found: false }
+  return { found: true, value: match[1] ?? match[0] }
+}
+
+const isEmptyApiVariableValue = (value: unknown) => value === undefined || value === null || value === ''
+
+const maskApiVariableValue = (value: unknown, sensitive: boolean) => {
+  const text = stringifyTemplateValue(value)
+  if (!sensitive) return text
+  if (text.length <= 8) return '****'
+  return `${text.slice(0, 4)}****${text.slice(-4)}`
+}
+
+const redactApiPayload = (value: unknown, sensitiveValues: string[] = [], key = ''): unknown => {
+  if (/(token|secret|password|cookie|authorization|session|api[-_]?key)/i.test(key)) return '****'
+  if (Array.isArray(value)) return value.map(child => redactApiPayload(child, sensitiveValues))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [
+      childKey,
+      redactApiPayload(child, sensitiveValues, childKey)
+    ]))
+  }
+  if (typeof value === 'string') {
+    let redacted = value
+    sensitiveValues.filter(Boolean).forEach(secret => {
+      redacted = redacted.split(secret).join('****')
+    })
+    return redacted
+  }
+  return value
+}
+
+const extractApiRuntimeVariables = (step: ApiInterface, response: ApiProxyEnvelope) => {
+  const requiredErrors: string[] = []
+  const stagedVariables: Array<{ runtime: ApiRuntimeVariable; extracted: ApiExtractedVariable }> = []
+
+  for (const extractor of step.extractors) {
+    const name = extractor.name.trim()
+    if (!isValidApiVariableName(name)) {
+      const message = name ? `变量名“${name}”格式无效` : '存在未填写变量名的提取规则'
+      if (extractor.required) requiredErrors.push(message)
+      logs.value.push(`[WARN] ${step.name}: ${message}`)
+      continue
+    }
+    if (!extractor.path.trim()) {
+      const message = `变量 ${name} 未填写提取路径`
+      if (extractor.required) requiredErrors.push(message)
+      logs.value.push(`[WARN] ${step.name}: ${message}`)
+      continue
+    }
+
+    try {
+      const result = extractApiVariableValue(extractor, response)
+      if (!result.found || isEmptyApiVariableValue(result.value)) {
+        const message = `变量 ${name} 未提取到有效值（${getApiVariableSourceLabel(extractor.source)}：${extractor.path}）`
+        if (extractor.required) requiredErrors.push(message)
+        logs.value.push(`[WARN] ${step.name}: ${message}`)
+        continue
+      }
+
+      stagedVariables.push({
+        runtime: {
+          name,
+          value: result.value,
+          sourceCaseId: step.id,
+          sourceCaseName: step.name,
+          sensitive: extractor.sensitive
+        },
+        extracted: {
+          name,
+          displayValue: maskApiVariableValue(result.value, extractor.sensitive),
+          source: extractor.source,
+          path: extractor.path,
+          sensitive: extractor.sensitive
+        }
+      })
+    } catch (error: any) {
+      const message = `变量 ${name} 提取失败：${error.message}`
+      if (extractor.required) requiredErrors.push(message)
+      logs.value.push(`[WARN] ${step.name}: ${message}`)
+    }
+  }
+
+  step.extractedVariables = stagedVariables.map(variable => variable.extracted)
+  if (requiredErrors.length === 0) {
+    stagedVariables.forEach(({ runtime }) => {
+      const hadPreviousValue = Object.prototype.hasOwnProperty.call(runtimeApiVariables.value, runtime.name)
+      runtimeApiVariables.value[runtime.name] = runtime
+      logs.value.push(`[VARIABLE] ${runtime.name} 已${hadPreviousValue ? '更新' : '提取'}${runtime.sensitive ? '（已脱敏）' : ''}`)
+    })
+  } else if (stagedVariables.length > 0) {
+    logs.value.push(`[WARN] ${step.name}: 因必填变量提取失败，本 Case 已提取值未写入后续运行上下文`)
+  }
+
+  return {
+    requiredErrors,
+    sensitiveValues: stagedVariables
+      .filter(variable => variable.runtime.sensitive)
+      .map(variable => stringifyTemplateValue(variable.runtime.value))
+  }
+}
+
+const isApiProxyEnvelope = (value: any): value is ApiProxyEnvelope => (
+  value && typeof value === 'object' && typeof value.status === 'number' &&
+  value.headers && typeof value.headers === 'object' &&
+  value.cookies && typeof value.cookies === 'object' && Object.prototype.hasOwnProperty.call(value, 'body')
+)
 
 const getInterfaceDisplayUrl = (item?: Pick<ApiInterface, 'url'> | null) => {
   const path = normalizeInterfacePath(item?.url || '')
@@ -485,7 +1293,8 @@ const getInterfaceStatusText = (status: ApiInterface['status']) => {
     pending: '待执行',
     running: '执行中',
     success: '通过',
-    failed: '失败'
+    failed: '失败',
+    skipped: '已跳过'
   }
   return statusMap[status]
 }
@@ -498,8 +1307,13 @@ const getLatencyClass = (latency?: number) => {
 }
 
 const runShortDramaApiTest = async () => {
+  if (activePipelineSteps.value.length === 0) {
+    ElMessage.warning('当前没有可执行的接口，请先新增接口测试和接口')
+    return
+  }
   currentStatus.value = 'Executing'
   logs.value = [`[${new Date().toLocaleTimeString()}] 开始接口链路测试...`]
+  runtimeApiVariables.value = {}
   uptime.value = 0
   duration.value = 0
   if (timer) clearInterval(timer)
@@ -516,6 +1330,7 @@ const runShortDramaApiTest = async () => {
     s.errorMsg = undefined
     s.requestData = undefined
     s.responseData = undefined
+    s.extractedVariables = undefined
   })
 
   logs.value.push(`[INFO] 真实请求模式，接口数: ${activePipelineSteps.value.length}`)
@@ -527,7 +1342,7 @@ const runShortDramaApiTest = async () => {
     const step = activePipelineSteps.value[index]
     if (!step) continue
     step.url = normalizeInterfacePath(step.url)
-    const fullInterfaceUrl = getFullInterfaceUrl(step)
+    const fullInterfaceUrlTemplate = getFullInterfaceUrl(step)
     step.status = 'running'
     shortDramaActiveTab.value = 'pipeline'
     selectedPipelineStepIndex.value = index
@@ -537,7 +1352,7 @@ const runShortDramaApiTest = async () => {
 
     const startTime = Date.now()
 
-    if (!fullInterfaceUrl) {
+    if (!fullInterfaceUrlTemplate) {
       step.status = 'failed'
       step.code = 400
       step.errorMsg = '请求接口不能为空'
@@ -547,39 +1362,34 @@ const runShortDramaApiTest = async () => {
       continue
     }
 
-    let parsedHeaders = {}
+    let fullInterfaceUrl = ''
+    let parsedHeaders: Record<string, unknown> = {}
+    let parsedBody: unknown = {}
     try {
-      if (step.headers) parsedHeaders = JSON.parse(step.headers)
+      fullInterfaceUrl = String(resolveApiTemplate(fullInterfaceUrlTemplate))
+      parsedHeaders = resolveApiTemplate(parseApiHeaders(step.headers)) as Record<string, unknown>
+      if (step.body && step.method !== 'GET') {
+        parsedBody = resolveApiTemplate(JSON.parse(step.body))
+      }
     } catch (e: any) {
-      step.status = 'failed'
-      step.errorMsg = `请求头 JSON 格式错误: ${e.message}`
-      logs.value.push(`[ERROR] 接口 [${step.name}] 执行失败: 请求头 JSON 格式错误`)
+      const isMissingVariable = String(e.message).includes('变量 {{')
+      step.status = isMissingVariable ? 'skipped' : 'failed'
+      step.errorMsg = e.message || '请求配置解析失败'
+      logs.value.push(`[${isMissingVariable ? 'SKIP' : 'ERROR'}] 接口 [${step.name}] ${isMissingVariable ? '已跳过' : '执行失败'}: ${step.errorMsg}`)
       hasFailed = true
       scrollToBottom()
       continue
     }
 
-    let parsedBody = {}
-    try {
-      if (step.body && step.method !== 'GET') parsedBody = JSON.parse(step.body)
-    } catch (e: any) {
-      step.status = 'failed'
-      step.errorMsg = `请求体 JSON 格式错误: ${e.message}`
-      logs.value.push(`[ERROR] 接口 [${step.name}] 执行失败: 请求体 JSON 格式错误`)
-      hasFailed = true
-      scrollToBottom()
-      continue
-    }
-
-    // 合并 headers 和 body 作为 proxy data
-    const mergedData = { ...parsedHeaders, ...parsedBody }
-
-    step.requestData = {
+    const sensitiveValuesBeforeRequest = Object.values(runtimeApiVariables.value)
+      .filter(variable => variable.sensitive)
+      .map(variable => stringifyTemplateValue(variable.value))
+    step.requestData = redactApiPayload({
       url: fullInterfaceUrl,
       method: step.method,
       headers: parsedHeaders,
       body: parsedBody
-    }
+    }, sensitiveValuesBeforeRequest)
 
     try {
       const response = await fetch(buildBackendUrl('/api/proxy'), {
@@ -590,7 +1400,9 @@ const runShortDramaApiTest = async () => {
         body: JSON.stringify({
           method: step.method,
           url: fullInterfaceUrl,
-          data: mergedData
+          headers: parsedHeaders,
+          body: parsedBody,
+          response_mode: 'envelope'
         })
       })
 
@@ -599,25 +1411,45 @@ const runShortDramaApiTest = async () => {
       step.code = response.status
 
       const contentType = response.headers.get('content-type') || ''
-      let resData: any
+      let rawProxyResult: any
       if (contentType.includes('application/json')) {
-        resData = await response.json()
+        rawProxyResult = await response.json()
       } else {
-        resData = await response.text()
+        rawProxyResult = await response.text()
         try {
-          resData = JSON.parse(resData)
-        } catch (e) {
-          resData = { rawResponse: resData }
+          rawProxyResult = JSON.parse(rawProxyResult)
+        } catch {
+          // 保留纯文本代理错误。
         }
       }
-      step.responseData = resData
+
+      const proxyResult: ApiProxyEnvelope = isApiProxyEnvelope(rawProxyResult)
+        ? rawProxyResult
+        : { status: response.status, headers: {}, cookies: {}, body: rawProxyResult }
+      step.code = proxyResult.status
 
       if (response.ok) {
-        step.status = 'success'
-        logs.value.push(`[SUCCESS] 接口 [${step.name}] 执行成功，HTTP ${response.status}`)
+        const extractionResult = extractApiRuntimeVariables(step, proxyResult)
+        const sensitiveValuesAfterResponse = Object.values(runtimeApiVariables.value)
+          .filter(variable => variable.sensitive)
+          .map(variable => stringifyTemplateValue(variable.value))
+          .concat(extractionResult.sensitiveValues)
+        step.responseData = redactApiPayload(proxyResult.body, sensitiveValuesAfterResponse)
+
+        if (extractionResult.requiredErrors.length > 0) {
+          step.status = 'failed'
+          step.errorMsg = extractionResult.requiredErrors.join('；')
+          logs.value.push(`[ERROR] 接口 [${step.name}] 响应变量提取失败: ${step.errorMsg}`)
+          hasFailed = true
+        } else {
+          step.status = 'success'
+          logs.value.push(`[SUCCESS] 接口 [${step.name}] 执行成功，HTTP ${proxyResult.status}`)
+        }
       } else {
         step.status = 'failed'
-        step.errorMsg = resData?.msg || resData?.error || '接口返回异常状态'
+        step.responseData = redactApiPayload(proxyResult.body)
+        const responseBody = proxyResult.body as any
+        step.errorMsg = responseBody?.msg || responseBody?.error || `接口返回 HTTP ${proxyResult.status}`
         logs.value.push(`[ERROR] 接口 [${step.name}] 执行失败: ${step.errorMsg}`)
         hasFailed = true
       }
@@ -654,29 +1486,38 @@ const runShortDramaApiTest = async () => {
   })
 }
 
-// 自动解析参数并匹配项目
-watch(deleteAccountParam, (newVal) => {
-  if (!isDeleteAccount || !newVal) return
-  
-  // 正则匹配 app 参数的值，支持多种空格情况
-  const appMatch = newVal.match(/"app":\s*"([^"]+)"/)
-  if (appMatch && appMatch[1]) {
-    const appId = appMatch[1]
-    if (appId === 'com.novelnova.readstory') {
-      projectName.value = 'NovelNova'
-    } else if (appId === 'com.company.shortsdrama.wave') {
-      projectName.value = 'ShortsWave'
-    }
-  }
-})
-
 // 服务器配置档
 const serverOptions = [
   { label: '测试服', value: 'test' },
   { label: '正式服', value: 'prod' },
   { label: '灰度服', value: 'gray' }
 ]
-const testServer = ref<ApiEnvironment>(loadSavedShortDramaEnvironment() || 'test')
+const deleteAccountServerOptions = [
+  ...serverOptions,
+  { label: '自定义', value: 'custom' }
+]
+const testServer = ref<ApiEnvironment>(
+  isDeleteAccount && ['test', 'prod', 'gray'].includes(savedDeleteAccountConfig?.environment || '')
+    ? savedDeleteAccountConfig!.environment as ApiEnvironment
+    : loadSavedShortDramaEnvironment() || 'test'
+)
+
+watch(deleteAccountCases, () => {
+  if (!isDeleteAccount) return
+  try {
+    const headers = parseApiHeaders(deleteAccountLoginCase.value.headers)
+    const appID = String(headers.app || '')
+    if (appID === 'com.novelnova.readstory') projectName.value = 'NovelNova'
+    if (appID === 'com.company.shortsdrama.wave') projectName.value = 'ShortsWave'
+  } catch {
+    // 编辑中的 JSON 可能暂时不完整，完成编辑时会统一校验。
+  }
+  persistDeleteAccountConfig()
+}, { deep: true, flush: 'post' })
+
+watch([testServer, projectName, deleteAccountEnvironment, deleteAccountCustomDomain], () => {
+  if (isDeleteAccount) persistDeleteAccountConfig()
+})
 const getViteEnv = (key: string) => String((import.meta.env as Record<string, string | undefined>)[key] || '')
 
 const serverProfiles = {
@@ -722,58 +1563,263 @@ watch(apiTestSuites, () => {
   persistShortDramaApiConfig()
 }, { deep: true, flush: 'post' })
 
-// 辅助函数：解析参数对
-const parseParams = (str: string) => {
-  const params: Record<string, string> = {}
-  const regex = /"([^"]+)":\s*"([^"]*)"/g
-  let match
-  while ((match = regex.exec(str)) !== null) {
-    if (match[1]) {
-      params[match[1]] = match[2] || ''
-    }
+const readDeleteAccountProxyResponse = async (response: Response) => {
+  const contentType = response.headers.get('content-type') || ''
+  if (contentType.includes('application/json')) return response.json()
+  const text = await response.text()
+  try {
+    return JSON.parse(text)
+  } catch {
+    return { rawResponse: text }
   }
-  return params
 }
 
-// 辅助函数：执行具体的获取账号删除操作
-const handleAccountDelete = async (token: string, originalHeaders: Record<string, string>) => {
-  const baseDomain = domainMappings[projectName.value as keyof typeof domainMappings][testServer.value]
-  const deleteUrl = `${baseDomain}/user/delete`
-  
-  // 准备删除请求的 Headers，替换 X-SESSION-TOKEN
-  const deleteHeaders = { 
-    ...originalHeaders, 
-    'X-SESSION-TOKEN': token 
+const escapeDeleteAccountHTML = (value: unknown) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;')
+
+const runDeleteAccountNestedCases = async () => {
+  const loginStep = deleteAccountLoginCase.value
+  const deleteStep = deleteAccountDeleteCase.value
+  if (!loginStep || !deleteStep) {
+    ElMessage.error('删除账号 Case 配置不完整')
+    return
   }
 
-  logs.value.push(`[${new Date().toLocaleTimeString()}] 正在发起账号注销请求 (id: ${originalHeaders.user_id || '未知'})...`)
+  loginStep.url = normalizeInterfacePath(loginStep.url)
+  deleteStep.url = normalizeInterfacePath(deleteStep.url)
+  if (!loginStep.url || !deleteStep.url) {
+    ElMessage.warning('请完整填写匿名登录和删除账号接口')
+    return
+  }
+
+  let loginHeaders: Record<string, unknown>
+  let deleteHeadersConfig: Record<string, unknown>
+  let loginBody: unknown = {}
+  let deleteBody: unknown = undefined
+  try {
+    loginHeaders = parseApiHeaders(loginStep.headers)
+    deleteHeadersConfig = parseApiHeaders(deleteStep.headers)
+    if (loginStep.body.trim() && loginStep.method !== 'GET') loginBody = JSON.parse(loginStep.body)
+    if (deleteStep.body.trim() && deleteStep.method !== 'GET') deleteBody = JSON.parse(deleteStep.body)
+  } catch (error: any) {
+    ElMessage.warning(`请求配置格式错误：${error.message}`)
+    return
+  }
+
+  const projectDomains = domainMappings[projectName.value as keyof typeof domainMappings]
+  let baseDomain = ''
+  if (deleteAccountEnvironment.value === 'custom') {
+    try {
+      baseDomain = normalizeDeleteAccountCustomDomain(deleteAccountCustomDomain.value)
+      deleteAccountCustomDomain.value = baseDomain
+    } catch (error: any) {
+      ElMessage.warning(error.message || '自定义域名格式不正确')
+      return
+    }
+  } else {
+    baseDomain = projectDomains?.[deleteAccountEnvironment.value] || ''
+  }
+  if (!baseDomain) {
+    ElMessage.warning('当前项目或执行环境没有可用域名配置')
+    return
+  }
+
+  const loginURL = `${baseDomain.replace(/\/$/, '')}${loginStep.url}`
+  const deleteURL = `${baseDomain.replace(/\/$/, '')}${deleteStep.url}`
+  const loginRequest = {
+    url: loginURL,
+    method: loginStep.method,
+    headers: loginHeaders,
+    body: loginBody
+  }
+
+  deleteAccountCases.value.forEach(item => {
+    item.status = 'pending'
+    item.code = undefined
+    item.latency = undefined
+    item.errorMsg = undefined
+    item.requestData = undefined
+    item.responseData = undefined
+  })
+  loginStep.status = 'running'
+  loginStep.requestData = redactApiPayload(loginRequest)
+  deleteAccountSelectedCaseId.value = loginStep.id
+  currentStatus.value = 'Executing'
+  deleteAccountManuallyStopped = false
+  deleteAccountAbortController?.abort()
+  deleteAccountAbortController = new AbortController()
+  deleteAccountActiveTab.value = 'status'
+  logs.value = [
+    `[${new Date().toLocaleTimeString()}] 开始执行删除账号嵌套 Case 链路...`,
+    `[CASE 1/2] ${loginStep.method} ${loginURL}`
+  ]
+  uptime.value = 0
+  duration.value = 0
+  if (timer) clearInterval(timer)
+  timer = setInterval(() => {
+    uptime.value++
+    duration.value++
+  }, 1000)
   scrollToBottom()
 
+  let activeStep = loginStep
   try {
-    const response = await fetch(buildBackendUrl('/api/proxy'), {
+    const loginStartedAt = Date.now()
+    const loginResponse = await fetch(buildBackendUrl('/api/proxy'), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      signal: deleteAccountAbortController.signal,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        method: 'GET',
-        url: deleteUrl,
-        data: deleteHeaders
+        method: loginStep.method,
+        url: loginURL,
+        headers: loginHeaders,
+        body: loginBody
       })
     })
+    const loginData = await readDeleteAccountProxyResponse(loginResponse)
+    loginStep.latency = Date.now() - loginStartedAt
+    loginStep.code = loginResponse.status
+    loginStep.responseData = redactApiPayload(loginData)
 
-    const resData = await response.json()
-    logs.value.push(`[${new Date().toLocaleTimeString()}] 注销请求完成。服务器响应: ${JSON.stringify(resData)}`)
+    if (!loginResponse.ok) {
+      throw new Error(loginData?.msg || loginData?.error || `匿名登录返回 HTTP ${loginResponse.status}`)
+    }
+
+    const userData = loginData?.data || {}
+    const userID = userData.user_id || '未知'
+    const userName = userData.user_name || '未知'
+    const sessionToken = userData.session_token
+    if (!sessionToken) throw new Error('登录响应中未找到有效 session_token')
+
+    loginStep.status = 'success'
+    loginStep.responseData = redactApiPayload(loginData, [String(sessionToken)])
+    logs.value.push(`[CASE 1/2] 匿名登录成功，已识别用户 ${userID}，等待人工确认。`)
     scrollToBottom()
 
-    if (resData.code === 0 || resData.msg === 'success') {
-      ElMessage.success('账号注销指令已下发成功')
-    } else {
-      ElMessage.error('注销失败: ' + (resData.msg || '未知错误'))
+    await ElMessageBox.confirm(
+      `<div class="delete-account-confirm-content">
+        <div class="delete-account-confirm-lead">
+          <span class="delete-account-confirm-badge"><i></i> CASE 1/2 已通过</span>
+          <p>匿名登录成功，请确认账号身份后再执行下一步。</p>
+        </div>
+        <div class="delete-account-confirm-user-card">
+          <div class="delete-account-confirm-user-card__title">
+            <span class="delete-account-confirm-user-icon">ID</span>
+            <div>
+              <strong>待删除账号</strong>
+              <small>请仔细核对以下账号信息</small>
+            </div>
+          </div>
+          <div class="delete-account-confirm-user-row">
+            <span>用户 ID</span>
+            <code>${escapeDeleteAccountHTML(userID)}</code>
+          </div>
+          <div class="delete-account-confirm-user-row">
+            <span>用户名</span>
+            <strong>${escapeDeleteAccountHTML(userName)}</strong>
+          </div>
+        </div>
+        <div class="delete-account-confirm-flow">
+          <span class="is-finished">匿名登录</span>
+          <i></i>
+          <span class="is-danger">删除账号</span>
+        </div>
+        <div class="delete-account-confirm-warning">
+          <span class="delete-account-confirm-warning__icon">!</span>
+          <div>
+            <strong>此操作不可撤销</strong>
+            <span>继续后将永久抹除该账号及其关联数据，请谨慎操作。</span>
+          </div>
+        </div>
+      </div>`,
+      '确认执行删除账号',
+      {
+        confirmButtonText: '确认删除账号',
+        cancelButtonText: '暂不执行',
+        confirmButtonClass: 'delete-account-confirm-submit',
+        cancelButtonClass: 'delete-account-confirm-cancel',
+        dangerouslyUseHTMLString: true,
+        center: false,
+        customClass: 'delete-account-confirm-box'
+      }
+    )
+
+    activeStep = deleteStep
+    deleteStep.status = 'running'
+    deleteAccountSelectedCaseId.value = deleteStep.id
+    const deleteHeaders = {
+      ...deleteHeadersConfig,
+      'X-SESSION-TOKEN': sessionToken
     }
+    const deleteRequest = {
+      url: deleteURL,
+      method: deleteStep.method,
+      headers: deleteHeaders,
+      ...(deleteBody !== undefined ? { body: deleteBody } : {})
+    }
+    deleteStep.requestData = redactApiPayload(deleteRequest, [String(sessionToken)])
+    logs.value.push(`[CASE 2/2] 已确认，正在执行 ${deleteStep.method} ${deleteURL}`)
+    scrollToBottom()
+
+    const deleteStartedAt = Date.now()
+    const deleteResponse = await fetch(buildBackendUrl('/api/proxy'), {
+      method: 'POST',
+      signal: deleteAccountAbortController.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method: deleteStep.method,
+        url: deleteURL,
+        headers: deleteHeaders,
+        ...(deleteBody !== undefined ? { body: deleteBody } : {})
+      })
+    })
+    const deleteData = await readDeleteAccountProxyResponse(deleteResponse)
+    deleteStep.latency = Date.now() - deleteStartedAt
+    deleteStep.code = deleteResponse.status
+    deleteStep.responseData = redactApiPayload(deleteData)
+
+    if (!deleteResponse.ok || (deleteData?.code !== 0 && deleteData?.msg !== 'success')) {
+      throw new Error(deleteData?.msg || deleteData?.error || `删除账号返回 HTTP ${deleteResponse.status}`)
+    }
+
+    deleteStep.status = 'success'
+    currentStatus.value = 'Finished'
+    logs.value.push(`[SUCCESS] 两个嵌套 Case 均执行成功，用户 ${userID} 已注销。`)
+    ElMessage.success('账号注销成功')
   } catch (error: any) {
-    ElMessage.error('注销请求异常: ' + error.message)
-    logs.value.push(`[ERROR] 注销请求失败: ${error.message}`)
+    if (deleteAccountManuallyStopped) {
+      deleteAccountCases.value.forEach(item => {
+        if (item.status !== 'success') {
+          item.status = 'skipped'
+          item.errorMsg = '执行已手动终止'
+        }
+      })
+      currentStatus.value = 'Stopped'
+    } else if (error === 'cancel' || error === 'close') {
+      deleteStep.status = 'skipped'
+      deleteStep.errorMsg = '用户取消执行删除账号 Case'
+      currentStatus.value = 'Stopped'
+      logs.value.push(`[CANCEL] ${deleteStep.errorMsg}。`)
+    } else {
+      activeStep.status = 'failed'
+      activeStep.errorMsg = error?.message || `${activeStep.name}执行异常`
+      if (activeStep.id === loginStep.id) {
+        deleteStep.status = 'skipped'
+        deleteStep.errorMsg = '前置匿名登录 Case 失败'
+      }
+      currentStatus.value = 'Failed'
+      logs.value.push(`[ERROR] ${activeStep.name}: ${activeStep.errorMsg}`)
+      ElMessage.error(activeStep.errorMsg)
+    }
+  } finally {
+    if (timer) clearInterval(timer)
+    timer = null
+    deleteAccountAbortController = null
+    persistDeleteAccountConfig()
     scrollToBottom()
   }
 }
@@ -1596,6 +2642,11 @@ const startExecution = async () => {
     return
   }
 
+  if (isDeleteAccount) {
+    await runDeleteAccountNestedCases()
+    return
+  }
+
   if (isMonkeyTest) {
     await startMonkeyRun()
     return
@@ -1607,98 +2658,6 @@ const startExecution = async () => {
       ElMessage.warning('请输入有效的测试链接 (如: http://example.com)')
       return
     }
-  }
-
-  // 特殊处理：删除账号工具的匿名登录逻辑
-  if (isDeleteAccount) {
-    if (!deleteAccountParam.value) {
-      ElMessage.warning('请先填入参数')
-      return
-    }
-
-    const params = parseParams(deleteAccountParam.value)
-    const baseDomain = domainMappings[projectName.value as keyof typeof domainMappings][testServer.value]
-    const loginUrl = `${baseDomain}/login/anonymous`
-
-    currentStatus.value = 'Executing'
-    logs.value = [
-      `[${new Date().toLocaleTimeString()}] 准备发起匿名登录请求...`,
-      `[DEBUG] 目标 URL: ${loginUrl}`,
-      `[DEBUG] 解析后的请求头 (Headers): ${JSON.stringify(params, null, 2)}`
-    ]
-    scrollToBottom()
-    
-    try {
-      const response = await fetch(buildBackendUrl('/api/proxy'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          url: loginUrl,
-          data: params
-        })
-      })
-
-      const resData = await response.json()
-      currentStatus.value = 'Finished'
-      logs.value.push(`[${new Date().toLocaleTimeString()}] 登录请求成功，正在解析用户信息...`)
-      scrollToBottom()
-      
-      const userData = resData.data || {}
-      const userId = userData.user_id || '未知'
-      const userName = userData.user_name || '未知'
-      const sessionToken = userData.session_token
-
-      if (!sessionToken) {
-        ElMessage.error('登录响应中未找到有效 Token')
-        logs.value.push(`[ERROR] 登陆失败: ${JSON.stringify(resData)}`)
-        return
-      }
-
-      // 弹出美化后的确认窗口
-      ElMessageBox.confirm(
-        `<div class="confirm-content-wrapper">
-          <p class="confirm-tip">已成功获取临时登录凭证，请核对并确认是否执行注销操作：</p>
-          <div class="user-card">
-            <div class="user-info-item">
-              <span class="info-label">用户 ID</span>
-              <span class="info-value-id">${userId}</span>
-            </div>
-            <div class="user-info-item">
-              <span class="info-label">用户名</span>
-              <span class="info-value-name">${userName}</span>
-            </div>
-          </div>
-          <div class="warning-footer">
-            <span style="font-size: 14px;">⚠️</span>
-            <span>注意：此操作将永久抹除该账号所有数据，不可撤销。</span>
-          </div>
-        </div>`,
-        '账号注销确认',
-        {
-          confirmButtonText: '确认',
-          cancelButtonText: '取消',
-          confirmButtonClass: 'el-button--danger is-plain custom-confirm-btn',
-          cancelButtonClass: 'custom-cancel-btn',
-          dangerouslyUseHTMLString: true,
-          center: false,
-          icon: Warning,
-          customClass: 'delete-account-confirm-box'
-        }
-      ).then(() => {
-        handleAccountDelete(sessionToken, params)
-      }).catch(() => {
-        logs.value.push(`[${new Date().toLocaleTimeString()}] 用户取消了注销操作。`)
-        scrollToBottom()
-      })
-    } catch (error: any) {
-      currentStatus.value = 'Ready'
-      ElMessage.error('登录请求失败: ' + error.message)
-      logs.value.push(`[ERROR] ${error.message}`)
-      scrollToBottom()
-    }
-    return
   }
 
   reportUrl.value = '' // 清除上一次的报告
@@ -1915,6 +2874,24 @@ const stopExecution = async () => {
     return
   }
 
+  if (isDeleteAccount) {
+    deleteAccountManuallyStopped = true
+    deleteAccountAbortController?.abort()
+    ElMessageBox.close()
+    if (timer) clearInterval(timer)
+    timer = null
+    deleteAccountCases.value.forEach(item => {
+      if (item.status !== 'success') {
+        item.status = 'skipped'
+        item.errorMsg = '执行已手动终止'
+      }
+    })
+    currentStatus.value = 'Stopped'
+    logs.value.push(`[${new Date().toLocaleTimeString()}] 删除账号嵌套 Case 链路已手动终止。`)
+    scrollToBottom()
+    return
+  }
+
   if (isDramaCheck) {
     await dramaRunStore.stop()
     currentStatus.value = 'Stopped'
@@ -1989,6 +2966,7 @@ const clearLogs = () => {
 
 const closePage = () => {
   persistShortDramaApiConfig()
+  persistDeleteAccountConfig()
   if (isDramaCheck && visibleStatus.value === 'Executing') {
     dramaRunStore.markBackground()
   } else if (currentStatus.value === 'Executing') {
@@ -1997,8 +2975,9 @@ const closePage = () => {
   router.push('/')
 }
 
-const persistShortDramaApiConfigBeforeUnload = () => {
+const persistApiToolConfigBeforeUnload = () => {
   persistShortDramaApiConfig()
+  persistDeleteAccountConfig()
 }
 
 onMounted(() => {
@@ -2007,12 +2986,13 @@ onMounted(() => {
   if (isSubtitleCheck) {
     subtitleRunStore.recoverCurrentRun()
   }
-  window.addEventListener('beforeunload', persistShortDramaApiConfigBeforeUnload)
+  window.addEventListener('beforeunload', persistApiToolConfigBeforeUnload)
 })
 
 onUnmounted(() => {
   persistShortDramaApiConfig()
-  window.removeEventListener('beforeunload', persistShortDramaApiConfigBeforeUnload)
+  persistDeleteAccountConfig()
+  window.removeEventListener('beforeunload', persistApiToolConfigBeforeUnload)
   if (timer) clearInterval(timer)
   if (monkeyTimer) clearInterval(monkeyTimer)
   if (monkeyReconcileTimer) clearInterval(monkeyReconcileTimer)
@@ -2026,6 +3006,7 @@ onUnmounted(() => {
 
 onBeforeRouteLeave(() => {
   persistShortDramaApiConfig()
+  persistDeleteAccountConfig()
 })
 </script>
 
@@ -2034,10 +3015,16 @@ onBeforeRouteLeave(() => {
     <div class="main-content">
       
       <!-- 左侧信息区 -->
-      <div class="sidebar-panel" :class="{ 'sidebar-panel--short-drama': isShortDramaApiTest }">
+      <div
+        class="sidebar-panel"
+        :class="{
+          'sidebar-panel--short-drama': isShortDramaApiTest,
+          'sidebar-panel--delete-account': isDeleteAccount
+        }"
+      >
         <div class="status-badge-row">
-          <span class="badge-ready" :class="{ 'badge-ready--short-drama': isShortDramaApiTest }">
-            {{ isShortDramaApiTest ? '接口配置列表' : 'READY' }}
+          <span class="badge-ready" :class="{ 'badge-ready--short-drama': isShortDramaApiTest || isDeleteAccount }">
+            {{ isShortDramaApiTest ? '接口配置列表' : isDeleteAccount ? '2 CASE 嵌套配置' : 'READY' }}
           </span>
             <el-button
               v-if="isShortDramaApiTest"
@@ -2048,6 +3035,7 @@ onBeforeRouteLeave(() => {
             >
               新增接口测试
             </el-button>
+          <el-icon v-else-if="showDramaRulesEntry" class="info-icon" role="button" tabindex="0" aria-label="查看规则配置" title="查看规则配置" @click="dramaRulesVisible = true" @keydown.enter="dramaRulesVisible = true" @keydown.space.prevent="dramaRulesVisible = true"><Warning /></el-icon>
           <el-icon v-else class="info-icon"><Warning /></el-icon>
         </div>
 
@@ -2057,11 +3045,244 @@ onBeforeRouteLeave(() => {
         </div>
 
         <div class="params-section">
-          <!-- 针对删除账号工具，新增填入参数输入框 -->
-          <div v-if="isDeleteAccount" class="param-group">
-            <label class="param-label">填入参数</label>
-            <el-input v-model="deleteAccountParam" placeholder="请输入参数" />
-          </div>
+          <template v-if="isDeleteAccount">
+            <div class="delete-account-safety-tip">
+              <el-icon><Warning /></el-icon>
+              <span>两个 Case 按顺序嵌套执行：匿名登录成功并人工确认后，才会进入删除账号 Case。</span>
+            </div>
+
+            <div class="short-drama-settings-grid delete-account-settings-grid">
+              <label class="short-drama-setting">
+                <span class="short-drama-setting__label">执行环境</span>
+                <el-select v-model="deleteAccountEnvironment" placeholder="选择服务器" size="small" class="short-drama-setting__control">
+                  <el-option
+                    v-for="server in deleteAccountServerOptions"
+                    :key="server.value"
+                    :label="server.label"
+                    :value="server.value"
+                  />
+                </el-select>
+              </label>
+              <label
+                class="short-drama-setting"
+                :class="{ 'delete-account-project-setting--disabled': deleteAccountEnvironment === 'custom' }"
+              >
+                <span class="short-drama-setting__label">项目</span>
+                <el-select
+                  v-model="projectName"
+                  placeholder="选择项目"
+                  size="small"
+                  class="short-drama-setting__control"
+                  :disabled="deleteAccountEnvironment === 'custom'"
+                >
+                  <el-option label="ShortsWave" value="ShortsWave" />
+                  <el-option label="NovelNova" value="NovelNova" />
+                </el-select>
+              </label>
+            </div>
+
+            <label v-if="deleteAccountEnvironment === 'custom'" class="short-drama-setting delete-account-custom-domain-setting">
+              <span class="short-drama-setting__label">自定义域名</span>
+              <el-input
+                v-model="deleteAccountCustomDomain"
+                size="small"
+                class="short-drama-setting__control"
+                placeholder="例如 https://api.example.com 或 http://192.168.1.10:8080"
+                @blur="finishDeleteAccountCustomDomainEditing"
+              />
+              <small>执行时将使用该域名拼接匿名登录和删除账号接口路径</small>
+            </label>
+
+            <div class="delete-account-login-info-card">
+              <div class="delete-account-login-info-card__header">
+                <div>
+                  <strong>匿名登录信息</strong>
+                  <small>支持 Optional([...])、JSON 对象以及控制台键值文本</small>
+                </div>
+                <el-button
+                  type="primary"
+                  size="small"
+                  :disabled="!deleteAccountLoginInfo.trim()"
+                  @click="applyDeleteAccountLoginInfo()"
+                >
+                  解析并带入
+                </el-button>
+              </div>
+              <el-input
+                v-model="deleteAccountLoginInfo"
+                type="textarea"
+                :rows="5"
+                resize="none"
+                spellcheck="false"
+                class="delete-account-login-info-input"
+                placeholder="粘贴 Optional([&quot;app&quot;: &quot;...&quot;, &quot;device-uuid&quot;: &quot;...&quot;])"
+                @paste="scheduleDeleteAccountLoginInfoParsing"
+              />
+              <div
+                class="delete-account-login-info-card__result"
+                :class="`delete-account-login-info-card__result--${deleteAccountLoginInfoState}`"
+              >
+                <span class="delete-account-login-info-card__dot"></span>
+                <span>{{ deleteAccountLoginInfoSummary }}</span>
+              </div>
+              <p>解析结果会合并到下方“匿名登录”Case 的请求头；请求体保持接口要求的 JSON 结构。</p>
+            </div>
+
+            <template v-for="(deleteCase, deleteCaseIndex) in deleteAccountCases" :key="deleteCase.id">
+              <div
+                class="api-interface-card api-interface-card--active delete-account-case-card"
+                :class="{ 'delete-account-case-card--selected': deleteAccountSelectedCaseId === deleteCase.id }"
+              >
+                <div class="api-card-header delete-account-case-card__header" @click="deleteAccountSelectedCaseId = deleteCase.id">
+                  <div class="api-header-left">
+                    <span class="delete-account-case-order">{{ deleteCaseIndex + 1 }}</span>
+                    <span class="method-badge" :class="deleteCase.method">{{ deleteCase.method }}</span>
+                    <div class="delete-account-case-card__title">
+                      <strong>{{ deleteCase.name }}</strong>
+                      <small>{{ deleteCaseIndex === 0 ? '获取 session_token，作为删除 Case 的前置步骤' : '自动接收登录 Case 的 session_token' }}</small>
+                    </div>
+                  </div>
+                  <span class="api-status-chip" :class="`api-status-chip--${deleteCase.status}`">
+                    {{ getInterfaceStatusText(deleteCase.status) }}
+                  </span>
+                </div>
+
+                <div class="api-card-body delete-account-case-card__body">
+                  <div class="form-row">
+                    <div class="form-item">
+                      <label class="inner-label">Case 名称</label>
+                      <el-input v-model="deleteCase.name" size="small" @blur="persistDeleteAccountConfig" />
+                    </div>
+                  </div>
+                  <div class="form-row method-url-row">
+                    <div class="form-item method-col">
+                      <label class="inner-label">请求方法</label>
+                      <el-select v-model="deleteCase.method" size="small" class="method-select">
+                        <el-option label="GET" value="GET" />
+                        <el-option label="POST" value="POST" />
+                        <el-option label="PUT" value="PUT" />
+                        <el-option label="DELETE" value="DELETE" />
+                        <el-option label="PATCH" value="PATCH" />
+                      </el-select>
+                    </div>
+                    <div class="form-item url-col">
+                      <label class="inner-label">请求接口</label>
+                      <el-input
+                        v-model="deleteCase.url"
+                        size="small"
+                        :placeholder="deleteCaseIndex === 0 ? '/login/anonymous' : '/user/delete'"
+                        @blur="deleteCase.url = normalizeInterfacePath(deleteCase.url); persistDeleteAccountConfig()"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="form-row">
+                    <div class="form-item">
+                      <div class="json-editor-heading">
+                        <label class="inner-label">请求头</label>
+                        <el-button
+                          link
+                          type="primary"
+                          size="small"
+                          :icon="Edit"
+                          class="json-editor-action"
+                          @mousedown.prevent
+                          @click.stop="isDeleteAccountJsonEditing(deleteCase, 'headers') ? finishDeleteAccountJsonEditing(deleteCase, 'headers') : startDeleteAccountJsonEditing(deleteCase, 'headers')"
+                        >
+                          {{ isDeleteAccountJsonEditing(deleteCase, 'headers') ? '完成编辑' : '编辑请求头' }}
+                        </el-button>
+                      </div>
+                      <div
+                        class="json-command-preview"
+                        :class="{ 'json-command-preview--editing': isDeleteAccountJsonEditing(deleteCase, 'headers') }"
+                        @dblclick="startDeleteAccountJsonEditing(deleteCase, 'headers')"
+                      >
+                        <div class="json-command-preview__toolbar">
+                          <span class="json-command-preview__label">
+                            {{ isDeleteAccountJsonEditing(deleteCase, 'headers') ? '请求头编辑' : '请求头预览' }}
+                          </span>
+                          <span class="delete-account-isolation-badge">Case 独立配置</span>
+                        </div>
+                        <el-input
+                          v-if="isDeleteAccountJsonEditing(deleteCase, 'headers')"
+                          v-model="deleteCase.headers"
+                          type="textarea"
+                          :rows="getJsonEditorRows(deleteCase.headers, 12)"
+                          resize="none"
+                          wrap="off"
+                          size="small"
+                          class="monospace-textarea json-command-editor"
+                          autofocus
+                          @blur="finishDeleteAccountJsonEditing(deleteCase, 'headers')"
+                        />
+                        <pre v-else class="json-command-preview__lines">
+                          <span
+                            v-for="(line, lineIndex) in getJsonPreviewLines(deleteCase.headers, '未配置请求头')"
+                            :key="lineIndex"
+                            class="json-command-preview__line"
+                          >{{ line || ' ' }}</span>
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-if="deleteCase.method !== 'GET'" class="form-row">
+                    <div class="form-item">
+                      <div class="json-editor-heading">
+                        <label class="inner-label">请求体</label>
+                        <el-button
+                          link
+                          type="primary"
+                          size="small"
+                          :icon="Edit"
+                          class="json-editor-action"
+                          @mousedown.prevent
+                          @click.stop="isDeleteAccountJsonEditing(deleteCase, 'body') ? finishDeleteAccountJsonEditing(deleteCase, 'body') : startDeleteAccountJsonEditing(deleteCase, 'body')"
+                        >
+                          {{ isDeleteAccountJsonEditing(deleteCase, 'body') ? '完成编辑' : '编辑请求体' }}
+                        </el-button>
+                      </div>
+                      <div
+                        class="json-command-preview"
+                        :class="{ 'json-command-preview--editing': isDeleteAccountJsonEditing(deleteCase, 'body') }"
+                        @dblclick="startDeleteAccountJsonEditing(deleteCase, 'body')"
+                      >
+                        <div class="json-command-preview__toolbar">
+                          <span class="json-command-preview__label">
+                            {{ isDeleteAccountJsonEditing(deleteCase, 'body') ? '请求体编辑' : '请求体预览' }}
+                          </span>
+                          <span class="delete-account-isolation-badge">Case 独立配置</span>
+                        </div>
+                        <el-input
+                          v-if="isDeleteAccountJsonEditing(deleteCase, 'body')"
+                          v-model="deleteCase.body"
+                          type="textarea"
+                          :rows="getJsonEditorRows(deleteCase.body, 6)"
+                          resize="none"
+                          wrap="off"
+                          size="small"
+                          class="monospace-textarea json-command-editor"
+                          autofocus
+                          @blur="finishDeleteAccountJsonEditing(deleteCase, 'body')"
+                        />
+                        <pre v-else class="json-command-preview__lines">
+                          <span
+                            v-for="(line, lineIndex) in getJsonPreviewLines(deleteCase.body, '未配置请求体')"
+                            :key="lineIndex"
+                            class="json-command-preview__line"
+                          >{{ line || ' ' }}</span>
+                        </pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div v-if="deleteCaseIndex === 0" class="delete-account-nested-connector">
+                <span>成功提取 session_token 后继续</span>
+                <el-icon><ArrowDown /></el-icon>
+              </div>
+            </template>
+          </template>
 
           <template v-if="isMonkeyTest">
             <div class="param-group">
@@ -2204,6 +3425,10 @@ onBeforeRouteLeave(() => {
 
           <!-- 针对短剧类接口测试，展示专属参数设置 -->
           <template v-if="isShortDramaApiTest">
+            <div v-if="apiTestSuites.length === 0" class="api-test-suite-empty">
+              <span>暂无接口测试</span>
+              <small>点击上方“新增接口测试”重新创建</small>
+            </div>
             <div
               v-for="suite in apiTestSuites"
               :key="suite.id"
@@ -2288,7 +3513,8 @@ onBeforeRouteLeave(() => {
                     'api-interface-card--selected': selectedApiInterfaceId === item.id,
                     'card-status--success': item.status === 'success',
                     'card-status--failed': item.status === 'failed',
-                    'card-status--running': item.status === 'running'
+                    'card-status--running': item.status === 'running',
+                    'card-status--skipped': item.status === 'skipped'
                   }"
                 >
                   <!-- 卡片头部：折叠点击区、方法、名称、快捷操作 -->
@@ -2359,18 +3585,115 @@ onBeforeRouteLeave(() => {
 
                     <div class="form-row">
                       <div class="form-item">
-                        <label class="inner-label">请求头</label>
+                        <div class="json-editor-heading">
+                          <label class="inner-label">请求头</label>
+                          <el-button
+                            link
+                            type="primary"
+                            size="small"
+                            :icon="Edit"
+                            class="json-editor-action"
+                            @mousedown.prevent
+                            @click.stop="isJsonBlockEditing(item.id, 'headers') ? finishJsonBlockEditing(item, 'headers') : startJsonBlockEditing(item.id, 'headers')"
+                          >
+                            {{ isJsonBlockEditing(item.id, 'headers') ? '完成编辑' : '编辑请求头' }}
+                          </el-button>
+                        </div>
                         <div
                           class="json-command-preview"
                           :class="{ 'json-command-preview--editing': isJsonBlockEditing(item.id, 'headers') }"
                           title="双击修改请求头"
                           @dblclick="startJsonBlockEditing(item.id, 'headers')"
                         >
-                          <span class="json-command-preview__label">
-                            {{ isJsonBlockEditing(item.id, 'headers') ? '请求头编辑' : '请求头预览' }}
-                          </span>
+                          <div class="json-command-preview__toolbar">
+                            <span class="json-command-preview__label">
+                              {{ isJsonBlockEditing(item.id, 'headers') ? '请求头编辑' : '请求头预览' }}
+                            </span>
+                            <div class="json-command-preview__actions">
+                            <el-dropdown
+                              v-if="isJsonBlockEditing(item.id, 'headers')"
+                              trigger="click"
+                              popper-class="api-variable-popper"
+                              :disabled="getAvailableApiVariables(suite, item).length === 0"
+                              @command="(variableName: string) => insertApiVariablePlaceholder(item, 'headers', variableName)"
+                            >
+                              <el-button
+                                size="small"
+                                round
+                                class="json-variable-btn"
+                                :disabled="getAvailableApiVariables(suite, item).length === 0"
+                                @mousedown.prevent
+                              >
+                                {{ '{}' }} 插入变量
+                                <el-icon class="json-quick-fill-btn__arrow"><ArrowDown /></el-icon>
+                              </el-button>
+                              <template #dropdown>
+                                <el-dropdown-menu>
+                                  <el-dropdown-item disabled class="api-variable-menu__header">可用的前置变量</el-dropdown-item>
+                                  <el-dropdown-item
+                                    v-for="variable in getAvailableApiVariables(suite, item)"
+                                    :key="`${variable.sourceCaseId}:${variable.name}`"
+                                    :command="variable.name"
+                                  >
+                                    <div class="api-variable-menu__item">
+                                      <code>{{ formatApiVariablePlaceholder(variable.name) }}</code>
+                                      <small>来自 {{ variable.sourceCaseName }}</small>
+                                    </div>
+                                  </el-dropdown-item>
+                                </el-dropdown-menu>
+                              </template>
+                            </el-dropdown>
+                            <el-dropdown
+                              v-if="isJsonBlockEditing(item.id, 'headers')"
+                              trigger="click"
+                              popper-class="json-quick-fill-popper"
+                              :show-timeout="0"
+                              :hide-timeout="120"
+                              :disabled="getPreviousJsonSources(suite, item, 'headers').length === 0"
+                              @command="(sourceId: number) => applyPreviousJsonSource(suite, item, 'headers', sourceId)"
+                            >
+                              <el-button
+                                size="small"
+                                round
+                                class="json-quick-fill-btn"
+                                :disabled="getPreviousJsonSources(suite, item, 'headers').length === 0"
+                                :title="getPreviousJsonSources(suite, item, 'headers').length > 0 ? '从前面的 case 带入请求头' : '前面的 case 暂无可用请求头'"
+                                @mousedown.prevent
+                              >
+                                <el-icon><CopyDocument /></el-icon>
+                                一键带入
+                                <el-icon class="json-quick-fill-btn__arrow"><ArrowDown /></el-icon>
+                              </el-button>
+                              <template #dropdown>
+                                <el-dropdown-menu>
+                                  <el-dropdown-item disabled class="json-quick-fill-menu__header">
+                                    <div class="json-quick-fill-menu__title">
+                                      <span>选择来源 Case</span>
+                                      <small>{{ getPreviousJsonSources(suite, item, 'headers').length }} 条可用</small>
+                                    </div>
+                                  </el-dropdown-item>
+                                  <el-dropdown-item
+                                    v-for="source in getPreviousJsonSources(suite, item, 'headers')"
+                                    :key="source.id"
+                                    :command="source.id"
+                                  >
+                                    <div class="json-quick-fill-option">
+                                      <span :class="['json-quick-fill-method', `is-${source.method.toLowerCase()}`]">{{ source.method }}</span>
+                                      <div class="json-quick-fill-option__copy">
+                                        <strong>{{ source.name }}</strong>
+                                        <small>{{ getInterfaceDisplayUrl(source) }}</small>
+                                      </div>
+                                      <el-icon class="json-quick-fill-option__arrow"><ArrowRight /></el-icon>
+                                    </div>
+                                  </el-dropdown-item>
+                                </el-dropdown-menu>
+                              </template>
+                            </el-dropdown>
+                            </div>
+                          </div>
                           <el-input
                             v-if="isJsonBlockEditing(item.id, 'headers')"
+                            :ref="(element: any) => setJsonEditorRef(item.id, 'headers', element)"
                             v-model="item.headers"
                             type="textarea"
                             :rows="getJsonEditorRows(item.headers, 10)"
@@ -2380,7 +3703,7 @@ onBeforeRouteLeave(() => {
                             placeholder='{"Content-Type": "application/json", "X-Token": "xxx"}'
                             class="monospace-textarea json-command-editor"
                             autofocus
-                            @blur="stopJsonBlockEditing"
+                            @blur="finishJsonBlockEditing(item, 'headers')"
                           />
                           <pre v-else class="json-command-preview__lines">
                             <span
@@ -2395,18 +3718,115 @@ onBeforeRouteLeave(() => {
 
                     <div class="form-row" v-if="item.method !== 'GET'">
                       <div class="form-item">
-                        <label class="inner-label">请求体</label>
+                        <div class="json-editor-heading">
+                          <label class="inner-label">请求体</label>
+                          <el-button
+                            link
+                            type="primary"
+                            size="small"
+                            :icon="Edit"
+                            class="json-editor-action"
+                            @mousedown.prevent
+                            @click.stop="isJsonBlockEditing(item.id, 'body') ? finishJsonBlockEditing(item, 'body') : startJsonBlockEditing(item.id, 'body')"
+                          >
+                            {{ isJsonBlockEditing(item.id, 'body') ? '完成编辑' : '编辑请求体' }}
+                          </el-button>
+                        </div>
                         <div
                           class="json-command-preview"
                           :class="{ 'json-command-preview--editing': isJsonBlockEditing(item.id, 'body') }"
                           title="双击修改请求体"
                           @dblclick="startJsonBlockEditing(item.id, 'body')"
                         >
-                          <span class="json-command-preview__label">
-                            {{ isJsonBlockEditing(item.id, 'body') ? '请求体编辑' : '请求体预览' }}
-                          </span>
+                          <div class="json-command-preview__toolbar">
+                            <span class="json-command-preview__label">
+                              {{ isJsonBlockEditing(item.id, 'body') ? '请求体编辑' : '请求体预览' }}
+                            </span>
+                            <div class="json-command-preview__actions">
+                            <el-dropdown
+                              v-if="isJsonBlockEditing(item.id, 'body')"
+                              trigger="click"
+                              popper-class="api-variable-popper"
+                              :disabled="getAvailableApiVariables(suite, item).length === 0"
+                              @command="(variableName: string) => insertApiVariablePlaceholder(item, 'body', variableName)"
+                            >
+                              <el-button
+                                size="small"
+                                round
+                                class="json-variable-btn"
+                                :disabled="getAvailableApiVariables(suite, item).length === 0"
+                                @mousedown.prevent
+                              >
+                                {{ '{}' }} 插入变量
+                                <el-icon class="json-quick-fill-btn__arrow"><ArrowDown /></el-icon>
+                              </el-button>
+                              <template #dropdown>
+                                <el-dropdown-menu>
+                                  <el-dropdown-item disabled class="api-variable-menu__header">可用的前置变量</el-dropdown-item>
+                                  <el-dropdown-item
+                                    v-for="variable in getAvailableApiVariables(suite, item)"
+                                    :key="`${variable.sourceCaseId}:${variable.name}`"
+                                    :command="variable.name"
+                                  >
+                                    <div class="api-variable-menu__item">
+                                      <code>{{ formatApiVariablePlaceholder(variable.name) }}</code>
+                                      <small>来自 {{ variable.sourceCaseName }}</small>
+                                    </div>
+                                  </el-dropdown-item>
+                                </el-dropdown-menu>
+                              </template>
+                            </el-dropdown>
+                            <el-dropdown
+                              v-if="isJsonBlockEditing(item.id, 'body')"
+                              trigger="click"
+                              popper-class="json-quick-fill-popper"
+                              :show-timeout="0"
+                              :hide-timeout="120"
+                              :disabled="getPreviousJsonSources(suite, item, 'body').length === 0"
+                              @command="(sourceId: number) => applyPreviousJsonSource(suite, item, 'body', sourceId)"
+                            >
+                              <el-button
+                                size="small"
+                                round
+                                class="json-quick-fill-btn"
+                                :disabled="getPreviousJsonSources(suite, item, 'body').length === 0"
+                                :title="getPreviousJsonSources(suite, item, 'body').length > 0 ? '从前面的 case 带入请求体' : '前面的 case 暂无可用请求体'"
+                                @mousedown.prevent
+                              >
+                                <el-icon><CopyDocument /></el-icon>
+                                一键带入
+                                <el-icon class="json-quick-fill-btn__arrow"><ArrowDown /></el-icon>
+                              </el-button>
+                              <template #dropdown>
+                                <el-dropdown-menu>
+                                  <el-dropdown-item disabled class="json-quick-fill-menu__header">
+                                    <div class="json-quick-fill-menu__title">
+                                      <span>选择来源 Case</span>
+                                      <small>{{ getPreviousJsonSources(suite, item, 'body').length }} 条可用</small>
+                                    </div>
+                                  </el-dropdown-item>
+                                  <el-dropdown-item
+                                    v-for="source in getPreviousJsonSources(suite, item, 'body')"
+                                    :key="source.id"
+                                    :command="source.id"
+                                  >
+                                    <div class="json-quick-fill-option">
+                                      <span :class="['json-quick-fill-method', `is-${source.method.toLowerCase()}`]">{{ source.method }}</span>
+                                      <div class="json-quick-fill-option__copy">
+                                        <strong>{{ source.name }}</strong>
+                                        <small>{{ getInterfaceDisplayUrl(source) }}</small>
+                                      </div>
+                                      <el-icon class="json-quick-fill-option__arrow"><ArrowRight /></el-icon>
+                                    </div>
+                                  </el-dropdown-item>
+                                </el-dropdown-menu>
+                              </template>
+                            </el-dropdown>
+                            </div>
+                          </div>
                           <el-input
                             v-if="isJsonBlockEditing(item.id, 'body')"
+                            :ref="(element: any) => setJsonEditorRef(item.id, 'body', element)"
                             v-model="item.body"
                             type="textarea"
                             :rows="getJsonEditorRows(item.body, 6)"
@@ -2416,7 +3836,7 @@ onBeforeRouteLeave(() => {
                             placeholder='{"key": "value"}'
                             class="monospace-textarea json-command-editor"
                             autofocus
-                            @blur="stopJsonBlockEditing"
+                            @blur="finishJsonBlockEditing(item, 'body')"
                           />
                           <pre v-else class="json-command-preview__lines">
                             <span
@@ -2426,6 +3846,94 @@ onBeforeRouteLeave(() => {
                             >{{ line || ' ' }}</span>
                           </pre>
                         </div>
+                      </div>
+                    </div>
+
+                    <div class="api-variable-extractor-panel">
+                      <div class="api-variable-extractor-panel__header">
+                        <div>
+                          <label class="inner-label">响应变量提取</label>
+                          <small>请求成功后提取变量，供后续 Case 使用</small>
+                        </div>
+                        <el-button
+                          size="small"
+                          type="primary"
+                          plain
+                          class="api-variable-add-btn"
+                          @click.stop="addApiVariableExtractor(item)"
+                        >
+                          添加变量
+                        </el-button>
+                      </div>
+
+                      <div v-if="item.extractors.length === 0" class="api-variable-extractor-empty">
+                        暂无提取规则。登录 Case 可在这里提取 session_token、access_token 或 Cookie。
+                      </div>
+
+                      <div
+                        v-for="extractor in item.extractors"
+                        :key="extractor.id"
+                        class="api-variable-extractor-row"
+                      >
+                        <el-input
+                          v-model="extractor.name"
+                          size="small"
+                          placeholder="变量名，如 session_token"
+                          class="api-variable-name-input"
+                          @blur="finishApiVariableExtractorEditing(extractor)"
+                        />
+                        <el-select
+                          v-model="extractor.source"
+                          size="small"
+                          class="api-variable-source-select"
+                          @change="persistShortDramaApiConfig()"
+                        >
+                          <el-option label="响应体 JSON" value="body" />
+                          <el-option label="响应头" value="header" />
+                          <el-option label="Cookie" value="cookie" />
+                          <el-option label="纯文本正则" value="text" />
+                        </el-select>
+                        <el-input
+                          v-model="extractor.path"
+                          size="small"
+                          :placeholder="getApiVariablePathPlaceholder(extractor.source)"
+                          class="api-variable-path-input"
+                          @blur="finishApiVariableExtractorEditing(extractor)"
+                        />
+                        <div class="api-variable-extractor-actions">
+                        <el-tooltip content="提取失败时阻止依赖 Case 执行" placement="top">
+                          <label class="api-variable-option">
+                            <el-switch v-model="extractor.required" size="small" @change="persistShortDramaApiConfig()" />
+                            <span>必填</span>
+                          </label>
+                        </el-tooltip>
+                        <el-tooltip content="日志和报文中隐藏真实值" placement="top">
+                          <label class="api-variable-option">
+                            <el-switch v-model="extractor.sensitive" size="small" @change="persistShortDramaApiConfig()" />
+                            <span>脱敏</span>
+                          </label>
+                        </el-tooltip>
+                        <el-button
+                          link
+                          type="danger"
+                          :icon="Delete"
+                          title="删除提取规则"
+                          class="api-variable-extractor-delete"
+                          @click.stop="removeApiVariableExtractor(item, extractor.id)"
+                        />
+                        </div>
+                      </div>
+
+                      <div v-if="item.extractedVariables?.length" class="api-variable-runtime-result">
+                        <span class="api-variable-runtime-result__label">本次已提取</span>
+                        <span
+                          v-for="variable in item.extractedVariables"
+                          :key="variable.name"
+                          class="api-variable-runtime-chip"
+                        >
+                          <code>{{ variable.name }}</code>
+                          <span>{{ variable.displayValue }}</span>
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -2439,7 +3947,7 @@ onBeforeRouteLeave(() => {
           </template>
 
           <!-- 针对业务自检工具，隐藏原本的链接输入框 -->
-          <div v-if="!isDramaCheck && !isSubtitleCheck && !isMonkeyTest && !isShortDramaApiTest" class="param-group">
+          <div v-if="!isDramaCheck && !isSubtitleCheck && !isMonkeyTest && !isShortDramaApiTest && !isDeleteAccount" class="param-group">
             <label class="param-label">
               <span class="link-icon">🔗</span> 测试链接
             </label>
@@ -2450,7 +3958,7 @@ onBeforeRouteLeave(() => {
             />
           </div>
 
-          <div v-if="!isWebFrontendStressTest && !isMonkeyTest && !isShortDramaApiTest" class="param-row">
+          <div v-if="!isWebFrontendStressTest && !isMonkeyTest && !isShortDramaApiTest && !isDeleteAccount" class="param-row">
             <div class="param-group half">
               <label class="param-label">测试服务器</label>
               <!-- 改为下拉框切换 -->
@@ -2472,7 +3980,14 @@ onBeforeRouteLeave(() => {
       </div>
 
       <!-- 右侧日志区 / 报告区 -->
-      <div class="log-panel" :class="{ 'log-panel--short-drama': isShortDramaApiTest }" style="position: relative;">
+      <div
+        class="log-panel"
+        :class="{
+          'log-panel--short-drama': isShortDramaApiTest,
+          'log-panel--delete-account': isDeleteAccount
+        }"
+        style="position: relative;"
+      >
         <!-- 日志顶栏 -->
         <div class="log-header">
           <div class="log-status-info">
@@ -2523,6 +4038,122 @@ onBeforeRouteLeave(() => {
             </div>
           </div>
         </div>
+        <div v-else-if="isDeleteAccount" class="short-drama-results-container delete-account-results-container">
+          <div class="short-drama-tabs-header delete-account-tabs-header">
+            <button
+              class="sd-tab-btn"
+              :class="{ active: deleteAccountActiveTab === 'status' }"
+              @click="deleteAccountActiveTab = 'status'"
+            >
+              <el-icon><Tickets /></el-icon> Case 状态
+            </button>
+            <button
+              class="sd-tab-btn"
+              :class="{ active: deleteAccountActiveTab === 'payload' }"
+              @click="deleteAccountActiveTab = 'payload'"
+            >
+              <el-icon><DocumentIcon /></el-icon> 报文详情
+            </button>
+            <button
+              class="sd-tab-btn"
+              :class="{ active: deleteAccountActiveTab === 'logs' }"
+              @click="deleteAccountActiveTab = 'logs'"
+            >
+              <el-icon><Cpu /></el-icon> 原始日志
+            </button>
+          </div>
+
+          <div class="short-drama-tab-body">
+            <div v-if="deleteAccountActiveTab === 'status'" class="pipeline-view delete-account-status-view">
+              <div class="pipeline-intro">
+                <span class="payload-header-bar__eyebrow">Isolated Nested Cases</span>
+                <h3>删除账号嵌套执行链路</h3>
+                <p>两个 Case 分别配置、顺序执行；匿名登录失败或未经人工确认时，删除账号 Case 不会发送请求。</p>
+              </div>
+              <div class="delete-account-stage-flow">
+                <div class="delete-account-stage">
+                  <span>01</span>
+                  <div><strong>匿名登录</strong><small>使用卡片中的独立请求配置</small></div>
+                </div>
+                <el-icon><ArrowRight /></el-icon>
+                <div class="delete-account-stage">
+                  <span>02</span>
+                  <div><strong>人工确认</strong><small>核对用户 ID 与用户名</small></div>
+                </div>
+                <el-icon><ArrowRight /></el-icon>
+                <div class="delete-account-stage delete-account-stage--danger">
+                  <span>03</span>
+                  <div><strong>永久注销</strong><small>确认后才发送删除请求</small></div>
+                </div>
+              </div>
+              <div class="delete-account-result-list">
+                <template v-for="(deleteCase, deleteCaseIndex) in deleteAccountCases" :key="deleteCase.id">
+                  <div
+                    class="pipeline-card delete-account-result-card"
+                    :class="[`pipeline-card--${deleteCase.status}`, { active: deleteAccountSelectedCaseId === deleteCase.id }]"
+                    @click="deleteAccountSelectedCaseId = deleteCase.id; deleteAccountActiveTab = 'payload'"
+                  >
+                    <div class="pipeline-card__indicator">
+                      <span v-if="deleteCase.status === 'pending'" class="status-dot pending"></span>
+                      <span v-else-if="deleteCase.status === 'running'" class="status-spinner"></span>
+                      <el-icon v-else-if="deleteCase.status === 'success'" class="status-icon success" color="#10b981"><Check /></el-icon>
+                      <el-icon v-else-if="deleteCase.status === 'failed'" class="status-icon failed" color="#ef4444"><Close /></el-icon>
+                      <el-icon v-else class="status-icon skipped" color="#f59e0b"><Warning /></el-icon>
+                    </div>
+                    <div class="pipeline-card__details">
+                      <div class="pipeline-card__title-row">
+                        <strong class="step-name">Case {{ deleteCaseIndex + 1 }} · {{ deleteCase.name }}</strong>
+                        <span v-if="deleteCase.latency !== undefined" class="step-latency">{{ deleteCase.latency }}ms</span>
+                      </div>
+                      <div class="pipeline-card__meta-row">
+                        <span class="step-badge" :class="deleteCase.method">{{ deleteCase.method }}</span>
+                        <span class="step-path">{{ getInterfaceDisplayUrl(deleteCase) }}</span>
+                        <span v-if="deleteCase.code" class="step-code" :class="`code-${deleteCase.code}`">HTTP {{ deleteCase.code }}</span>
+                      </div>
+                      <small v-if="deleteCase.errorMsg" class="delete-account-result-error">{{ deleteCase.errorMsg }}</small>
+                    </div>
+                    <div class="pipeline-card__action"><el-icon><ArrowRight /></el-icon></div>
+                  </div>
+                  <div v-if="deleteCaseIndex === 0" class="delete-account-result-connector">
+                    <el-icon><ArrowDown /></el-icon>
+                    <span>session_token + 人工确认</span>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div v-else-if="deleteAccountActiveTab === 'payload'" class="payload-view">
+              <div class="payload-details-wrapper">
+                <div class="payload-header-bar">
+                  <div>
+                    <span class="payload-header-bar__eyebrow">Delete Account Payload</span>
+                    <strong>{{ selectedDeleteAccountCase.name }} · 请求与响应</strong>
+                  </div>
+                  <span class="payload-badge" :class="selectedDeleteAccountCase.method">
+                    {{ selectedDeleteAccountCase.method }} {{ getInterfaceDisplayUrl(selectedDeleteAccountCase) }}
+                  </span>
+                </div>
+                <div class="payload-split-container">
+                  <div class="payload-box">
+                    <div class="payload-box-title">Request Payload</div>
+                    <pre class="json-code-block json-code-block--request">{{ formatJSON(selectedDeleteAccountCase.requestData) }}</pre>
+                  </div>
+                  <div class="payload-box">
+                    <div class="payload-box-title">Response Payload</div>
+                    <pre class="json-code-block json-code-block--response">{{ formatJSON(selectedDeleteAccountCase.responseData) }}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-else class="log-content-wrapper" style="height: 100%;">
+              <div ref="logContainer" class="log-content" style="height: 100%; overflow-y: auto;">
+                <div v-for="(log, idx) in visibleLogs" :key="idx" class="log-line">{{ log }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div v-else-if="isShortDramaApiTest" class="short-drama-results-container">
           <!-- 自定义 Tab 头部 -->
           <div class="short-drama-tabs-header">
@@ -2580,6 +4211,7 @@ onBeforeRouteLeave(() => {
                     <span v-else-if="step.status === 'running'" class="status-spinner"></span>
                     <el-icon v-else-if="step.status === 'success'" class="status-icon success" color="#10b981"><Check /></el-icon>
                     <el-icon v-else-if="step.status === 'failed'" class="status-icon failed" color="#ef4444"><Close /></el-icon>
+                    <el-icon v-else class="status-icon skipped" color="#f59e0b"><Warning /></el-icon>
                   </div>
                   <div class="pipeline-card__details">
                     <div class="pipeline-card__title-row">
@@ -2617,7 +4249,18 @@ onBeforeRouteLeave(() => {
                     <pre class="json-code-block json-code-block--request">{{ formatJSON(selectedStepForPayload.requestData) }}</pre>
                   </div>
                   <div class="payload-box">
-                    <div class="payload-box-title">Response Payload</div>
+                    <div class="payload-box-title payload-box-title--with-action">
+                      <span>Response Payload</span>
+                      <el-button
+                        link
+                        type="success"
+                        size="small"
+                        :disabled="selectedStepForPayload.responseData === undefined"
+                        @click="addExtractorFromResponse(selectedStepForPayload)"
+                      >
+                        提取为变量
+                      </el-button>
+                    </div>
                     <pre class="json-code-block json-code-block--response">{{ formatJSON(selectedStepForPayload.responseData) }}</pre>
                   </div>
                 </div>
@@ -2707,15 +4350,16 @@ onBeforeRouteLeave(() => {
         </button>
         <button 
           class="btn-execute" 
-          :disabled="visibleStatus === 'Executing'"
+          :disabled="visibleStatus === 'Executing' || (isShortDramaApiTest && activePipelineSteps.length === 0)"
           @click="startExecution"
         >
           <el-icon><VideoPlay /></el-icon>
-          Execute
+          {{ isDeleteAccount ? '执行嵌套 Cases' : 'Execute' }}
         </button>
       </div>
     </div>
 
+    <DramaRulesDialog v-if="showDramaRulesEntry" v-model="dramaRulesVisible" />
     <el-dialog
       v-model="monkeyWirelessDialogVisible"
       title="无线连接 Android 设备"
@@ -2800,6 +4444,10 @@ onBeforeRouteLeave(() => {
 
 .sidebar-panel--short-drama {
   width: clamp(430px, 28vw, 520px);
+}
+
+.sidebar-panel--delete-account {
+  width: clamp(430px, 30vw, 540px);
 }
 
 .status-badge-row {
@@ -3084,6 +4732,10 @@ onBeforeRouteLeave(() => {
 }
 
 .log-panel--short-drama {
+  min-width: 0;
+}
+
+.log-panel--delete-account {
   min-width: 0;
 }
 
@@ -3570,6 +5222,341 @@ button:disabled {
 }
 
 /* ==================== 短剧类接口测试专属样式 ==================== */
+.delete-account-safety-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.delete-account-safety-tip .el-icon {
+  margin-top: 2px;
+  flex-shrink: 0;
+  color: #ea580c;
+  font-size: 14px;
+}
+
+.delete-account-settings-grid {
+  margin-top: 12px;
+}
+
+.delete-account-project-setting--disabled {
+  border-color: #e5e7eb;
+  background: #f1f5f9;
+}
+
+.delete-account-project-setting--disabled .short-drama-setting__label {
+  color: #a8b1bf;
+}
+
+.delete-account-project-setting--disabled :deep(.el-select__wrapper) {
+  background: #e9eef5;
+  box-shadow: 0 0 0 1px #dde3eb inset;
+}
+
+.delete-account-custom-domain-setting {
+  display: block;
+  margin-top: 10px;
+}
+
+.delete-account-custom-domain-setting > small {
+  display: block;
+  margin-top: 7px;
+  color: #94a3b8;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.delete-account-login-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #dbe5f1;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #f8fbff 0%, #ffffff 72%);
+}
+
+.delete-account-login-info-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delete-account-login-info-card__header > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+
+.delete-account-login-info-card__header strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.delete-account-login-info-card__header small {
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.delete-account-login-info-card__header .el-button {
+  flex-shrink: 0;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.delete-account-login-info-input :deep(.el-textarea__inner) {
+  padding: 10px 11px;
+  border: 0;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #dbeafe;
+  caret-color: #93c5fd;
+  box-shadow: 0 0 0 1px #263449 inset;
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.delete-account-login-info-input :deep(.el-textarea__inner:focus) {
+  box-shadow: 0 0 0 1px #60a5fa inset, 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.delete-account-login-info-card__result {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.delete-account-login-info-card__dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+
+.delete-account-login-info-card__result--success {
+  color: #15803d;
+}
+
+.delete-account-login-info-card__result--success .delete-account-login-info-card__dot {
+  background: #22c55e;
+}
+
+.delete-account-login-info-card__result--error {
+  color: #dc2626;
+}
+
+.delete-account-login-info-card__result--error .delete-account-login-info-card__dot {
+  background: #ef4444;
+}
+
+.delete-account-login-info-card > p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.delete-account-case-card {
+  margin-top: 12px;
+  border-color: #fed7aa;
+  box-shadow: 0 10px 28px rgba(234, 88, 12, 0.08);
+}
+
+.delete-account-case-card--selected {
+  border-color: #fb923c;
+  box-shadow: 0 0 0 2px rgba(251, 146, 60, 0.12), 0 12px 30px rgba(234, 88, 12, 0.1);
+}
+
+.delete-account-case-card__header {
+  cursor: pointer;
+  background: linear-gradient(135deg, #fff7ed 0%, #ffffff 75%);
+}
+
+.delete-account-case-order {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: #ffedd5;
+  color: #c2410c;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.delete-account-case-card__title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+
+.delete-account-case-card__title strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.delete-account-case-card__title small {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-account-case-card__body {
+  padding-top: 12px;
+}
+
+.delete-account-nested-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 0 0;
+  color: #c2410c;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.delete-account-nested-connector .el-icon {
+  font-size: 16px;
+}
+
+.delete-account-isolation-badge {
+  padding: 3px 7px;
+  border: 1px solid rgba(251, 146, 60, 0.28);
+  border-radius: 999px;
+  background: rgba(234, 88, 12, 0.12);
+  color: #fdba74;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.delete-account-tabs-header .sd-tab-btn.active {
+  background: #ea580c;
+  box-shadow: 0 2px 6px rgba(234, 88, 12, 0.2);
+}
+
+.delete-account-status-view {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.delete-account-stage-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr) 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.delete-account-stage-flow > .el-icon {
+  justify-self: center;
+  color: #cbd5e1;
+}
+
+.delete-account-stage {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.delete-account-stage > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.delete-account-stage > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+
+.delete-account-stage strong {
+  color: #1e293b;
+  font-size: 12px;
+}
+
+.delete-account-stage small {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-account-stage--danger {
+  border-color: #fecaca;
+  background: #fff1f2;
+}
+
+.delete-account-stage--danger > span {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.delete-account-result-card {
+  margin-top: 4px;
+}
+
+.delete-account-result-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.delete-account-result-connector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  color: #c2410c;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.delete-account-result-error {
+  margin-top: 4px;
+  color: #dc2626;
+  font-size: 11px;
+}
+
 .short-drama-config-panel {
   display: flex;
   flex-direction: column;
@@ -3588,6 +5575,27 @@ button:disabled {
 .short-drama-config-panel--selected {
   border-color: #3b82f6;
   box-shadow: 0 10px 24px rgba(59, 130, 246, 0.1);
+}
+
+.api-test-suite-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 28px 18px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.api-test-suite-empty small {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .short-drama-config-panel__header {
@@ -3902,6 +5910,11 @@ button:disabled {
   color: #b91c1c;
 }
 
+.api-status-chip--skipped {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .action-icon,
 .arrow-icon {
   color: #94a3b8;
@@ -3966,6 +5979,25 @@ button:disabled {
   font-weight: 700;
 }
 
+.json-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.json-editor-heading .inner-label {
+  margin-bottom: 0;
+}
+
+.json-editor-action {
+  height: 22px;
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .method-select {
   width: 100%;
 }
@@ -4003,6 +6035,76 @@ button:disabled {
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0;
+}
+
+.json-command-preview__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 22px;
+}
+
+.json-command-preview__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.json-quick-fill-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(96, 165, 250, 0.34);
+  background: rgba(37, 99, 235, 0.13);
+  color: #93c5fd;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  box-shadow: 0 5px 14px rgba(2, 6, 23, 0.2);
+  transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+
+.json-quick-fill-btn:not(.is-disabled):hover {
+  border-color: rgba(147, 197, 253, 0.72);
+  background: rgba(37, 99, 235, 0.24);
+  color: #dbeafe;
+  transform: translateY(-1px);
+}
+
+.json-quick-fill-btn.is-disabled {
+  border-color: rgba(71, 85, 105, 0.35);
+  background: rgba(51, 65, 85, 0.12);
+  color: #475569;
+  box-shadow: none;
+}
+
+.json-quick-fill-btn__arrow {
+  margin-left: 1px;
+  font-size: 10px;
+}
+
+.json-variable-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(52, 211, 153, 0.32);
+  background: rgba(5, 150, 105, 0.12);
+  color: #6ee7b7;
+  font-size: 11px;
+  font-weight: 800;
+  box-shadow: 0 5px 14px rgba(2, 6, 23, 0.18);
+}
+
+.json-variable-btn:not(.is-disabled):hover {
+  border-color: rgba(110, 231, 183, 0.7);
+  background: rgba(5, 150, 105, 0.22);
+  color: #d1fae5;
+}
+
+.json-variable-btn.is-disabled {
+  border-color: rgba(71, 85, 105, 0.35);
+  background: rgba(51, 65, 85, 0.12);
+  color: #475569;
+  box-shadow: none;
 }
 
 .json-command-preview__lines {
@@ -4043,6 +6145,148 @@ button:disabled {
 
 .json-command-editor :deep(.el-textarea__inner:focus) {
   box-shadow: none;
+}
+
+.api-variable-extractor-panel {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+}
+
+.api-variable-extractor-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.api-variable-extractor-panel__header > div { min-width: 0; flex: 1 1 150px; }
+.api-variable-extractor-panel__header small { display: block; overflow-wrap: anywhere; }
+.api-variable-add-btn { flex-shrink: 0; }
+
+.api-variable-extractor-panel__header .inner-label {
+  margin-bottom: 2px;
+  color: #334155;
+}
+
+.api-variable-extractor-panel__header small {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.api-variable-add-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.api-variable-extractor-empty {
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.api-variable-extractor-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #ffffff;
+  min-width: 0;
+}
+
+.api-variable-extractor-row > .el-input,
+.api-variable-extractor-row > .el-select { width: 100%; min-width: 0; }
+.api-variable-path-input { grid-column: 1 / -1; }
+.api-variable-extractor-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-width: 0;
+  padding-top: 4px;
+}
+.api-variable-extractor-actions .api-variable-extractor-delete { margin-left: auto; flex-shrink: 0; }
+
+.api-variable-extractor-row + .api-variable-extractor-row {
+  margin-top: 7px;
+}
+
+.api-variable-name-input :deep(.el-input__inner),
+.api-variable-path-input :deep(.el-input__inner) {
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 11px;
+}
+
+.api-variable-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.api-variable-runtime-result {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.api-variable-runtime-result__label {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.api-variable-runtime-chip {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border-radius: 7px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 10px;
+}
+
+.api-variable-runtime-chip code {
+  min-width: 0;
+  font-weight: 900;
+}
+
+.api-variable-runtime-chip span {
+  min-width: 0;
+  color: #059669;
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
 }
 
 .short-drama-results-container {
@@ -4161,6 +6405,11 @@ button:disabled {
 
 .pipeline-card--failed {
   border-left: 4px solid #ef4444;
+}
+
+.pipeline-card--skipped {
+  border-left: 4px solid #f59e0b;
+  background: #fffbeb;
 }
 
 .pipeline-card__indicator {
@@ -4343,6 +6592,22 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.payload-box-title--with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.payload-box-title--with-action .el-button {
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .json-code-block {
   flex: 1;
   min-height: 0;
@@ -4482,103 +6747,543 @@ button:disabled {
 <style>
 /* ==================== 账号删除弹窗全局样式 (非 Scoped) ==================== */
 .delete-account-confirm-box {
-  width: 420px !important;
-  border-radius: 16px !important;
-  padding: 12px 12px 20px !important;
-  border: 1px solid rgba(255, 77, 79, 0.2) !important;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1) !important;
+  width: min(440px, calc(100vw - 32px)) !important;
+  overflow: hidden;
+  padding: 0 !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 14px !important;
+  background: #ffffff !important;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18), 0 5px 16px rgba(15, 23, 42, 0.08) !important;
 }
 
 .delete-account-confirm-box .el-message-box__header {
-  padding-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 58px;
+  padding: 0 52px !important;
+  border-bottom: 1px solid #eef2f7;
 }
 
 .delete-account-confirm-box .el-message-box__title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 800;
-  color: #1e293b;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+  text-align: center;
 }
 
-.delete-account-confirm-box .el-message-box__status.el-icon {
-  font-size: 24px;
+.delete-account-confirm-box .el-message-box__headerbtn {
+  top: 17px;
+  right: 18px;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  transition: background 0.18s ease;
 }
 
-.confirm-content-wrapper {
+.delete-account-confirm-box .el-message-box__headerbtn:hover {
+  background: #f1f5f9;
+}
+
+.delete-account-confirm-box .el-message-box__headerbtn:hover .el-message-box__close {
+  color: #334155;
+}
+
+.delete-account-confirm-box .el-message-box__content {
+  padding: 18px 20px 16px !important;
+}
+
+.delete-account-confirm-box .el-message-box__container,
+.delete-account-confirm-box .el-message-box__message {
+  width: 100%;
+}
+
+.delete-account-confirm-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   color: #475569;
 }
 
-.confirm-tip {
-  font-size: 13.5px;
-  line-height: 1.6;
-  margin-bottom: 16px;
-  color: #64748b;
-}
-
-.user-card {
-  background: linear-gradient(135deg, #fffafa 0%, #fff 100%);
-  border: 1px solid #fee2e2;
-  padding: 16px;
-  border-radius: 12px;
-  margin-bottom: 20px;
-  box-shadow: 0 4px 10px rgba(239, 68, 68, 0.03);
-}
-
-.user-info-item {
+.delete-account-confirm-lead {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 10px;
+  gap: 7px;
+  text-align: center;
 }
 
-.user-info-item:last-child {
-  margin-bottom: 0;
-}
-
-.info-label {
-  font-size: 11px;
-  font-weight: 700;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  min-width: 60px;
-}
-
-.info-value-id {
-  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
-  color: #dc2626;
-  background: #fef2f2;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-weight: 700;
-  font-size: 14px;
-}
-
-.info-value-name {
-  color: #0f172a;
-  font-weight: 700;
-  font-size: 15px;
-}
-
-.warning-footer {
-  display: flex;
+.delete-account-confirm-badge {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  background: #f8fafc;
-  border-radius: 8px;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #15803d;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.delete-account-confirm-badge i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+}
+
+.delete-account-confirm-lead p {
+  max-width: 330px;
+  margin: 0;
   color: #64748b;
   font-size: 12px;
+  line-height: 1.55;
 }
 
-.custom-confirm-btn {
+.delete-account-confirm-user-card {
+  overflow: hidden;
+  border: 1px solid #dbe5f1;
+  border-radius: 11px;
+  background: #f8fafc;
+}
+
+.delete-account-confirm-user-card__title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fbff 72%);
+}
+
+.delete-account-confirm-user-icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font: 900 9px/1 'Menlo', 'Monaco', monospace;
+}
+
+.delete-account-confirm-user-card__title > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.delete-account-confirm-user-card__title strong {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.delete-account-confirm-user-card__title small {
+  color: #94a3b8;
+  font-size: 9px;
+}
+
+.delete-account-confirm-user-row {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e8edf3;
+  background: #ffffff;
+}
+
+.delete-account-confirm-user-row:last-child {
+  border-bottom: 0;
+}
+
+.delete-account-confirm-user-row > span {
+  text-align: right;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.delete-account-confirm-user-row code {
+  overflow: hidden;
+  color: #1d4ed8;
+  font: 700 11px/1.4 'Menlo', 'Monaco', monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-account-confirm-user-row > strong {
+  overflow: hidden;
+  color: #1e293b;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-account-confirm-flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 2px 10px;
+}
+
+.delete-account-confirm-flow span {
+  padding: 5px 9px;
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.delete-account-confirm-flow .is-finished {
+  background: #ecfdf5;
+  color: #15803d;
+}
+
+.delete-account-confirm-flow .is-danger {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.delete-account-confirm-flow i {
+  position: relative;
+  width: 42px;
+  height: 1px;
+  background: #cbd5e1;
+}
+
+.delete-account-confirm-flow i::after {
+  position: absolute;
+  top: -3px;
+  right: 0;
+  width: 6px;
+  height: 6px;
+  border-top: 1px solid #94a3b8;
+  border-right: 1px solid #94a3b8;
+  content: '';
+  transform: rotate(45deg);
+}
+
+.delete-account-confirm-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 9px;
+  background: #fff7f7;
+}
+
+.delete-account-confirm-warning__icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #fee2e2;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.delete-account-confirm-warning > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.delete-account-confirm-warning strong {
+  color: #b91c1c;
+  font-size: 11px;
+}
+
+.delete-account-confirm-warning div span {
+  color: #7f1d1d;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.delete-account-confirm-box .el-message-box__btns {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 14px 20px 18px !important;
+  border-top: 1px solid #eef2f7;
+  background: #f8fafc;
+}
+
+.delete-account-confirm-box .delete-account-confirm-submit,
+.delete-account-confirm-box .delete-account-confirm-cancel {
+  min-width: 104px;
+  height: 36px;
+  margin-left: 0 !important;
+  padding: 0 16px !important;
   border-radius: 8px !important;
+  font-size: 12px;
   font-weight: 700 !important;
-  padding: 8px 20px !important;
 }
 
-.custom-cancel-btn {
-  border-radius: 8px !important;
-  font-weight: 600 !important;
+.delete-account-confirm-box .delete-account-confirm-cancel {
+  border-color: #dbe5f1 !important;
+  background: #ffffff !important;
   color: #64748b !important;
+}
+
+.delete-account-confirm-box .delete-account-confirm-cancel:hover {
+  border-color: #bfdbfe !important;
+  background: #f8fbff !important;
+  color: #2563eb !important;
+}
+
+.delete-account-confirm-box .delete-account-confirm-submit {
+  border-color: #ef4444 !important;
+  background: #ef4444 !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 10px rgba(239, 68, 68, 0.22);
+}
+
+.delete-account-confirm-box .delete-account-confirm-submit:hover {
+  border-color: #dc2626 !important;
+  background: #dc2626 !important;
+  box-shadow: 0 6px 14px rgba(220, 38, 38, 0.28);
+  transform: translateY(-1px);
+}
+
+/* 短剧接口测试：一键带入下拉框会 teleport 到 body，需使用全局样式。 */
+.json-quick-fill-popper.el-popper {
+  overflow: hidden;
+  min-width: 330px;
+  padding: 0 !important;
+  border: 1px solid #dbe4f0 !important;
+  border-radius: 14px !important;
+  background: rgba(255, 255, 255, 0.98) !important;
+  box-shadow: 0 20px 48px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.06) !important;
+  backdrop-filter: blur(14px);
+}
+
+.json-quick-fill-popper .el-popper__arrow::before {
+  border-color: #dbe4f0 !important;
+  background: #ffffff !important;
+}
+
+.json-quick-fill-popper .el-dropdown-menu {
+  max-height: 360px;
+  margin: 0;
+  padding: 7px;
+  overflow-y: auto;
+  background: transparent;
+}
+
+.json-quick-fill-popper .el-dropdown-menu__item {
+  min-height: 58px;
+  margin: 3px 0;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: #334155;
+  line-height: 1.25;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.json-quick-fill-popper .el-dropdown-menu__item:not(.is-disabled):focus,
+.json-quick-fill-popper .el-dropdown-menu__item:not(.is-disabled):hover {
+  border-color: #bfdbfe;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fbff 100%);
+  color: #1d4ed8;
+  transform: translateX(2px);
+}
+
+.json-quick-fill-popper .el-dropdown-menu__item.json-quick-fill-menu__header {
+  min-height: 42px;
+  margin: 0 0 5px;
+  padding: 6px 9px 9px;
+  border-bottom: 1px solid #e8eef6;
+  border-radius: 8px 8px 0 0;
+  opacity: 1;
+  cursor: default;
+}
+
+.json-quick-fill-menu__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 16px;
+}
+
+.json-quick-fill-menu__title span {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.json-quick-fill-menu__title small {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.json-quick-fill-option {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) 16px;
+  align-items: center;
+  width: 100%;
+  min-width: 300px;
+  gap: 10px;
+}
+
+.json-quick-fill-method {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 50px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 7px;
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.json-quick-fill-method.is-get {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.json-quick-fill-method.is-post {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.json-quick-fill-method.is-put,
+.json-quick-fill-method.is-patch {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.json-quick-fill-method.is-delete {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.json-quick-fill-option__copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+
+.json-quick-fill-option__copy strong,
+.json-quick-fill-option__copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.json-quick-fill-option__copy strong {
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.json-quick-fill-option__copy small {
+  color: #94a3b8;
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 10px;
+}
+
+.json-quick-fill-option__arrow {
+  color: #cbd5e1;
+  font-size: 12px;
+  transition: color 0.16s ease, transform 0.16s ease;
+}
+
+.json-quick-fill-popper .el-dropdown-menu__item:hover .json-quick-fill-option__arrow {
+  color: #3b82f6;
+  transform: translateX(2px);
+}
+
+.api-variable-popper.el-popper {
+  min-width: 280px;
+  overflow: hidden;
+  padding: 0 !important;
+  border: 1px solid #ccebdc !important;
+  border-radius: 12px !important;
+  background: rgba(255, 255, 255, 0.98) !important;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14), 0 4px 10px rgba(15, 23, 42, 0.05) !important;
+}
+
+.api-variable-popper .el-popper__arrow::before {
+  border-color: #ccebdc !important;
+  background: #ffffff !important;
+}
+
+.api-variable-popper .el-dropdown-menu {
+  max-height: 320px;
+  margin: 0;
+  padding: 7px;
+  overflow-y: auto;
+}
+
+.api-variable-popper .el-dropdown-menu__item {
+  min-height: 48px;
+  margin: 2px 0;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #334155;
+}
+
+.api-variable-popper .el-dropdown-menu__item:not(.is-disabled):hover,
+.api-variable-popper .el-dropdown-menu__item:not(.is-disabled):focus {
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.api-variable-popper .el-dropdown-menu__item.api-variable-menu__header {
+  min-height: 34px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  opacity: 1;
+}
+
+.api-variable-menu__item {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 245px;
+  gap: 4px;
+}
+
+.api-variable-menu__item code {
+  color: #047857;
+  font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.api-variable-menu__item small {
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
