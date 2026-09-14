@@ -3,16 +3,17 @@ import { computed, onMounted, ref } from "vue"
 import { ElMessage } from "element-plus"
 import { Key, Lock, Plus, Refresh, User } from "@element-plus/icons-vue"
 import { defectApi } from "../api"
-import type { DefectMeta, DefectProjectMember, DefectProjectPermission } from "../types"
+import type { DefectMemberDefaultRole, DefectMeta, DefectProjectMember, DefectProjectPermission } from "../types"
 
 const props = defineProps<{ meta: DefectMeta | null }>()
 const loading = ref(false)
 const saving = ref(false)
+const savingDefaults = ref(false)
 const search = ref("")
 const items = ref<DefectProjectPermission[]>([])
 const selectedCode = ref("")
-const draftMode = ref<"open" | "restricted">("open")
 const draftMembers = ref<DefectProjectMember[]>([])
+const defaultMembers = ref<DefectMemberDefaultRole[]>([])
 
 const filteredItems = computed(() => {
   const keyword = search.value.trim().toLowerCase()
@@ -20,13 +21,17 @@ const filteredItems = computed(() => {
 })
 const selected = computed(() => items.value.find((item) => item.project_code === selectedCode.value) || null)
 const availableAccounts = computed(() => (props.meta?.accounts || []).filter((account) => !draftMembers.value.some((member) => member.user_id === account.id)))
+const defaultRoleByUser = computed(() => new Map(defaultMembers.value.map((member) => [member.user_id, member.default_role])))
 
 const roleOptions = [
   { value: "lead", label: "项目负责人", description: "项目内全部缺陷操作权限与管理" },
-  { value: "tester", label: "测试人员", description: "提交、编辑、验证和重新激活缺陷" },
+  { value: "tester", label: "测试人员", description: "执行缺陷全部步骤，包括确认、解决、验证、关闭和重新激活" },
   { value: "developer", label: "开发人员", description: "查看、编辑负责项和解决缺陷" },
+  { value: "product", label: "产品人员", description: "提交、编辑和参与缺陷讨论" },
   { value: "viewer", label: "只读成员", description: "仅查看缺陷列表、历史和附件" }
 ]
+
+const defaultRoleOptions = roleOptions.filter((role) => ["tester", "developer", "product"].includes(role.value))
 
 function message(error: any, fallback: string) {
   return error?.response?.data?.error || error?.customMessage || fallback
@@ -35,7 +40,12 @@ function message(error: any, fallback: string) {
 async function load() {
   loading.value = true
   try {
-    items.value = await defectApi.projectPermissions()
+    const [permissions, defaults] = await Promise.all([
+      defectApi.projectPermissions(),
+      defectApi.memberDefaultRoles()
+    ])
+    items.value = permissions
+    defaultMembers.value = defaults
     if (!selectedCode.value && items.value[0]) selectProject(items.value[0])
     else if (selected.value) selectProject(selected.value)
   } catch (error) {
@@ -47,7 +57,6 @@ async function load() {
 
 function selectProject(item: DefectProjectPermission) {
   selectedCode.value = item.project_code
-  draftMode.value = item.permission_mode
   draftMembers.value = item.members.map((member) => ({ ...member }))
 }
 
@@ -57,25 +66,31 @@ function addMember() {
     ElMessage.info("所有平台账号均已添加")
     return
   }
-  draftMembers.value.push({ user_id: account.id, username: account.username, nickname: account.nickname, role_key: "viewer" })
+  draftMembers.value.push({
+    user_id: account.id,
+    username: account.username,
+    nickname: account.nickname,
+    role_key: defaultRoleByUser.value.get(account.id) || "tester"
+  })
 }
 
 function changeMemberUser(index: number, userID: string) {
   const account = props.meta?.accounts.find((item) => item.id === userID)
   const member = draftMembers.value[index]
-  if (member && account) Object.assign(member, { user_id: account.id, username: account.username, nickname: account.nickname })
+  if (member && account) Object.assign(member, {
+    user_id: account.id,
+    username: account.username,
+    nickname: account.nickname,
+    role_key: defaultRoleByUser.value.get(account.id) || "tester"
+  })
 }
 
 async function save() {
   if (!selected.value) return
-  if (draftMode.value === "restricted" && !draftMembers.value.some((member) => member.role_key === "lead")) {
-    ElMessage.warning("受限模式下至少需要指派一名项目负责人")
-    return
-  }
   saving.value = true
   try {
     await defectApi.saveProjectPermission(selected.value.project_code, {
-      permission_mode: draftMode.value,
+      permission_mode: "open",
       members: draftMembers.value.map((member) => ({ ...member }))
     })
     ElMessage.success("项目缺陷权限已保存")
@@ -84,6 +99,18 @@ async function save() {
     ElMessage.error(message(error, "项目权限保存失败"))
   } finally {
     saving.value = false
+  }
+}
+
+async function saveDefaults() {
+  savingDefaults.value = true
+  try {
+    await defectApi.saveMemberDefaultRoles(defaultMembers.value.map((member) => ({ ...member })))
+    ElMessage.success("默认成员属性已保存")
+  } catch (error) {
+    ElMessage.error(message(error, "默认成员属性保存失败"))
+  } finally {
+    savingDefaults.value = false
   }
 }
 
@@ -96,12 +123,34 @@ onMounted(load)
       <div class="permission-header__title">
         <span class="permission-header__icon"><el-icon><Key /></el-icon></span>
         <div>
-          <strong>项目缺陷权限与安全策略</strong>
-          <p>支持按项目配置开放/受限模式，精细化控制各角色在生命周期中的操作范围</p>
+          <strong>项目缺陷成员与权限策略</strong>
+          <p>项目数据开放查看，成员按照项目角色获得对应的生命周期操作权限</p>
         </div>
       </div>
       <el-button :icon="Refresh" @click="load">刷新</el-button>
     </header>
+
+    <section class="default-role-section">
+      <div class="default-role-title">
+        <div>
+          <strong>默认成员属性</strong>
+          <span>成员加入任意项目时，自动带入这里配置的人员属性，项目内仍可单独调整。</span>
+        </div>
+        <el-button type="primary" plain :loading="savingDefaults" @click="saveDefaults">保存默认属性</el-button>
+      </div>
+      <div class="default-role-grid">
+        <div v-for="member in defaultMembers" :key="member.user_id" class="default-role-item">
+          <span class="member-avatar"><el-icon><User /></el-icon></span>
+          <span class="default-role-user">
+            <strong>{{ member.nickname || member.username }}</strong>
+            <small v-if="member.nickname">{{ member.username }}</small>
+          </span>
+          <el-select v-model="member.default_role" class="default-role-select">
+            <el-option v-for="role in defaultRoleOptions" :key="role.value" :label="role.label" :value="role.value" />
+          </el-select>
+        </div>
+      </div>
+    </section>
 
     <div class="permission-layout">
       <!-- 左侧项目选择导航 -->
@@ -117,9 +166,7 @@ onMounted(load)
           >
             <span class="project-code">{{ item.project_code }}</span>
             <strong class="project-name">{{ item.project_name }}</strong>
-            <em class="project-mode" :class="{ 'is-restricted': item.permission_mode === 'restricted' }">
-              {{ item.permission_mode === "restricted" ? "受限" : "开放" }}
-            </em>
+            <em class="project-mode">开放</em>
           </button>
         </div>
       </aside>
@@ -129,29 +176,25 @@ onMounted(load)
         <div class="editor-title">
           <div>
             <strong>{{ selected.project_code }} · {{ selected.project_name }}</strong>
-            <span>权限配置仅作用于当前项目缺陷数据，不影响系统全局规则</span>
+            <span>所有登录用户可查看；仅项目成员可按角色执行提交、处理或验证操作</span>
           </div>
           <el-button type="primary" :loading="saving" @click="save">保存权限设置</el-button>
         </div>
 
-        <!-- 模式切换卡片 -->
-        <div class="mode-grid">
-          <label class="mode-card" :class="{ 'is-active': draftMode === 'open' }">
-            <el-radio v-model="draftMode" value="open"><strong>开放模式</strong></el-radio>
-            <p>未特别指定成员继承平台全局权限；已指定成员按项目赋予的角色精细限制操作。</p>
-          </label>
-          <label class="mode-card" :class="{ 'is-active': draftMode === 'restricted' }">
-            <el-radio v-model="draftMode" value="restricted"><strong>受限模式</strong></el-radio>
-            <p>仅限已添加的项目成员和平台超级管理员访问，其他非授权人员无权查看和编辑。</p>
-          </label>
+        <div class="open-policy-banner">
+          <span class="open-policy-badge">开放模式</span>
+          <div>
+            <strong>项目内容对登录用户开放查看</strong>
+            <p>未加入项目的用户为只读；加入成员后，系统自动带入其默认属性并启用相应操作权限。</p>
+          </div>
         </div>
 
         <!-- 成员列表管理 -->
-        <section class="members-section" :class="{ 'is-muted': draftMode === 'open' }">
+        <section class="members-section">
           <div class="members-title">
             <div>
               <strong>项目成员权限表</strong>
-              <span>{{ draftMode === "open" ? "已指定成员按角色限制操作，其余人员继承系统平台权限" : "成员角色同时严格控制缺陷数据查阅范围和生命周期操作" }}</span>
+              <span>成员角色控制缺陷提交、编辑、解决、验证等生命周期操作</span>
             </div>
             <el-button :icon="Plus" :disabled="!availableAccounts.length" @click="addMember">添加成员</el-button>
           </div>
@@ -182,8 +225,8 @@ onMounted(load)
 
           <div v-else class="member-empty">
             <el-icon><Lock /></el-icon>
-            <strong>尚未配置项目专项成员</strong>
-            <span>若切换为受限模式，请务必至少指定一名项目负责人。</span>
+            <strong>尚未配置项目成员</strong>
+            <span>当前仅管理员可操作，其他登录用户可以只读查看。</span>
           </div>
         </section>
 
@@ -257,6 +300,80 @@ onMounted(load)
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.03);
 }
 
+.default-role-section {
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  border: 1px solid #dbe5f0;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.03);
+}
+
+.default-role-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.default-role-title > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.default-role-title strong {
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.default-role-title span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.default-role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.default-role-item {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 108px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e8eef5;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.default-role-user {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.default-role-user strong,
+.default-role-user small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.default-role-user strong {
+  color: #334155;
+  font-size: 13px;
+}
+
+.default-role-user small {
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
 .project-list {
   padding: 16px;
   border-right: 1px solid #e2e8f0;
@@ -322,11 +439,6 @@ onMounted(load)
   font-weight: 600;
 }
 
-.project-mode.is-restricted {
-  color: #b45309;
-  background: #fef3c7;
-}
-
 .permission-editor {
   padding: 22px;
 }
@@ -357,38 +469,36 @@ onMounted(load)
   font-size: 12px;
 }
 
-.mode-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+.open-policy-banner {
+  display: flex;
+  align-items: center;
   gap: 14px;
   margin-top: 20px;
-}
-
-.mode-card {
-  padding: 16px;
-  border: 1px solid #e2e8f0;
+  padding: 14px 16px;
+  border: 1px solid #bfdbfe;
   border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  background: #ffffff;
+  background: #eff6ff;
 }
 
-.mode-card.is-active {
-  border-color: #93c5fd;
-  background: #f8fbff;
-  box-shadow: 0 0 0 2px #dbeafe;
+.open-policy-badge {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #1d4ed8;
+  background: #dbeafe;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.mode-card strong {
+.open-policy-banner strong {
   color: #1e293b;
   font-size: 14px;
 }
 
-.mode-card p {
-  margin: 8px 0 0 24px;
+.open-policy-banner p {
+  margin: 4px 0 0;
   color: #64748b;
   font-size: 12px;
-  line-height: 1.6;
 }
 
 .members-section {
@@ -397,10 +507,6 @@ onMounted(load)
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   background: #ffffff;
-}
-
-.members-section.is-muted {
-  background: #f8fafc;
 }
 
 .members-title strong {
@@ -477,7 +583,7 @@ onMounted(load)
 
 .role-guide {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
   margin-top: 16px;
 }
@@ -523,9 +629,6 @@ onMounted(load)
   }
   .project-items {
     max-height: 180px;
-  }
-  .mode-grid {
-    grid-template-columns: 1fr;
   }
   .member-row {
     grid-template-columns: 34px 1fr;

@@ -99,6 +99,14 @@ export interface DefectProject {
   short_code?: string
 }
 
+export interface DefectDevice {
+  id: string
+  device_name: string
+  os: string
+  model: string
+  allowed_app: string
+}
+
 export interface DefectAccount {
   id: string
   username: string
@@ -111,6 +119,7 @@ export interface DefectMeta {
   project_versions?: Record<string, string[]>
 	project_actions?: Record<string, Record<string, boolean>>
   projects: DefectProject[]
+  devices?: DefectDevice[]
   accounts: DefectAccount[]
   permissions: Record<string, boolean>
   fields: DefectFieldDefinition[]
@@ -137,15 +146,22 @@ export interface DefectProjectMember {
   user_id: string
   username?: string
   nickname?: string
-  role_key: 'lead' | 'tester' | 'developer' | 'viewer'
+  role_key: 'lead' | 'tester' | 'developer' | 'product' | 'viewer'
 }
 
 export interface DefectProjectPermission {
   project_code: string
   project_name: string
-  permission_mode: 'open' | 'restricted'
+  permission_mode: 'open'
   members: DefectProjectMember[]
   updated_at?: string
+}
+
+export interface DefectMemberDefaultRole {
+  user_id: string
+  username: string
+  nickname?: string
+  default_role: 'tester' | 'developer' | 'product'
 }
 
 export interface DefectStats {

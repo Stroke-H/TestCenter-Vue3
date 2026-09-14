@@ -1,48 +1,63 @@
 /* ==================== 全局样式重置与 CSS 变量 ==================== */
 
 /* Google 字体 Inter */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
 
-/* ==================== CSS 变量 ==================== */
+/* ==================== CSS 变量定义 ==================== */
 :root {
-  /* 主色调 */
-  --color-primary: #60a5fa;
-  --color-primary-light: #93c5fd;
-  --color-primary-dark: #3b82f6;
+  /* 主色调 (统一为现代科技蓝) */
+  --color-primary: #3b82f6;
+  --color-primary-hover: #2563eb;
+  --color-primary-light: #60a5fa;
+  --color-primary-soft: #eff6ff;
+  --color-primary-border: #bfdbfe;
 
-  /* 成功/警告/危险 */
+  /* 语义色彩 */
   --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-danger: #ef4444;
+  --color-success-soft: #f0fdf4;
+  --color-success-border: #bbf7d0;
 
-  /* 背景色（浅色主题） */
-  --bg-base: #f5f6fa;
+  --color-warning: #f59e0b;
+  --color-warning-soft: #fffbeb;
+  --color-warning-border: #fde68a;
+
+  --color-danger: #ef4444;
+  --color-danger-soft: #fef2f2;
+  --color-danger-border: #fecaca;
+
+  /* 背景层级 (统一为柔和雾面灰蓝) */
+  --bg-base: #f8fafc;
   --bg-surface: #ffffff;
   --bg-elevated: #ffffff;
+  --bg-subtle: #f1f5f9;
 
-  /* 文本色 */
-  --text-primary: #1e293b;
+  /* 文本色调 */
+  --text-primary: #0f172a;
+  --text-regular: #334155;
   --text-secondary: #64748b;
   --text-muted: #94a3b8;
 
-  /* 边框 */
-  --border-color: #f0f0f0;
+  /* 边框色 */
+  --border-color: #e2e8f0;
+  --border-subtle: #f1f5f9;
 
-  /* 圆角 */
+  /* 圆角规范 */
+  --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
-  --radius-xl: 20px;
+  --radius-xl: 18px;
+  --radius-pill: 9999px;
 
-  /* 阴影 */
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.25);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.35);
+  /* 柔和阴影系统 */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 18px -2px rgba(15, 23, 42, 0.05);
+  --shadow-lg: 0 10px 30px -4px rgba(15, 23, 42, 0.08);
 
-  /* 过渡 */
+  /* 动效过渡 */
   --transition-fast: 0.15s ease;
-  --transition-normal: 0.25s ease;
-  --transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ==================== 全局重置 ==================== */
@@ -58,13 +73,14 @@ html {
   font-size: 16px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   background-color: var(--bg-base);
   color: var(--text-primary);
-  line-height: 1.6;
+  line-height: 1.5;
   overflow: hidden;
 }
 
@@ -75,33 +91,130 @@ a {
 }
 
 a:hover {
-  color: var(--color-primary-light);
+  color: var(--color-primary-hover);
 }
 
-/* ==================== 滚动条样式 ==================== */
+/* ==================== 滚动条美化 ==================== */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-base);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
-  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+  transition: background 0.2s;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(100, 116, 139, 0.55);
 }
 
-/* ==================== Element Plus 深色主题覆盖 ==================== */
+/* ==================== Element Plus 全局视觉对齐 ==================== */
+
+/* 表格全局风格统一 */
+.el-table {
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-border-color: #eef2f6;
+  --el-table-row-hover-bg-color: #f8fafc;
+  color: var(--text-regular);
+  font-size: 13px;
+}
+
+.el-table th.el-table__cell {
+  background-color: #f8fafc !important;
+  color: #475569 !important;
+  font-weight: 600 !important;
+  font-size: 13px;
+  padding: 11px 0 !important;
+}
+
+.el-table td.el-table__cell {
+  padding: 12px 0 !important;
+}
+
+/* 输入框与选择框柔和圆角与聚焦光晕 */
+.el-input__wrapper,
+.el-select__wrapper {
+  border-radius: 9px !important;
+  box-shadow: 0 0 0 1px #e2e8f0 inset !important;
+  transition: all 0.2s ease !important;
+}
+
+.el-input__wrapper:hover,
+.el-select__wrapper:hover {
+  box-shadow: 0 0 0 1px #cbd5e1 inset !important;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px #3b82f6 inset, 0 0 0 3px rgba(59, 130, 246, 0.12) !important;
+}
+
+/* 按钮圆角与质感 */
+.el-button {
+  border-radius: 9px !important;
+  font-weight: 500;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain) {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+  border-color: transparent !important;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.22);
+}
+
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain):hover {
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.32);
+  transform: translateY(-1px);
+}
+
+/* 标签胶囊圆角 */
+.el-tag {
+  border-radius: 6px !important;
+  font-weight: 500;
+}
+
+.el-tag.is-round {
+  border-radius: 9999px !important;
+}
+
+/* 对话框与抽屉头部对齐 */
+.el-dialog {
+  border-radius: 16px !important;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.14) !important;
+}
+
+.el-dialog__header {
+  margin-right: 0 !important;
+  padding: 18px 22px !important;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.el-dialog__title {
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  color: var(--text-primary) !important;
+}
+
+.el-dialog__body {
+  padding: 20px 22px !important;
+}
+
+.el-dialog__footer {
+  padding: 14px 22px !important;
+  border-top: 1px solid #edf2f7;
+}
 
 /* 面包屑颜色 */
 .el-breadcrumb__inner {
   color: var(--text-secondary) !important;
+  font-weight: 500 !important;
 }
 
 .el-breadcrumb__inner.is-link:hover {
@@ -110,4 +223,24 @@ a:hover {
 
 .el-breadcrumb__separator {
   color: var(--text-muted) !important;
+}
+
+/* ==================== 通用全局布局类 ==================== */
+.tc-page-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 100%;
+}
+
+.tc-card {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition-normal);
+}
+
+.tc-card:hover {
+  box-shadow: var(--shadow-md);
 }

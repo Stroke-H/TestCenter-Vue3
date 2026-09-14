@@ -54,10 +54,10 @@ const deviceAssociationSearch = ref('')
 const pendingDeviceIds = ref<string[]>([])
 const associatingDevices = ref(false)
 const deviceAssociationPanelStyle = ref<Record<string, string>>({})
-const autoFetchingProjectItems = ref(false)
-const autoFetchProjectItemsError = ref('')
-let autoFetchProjectItemsTimer: ReturnType<typeof setTimeout> | null = null
-let autoFetchProjectItemsSeq = 0
+const autoFetchingDefectTitles = ref(false)
+const autoFetchDefectTitlesError = ref('')
+let autoFetchDefectTitlesTimer: ReturnType<typeof setTimeout> | null = null
+let autoFetchDefectTitlesSeq = 0
 
 // --- Preview State ---
 const previewVisible = ref(false)
@@ -398,21 +398,15 @@ const toggleProjectCodeFilter = (projectCode: string) => {
   selectedProjectCodeFilter.value = selectedProjectCodeFilter.value === projectCode ? '' : projectCode
 }
 
-const showProjectItemsLoading = computed(() => {
-  return previewMode.value === 'create' && autoFetchingProjectItems.value
+const showDefectTitlesLoading = computed(() => {
+  return previewMode.value === 'create' && autoFetchingDefectTitles.value
 })
 
-const formatAutoFetchedLinks = (links: string[]) => {
-  return links.length > 0 ? links.join('\n') : '无'
-}
-
-const formatCurrentVersionBugStatus = (unfixedLinks: string[], fixedLinks: string[]) => {
-  const sections = [
-    unfixedLinks.length > 0 ? `未修复：\n${unfixedLinks.join('\n')}` : '',
-    fixedLinks.length > 0 ? `已修复：\n${fixedLinks.join('\n')}` : ''
-  ].filter(Boolean)
-
-  return sections.length > 0 ? sections.join('\n\n') : '无'
+const formatManagedDefectTitles = (titles: string[]) => {
+  const normalized = titles.map(title => String(title || '').trim()).filter(Boolean)
+  return normalized.length > 0
+    ? normalized.map((title, index) => `${index + 1}. ${title}`).join('\n')
+    : '无'
 }
 
 const normalizeProjectCode = (value: string) => value.trim().toUpperCase()
@@ -444,83 +438,66 @@ const versionInputPlaceholder = computed(() => {
   return latestProjectVersion.value ? `最近版本 ${latestProjectVersion.value}` : '例如 2.58.0'
 })
 
-const clearAutoFetchProjectItemsTimer = () => {
-  if (autoFetchProjectItemsTimer) {
-    clearTimeout(autoFetchProjectItemsTimer)
-    autoFetchProjectItemsTimer = null
+const clearAutoFetchDefectTitlesTimer = () => {
+  if (autoFetchDefectTitlesTimer) {
+    clearTimeout(autoFetchDefectTitlesTimer)
+    autoFetchDefectTitlesTimer = null
   }
 }
 
-const fetchProjectItemsForReport = async (projectCode: string, version: string, seq: number) => {
-  autoFetchingProjectItems.value = true
-  autoFetchProjectItemsError.value = ''
+const fetchDefectTitlesForReport = async (projectCode: string, version: string, seq: number) => {
+  autoFetchingDefectTitles.value = true
+  autoFetchDefectTitlesError.value = ''
 
   try {
-    const res = await fetch(`${API_BASE}/acceptance-reports/fetch-project-items`, {
+    const res = await fetch(`${API_BASE}/acceptance-reports/fetch-defect-titles`, {
       method: 'POST',
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': authStore.token
       },
-      body: JSON.stringify({
-        project_code: projectCode,
-        version
-      })
+      body: JSON.stringify({ project_code: projectCode, version })
     })
+    const data = await res.json().catch(() => null)
+    if (!res.ok) throw new Error(data?.error || '匹配缺陷管理数据失败')
 
-    const rawText = await res.text()
-    let data: any = null
-    try {
-      data = rawText ? JSON.parse(rawText) : null
-    } catch {
-      data = { error: rawText || 'Unexpected response format' }
-    }
-
-    if (!res.ok) {
-      throw new Error(data?.error || '自动拉取需求和缺陷失败')
-    }
-
-    const stillCurrentRequest = seq === autoFetchProjectItemsSeq &&
+    const stillCurrentRequest = seq === autoFetchDefectTitlesSeq &&
       previewMode.value === 'create' &&
       reportForm.value.project_code === projectCode &&
       reportForm.value.version === version
 
     if (!stillCurrentRequest) return
-
-    reportForm.value.update_requirements = formatAutoFetchedLinks(data?.story_links || [])
-    reportForm.value.bug_submission_status = '无'
-    reportForm.value.bug_fix_status = formatCurrentVersionBugStatus(
-      data?.bug_links_unfixed || [],
-      data?.bug_links_fixed || []
+    reportForm.value.bug_fix_status = formatManagedDefectTitles(
+      Array.isArray(data?.titles) ? data.titles : []
     )
   } catch (err: any) {
-    if (seq !== autoFetchProjectItemsSeq) return
-    console.error('Failed to fetch acceptance report project items', err)
-    autoFetchProjectItemsError.value = err?.message || '自动拉取需求和缺陷失败'
-    ElMessage.error(autoFetchProjectItemsError.value)
+    if (seq !== autoFetchDefectTitlesSeq) return
+    console.error('Failed to match managed defects for acceptance report', err)
+    autoFetchDefectTitlesError.value = err?.message || '匹配缺陷管理数据失败'
+    ElMessage.error(autoFetchDefectTitlesError.value)
   } finally {
-    if (seq === autoFetchProjectItemsSeq) {
-      autoFetchingProjectItems.value = false
+    if (seq === autoFetchDefectTitlesSeq) {
+      autoFetchingDefectTitles.value = false
     }
   }
 }
 
-const scheduleAutoFetchProjectItems = () => {
-  clearAutoFetchProjectItemsTimer()
-  autoFetchProjectItemsSeq += 1
+const scheduleAutoFetchDefectTitles = () => {
+  clearAutoFetchDefectTitlesTimer()
+  autoFetchDefectTitlesSeq += 1
 
   const projectCode = (reportForm.value.project_code || '').trim()
   const version = (reportForm.value.version || '').trim()
   if (previewMode.value !== 'create' || !projectCode || !version) {
-    autoFetchingProjectItems.value = false
-    autoFetchProjectItemsError.value = ''
+    autoFetchingDefectTitles.value = false
+    autoFetchDefectTitlesError.value = ''
     return
   }
 
-  const seq = autoFetchProjectItemsSeq
-  autoFetchProjectItemsTimer = setTimeout(() => {
-    fetchProjectItemsForReport(projectCode, version, seq)
+  const seq = autoFetchDefectTitlesSeq
+  autoFetchDefectTitlesTimer = setTimeout(() => {
+    fetchDefectTitlesForReport(projectCode, version, seq)
   }, 2000)
 }
 
@@ -756,7 +733,7 @@ watch(previewVisible, (visible) => {
 
 watch(
   () => [previewMode.value, reportForm.value.project_name, reportForm.value.project_code, reportForm.value.version],
-  scheduleAutoFetchProjectItems
+  scheduleAutoFetchDefectTitles
 )
 
 watch(
@@ -782,7 +759,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  clearAutoFetchProjectItemsTimer()
+  clearAutoFetchDefectTitlesTimer()
   window.removeEventListener('resize', updateDeviceAssociationPanelPosition)
   window.removeEventListener('scroll', updateDeviceAssociationPanelPosition, true)
 })
@@ -793,20 +770,23 @@ onBeforeUnmount(() => {
     <!-- Header -->
     <div class="page-header">
       <div class="header-left">
-        <h2 class="page-title">验收报告</h2>
-        <div class="breadcrumb">验收报告 <span class="divider">/</span> 报告中心</div>
+        <div class="title-row">
+          <h2 class="page-title">验收报告</h2>
+          <span class="page-badge">Acceptance Reports</span>
+        </div>
+        <p class="page-subtitle">查看和管理各项目版本的提测验收结论、需求要点与缺陷修复验证情况</p>
       </div>
       <div class="header-right">
         <el-button type="primary" :icon="Plus" class="new-report-btn" @click="openCreateReport">
-          新建报告
+          新建验收报告
         </el-button>
       </div>
     </div>
 
     <!-- Stats Grid -->
-    <el-row :gutter="24" class="stats-row">
+    <el-row :gutter="16" class="stats-row">
       <el-col :span="8" v-for="(stat, index) in stats" :key="index">
-        <el-card class="stat-card" shadow="hover">
+        <div class="stat-card" :class="'stat-card--' + index" :style="{ '--accent-color': stat.color }">
           <div class="stat-content">
             <div class="stat-info">
               <span class="stat-title">{{ stat.title }}</span>
@@ -816,7 +796,7 @@ onBeforeUnmount(() => {
               <el-icon class="stat-icon"><component :is="stat.icon" /></el-icon>
             </div>
           </div>
-        </el-card>
+        </div>
       </el-col>
     </el-row>
 
@@ -1106,10 +1086,6 @@ onBeforeUnmount(() => {
           <div class="preview-detail">
             <h4 class="detail-title detail-title--inline">
               <span>测试需求点 (Acceptance Requirements)</span>
-              <span v-if="showProjectItemsLoading" class="auto-fetch-status">
-                <el-icon class="auto-fetch-status__icon"><Loading /></el-icon>
-                正在自动拉取对应数据中，请稍等
-              </span>
             </h4>
             <el-input
               v-model="reportForm.update_requirements"
@@ -1122,10 +1098,6 @@ onBeforeUnmount(() => {
           <div class="preview-detail">
             <h4 class="detail-title detail-title--inline">
               <span>历史版本遗留缺陷修复情况</span>
-              <span v-if="showProjectItemsLoading" class="auto-fetch-status">
-                <el-icon class="auto-fetch-status__icon"><Loading /></el-icon>
-                正在自动拉取对应数据中，请稍等
-              </span>
             </h4>
             <el-input
               v-model="reportForm.bug_submission_status"
@@ -1136,7 +1108,7 @@ onBeforeUnmount(() => {
 
             <h4 class="detail-title detail-title--spaced detail-title--inline">
               <span>当前版本缺陷提交及修复情况</span>
-              <span v-if="showProjectItemsLoading" class="auto-fetch-status">
+              <span v-if="showDefectTitlesLoading" class="auto-fetch-status">
                 <el-icon class="auto-fetch-status__icon"><Loading /></el-icon>
                 正在自动拉取对应数据中，请稍等
               </span>
@@ -1761,4 +1733,158 @@ onBeforeUnmount(() => {
   max-height: 200px;
   overflow-y: auto;
 }
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding: 16px 22px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.03);
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.page-title {
+  margin: 0;
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.page-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+
+.page-subtitle {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.new-report-btn {
+  padding: 10px 18px;
+  border-radius: 9px;
+  font-weight: 600;
+}
+
+.stat-card {
+  padding: 18px 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.03);
+  transition: all 0.2s ease;
+  border-left: 4px solid var(--accent-color, #3b82f6);
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.stat-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.stat-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-title {
+  font-size: 13px;
+  color: #64748b;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-size: 26px;
+  font-weight: 700;
+  color: #0f172a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.2;
+}
+
+.stat-icon-wrapper {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stat-icon {
+  font-size: 22px;
+}
+
+.content-card {
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.03);
+}
+
+.history-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.history-item:hover {
+  background: #f1f5f9;
+}
+
+.history-item--active {
+  background: #eff6ff !important;
+  border-color: #bfdbfe !important;
+  box-shadow: 0 0 0 1px #93c5fd;
+}
+
+.history-item--active .project-id {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.count-bubble {
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  border: 1px solid #dbeafe;
+}
+
+.history-item--active .count-bubble {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+}
+
 </style>

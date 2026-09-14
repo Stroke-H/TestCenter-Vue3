@@ -165,6 +165,11 @@ type DefectTransitionRequest struct {
 	Comment         string `json:"comment"`
 }
 
+type DefectDirectStatusRequest struct {
+	Status     string `json:"status"`
+	RowVersion int    `json:"row_version"`
+}
+
 type DefectCommentRequest struct {
 	Content string `json:"content"`
 }
@@ -315,12 +320,21 @@ func ensureDefectSchema(parent context.Context) error {
 			PRIMARY KEY (project_code, user_id),
 			INDEX idx_defect_roles_user (user_id)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+		`CREATE TABLE IF NOT EXISTS defect_member_default_roles (
+			user_id VARCHAR(128) PRIMARY KEY,
+			role_key VARCHAR(32) NOT NULL,
+			updated_by VARCHAR(128) NOT NULL,
+			updated_at VARCHAR(64) NOT NULL
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 	}
 
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return err
 		}
+	}
+	if _, err := db.ExecContext(ctx, "UPDATE defect_project_settings SET permission_mode='open' WHERE permission_mode<>'open'"); err != nil {
+		return err
 	}
 	defectSchemaReady = true
 	return nil
@@ -399,7 +413,7 @@ func defectCanEditRecord(ctx context.Context, user *User, defect Defect) bool {
 	if !allowed {
 		return false
 	}
-	if defectCanManage(user) && (role == "open" || role == "admin" || role == "lead") {
+	if defectCanManage(user) && (role == "admin" || role == "lead") {
 		return true
 	}
 	return user.ID == defect.ReporterID || user.ID == defect.AssigneeID || role == "lead"
@@ -972,6 +986,128 @@ func transitionDefect(ctx context.Context, user *User, id string, req DefectTran
 	return &updated, nil
 }
 
+func defectStatusLabel(status string) string {
+	switch status {
+	case DefectStatusNew:
+		return "待确认"
+	case DefectStatusActive:
+		return "处理中"
+	case DefectStatusResolved:
+		return "待验证"
+	case DefectStatusClosed:
+		return "已关闭"
+	default:
+		return status
+	}
+}
+
+func directStatusPermission(currentStatus, targetStatus string) (string, string) {
+	switch targetStatus {
+	case DefectStatusClosed:
+		return defectPermissionVerify, "verify"
+	case DefectStatusNew:
+		return defectPermissionVerify, "reopen"
+	case DefectStatusActive:
+		if currentStatus == DefectStatusResolved || currentStatus == DefectStatusClosed {
+			return defectPermissionVerify, "reopen"
+		}
+		return defectPermissionProcess, "process"
+	default:
+		return defectPermissionProcess, "process"
+	}
+}
+
+func setDefectStatusDirect(ctx context.Context, user *User, id string, req DefectDirectStatusRequest) (*Defect, error) {
+	targetStatus := strings.ToLower(strings.TrimSpace(req.Status))
+	if targetStatus != DefectStatusNew && targetStatus != DefectStatusActive &&
+		targetStatus != DefectStatusResolved && targetStatus != DefectStatusClosed {
+		return nil, errors.New("目标状态不正确")
+	}
+	current, err := getDefect(ctx, id)
+	if err != nil || current == nil {
+		return current, err
+	}
+	if req.RowVersion != current.RowVersion {
+		return nil, errors.New("缺陷状态已被其他人更新，请刷新后重试")
+	}
+	if targetStatus == current.Status {
+		return current, nil
+	}
+	permission, projectAction := directStatusPermission(current.Status, targetStatus)
+	allowed, err := defectPermissionAllowed(user, permission)
+	if err != nil || !allowed {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("没有直接修改到该状态的权限")
+	}
+	if !defectProjectAllows(ctx, user, current.ProjectCode, projectAction) {
+		return nil, errors.New("没有在该项目直接修改到该状态的权限")
+	}
+
+	updated := *current
+	updated.Status = targetStatus
+	updated.UpdatedAt = time.Now().Format(time.RFC3339Nano)
+	updated.RowVersion++
+	switch targetStatus {
+	case DefectStatusNew:
+		updated.Resolution = ""
+		updated.ResolvedVersion = ""
+		updated.ResolvedAt = ""
+		updated.ClosedAt = ""
+	case DefectStatusActive:
+		updated.ClosedAt = ""
+		if current.Status == DefectStatusResolved || current.Status == DefectStatusClosed {
+			updated.Resolution = ""
+			updated.ResolvedVersion = ""
+			updated.ResolvedAt = ""
+			updated.ReopenCount++
+		}
+	case DefectStatusResolved:
+		updated.ResolvedAt = updated.UpdatedAt
+		updated.ClosedAt = ""
+	case DefectStatusClosed:
+		if updated.ResolvedAt == "" {
+			updated.ResolvedAt = updated.UpdatedAt
+		}
+		updated.VerifierID = user.ID
+		updated.VerifierName = userDisplayName(user)
+		updated.ClosedAt = updated.UpdatedAt
+	}
+
+	db, _, err := DatabaseManager.DB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE defects SET status=?, resolution=?, resolved_version=?, verifier_id=?, verifier_name=?,
+		resolved_at=?, closed_at=?, reopen_count=?, row_version=?, updated_at=?
+		WHERE id=? AND row_version=? AND archived=0
+	`, updated.Status, updated.Resolution, updated.ResolvedVersion, updated.VerifierID, updated.VerifierName,
+		updated.ResolvedAt, updated.ClosedAt, updated.ReopenCount, updated.RowVersion, updated.UpdatedAt,
+		id, current.RowVersion)
+	if err != nil {
+		return nil, err
+	}
+	affected, _ := result.RowsAffected()
+	if affected != 1 {
+		return nil, errors.New("缺陷状态已被其他人更新，请刷新后重试")
+	}
+	comment := fmt.Sprintf("状态由%s直接调整为%s", defectStatusLabel(current.Status), defectStatusLabel(targetStatus))
+	if err := insertDefectHistory(ctx, tx, id, "status_change", user, current, updated, comment); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
 func listDefectComments(ctx context.Context, defectID string) ([]DefectComment, error) {
 	db, _, err := DatabaseManager.DB(ctx)
 	if err != nil {
@@ -1335,6 +1471,30 @@ func TransitionDefectHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "缺陷不存在"})
 		return
 	}
+	c.JSON(http.StatusOK, defect)
+}
+
+func SetDefectStatusHandler(c *gin.Context) {
+	user, _ := defectUser(c)
+	var req DefectDirectStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "状态修改参数不正确"})
+		return
+	}
+	defect, err := setDefectStatusDirect(c.Request.Context(), user, c.Param("id"), req)
+	if err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "权限") {
+			status = http.StatusForbidden
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	if defect == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "缺陷不存在"})
+		return
+	}
+	defect.AllowedActions = defectAllowedActions(c.Request.Context(), user, *defect)
 	c.JSON(http.StatusOK, defect)
 }
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Edit, Delete, Search } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Search, Document } from '@element-plus/icons-vue'
 import request from '@/api/request'
 
 interface Project {
@@ -94,71 +94,119 @@ onMounted(fetchProjects)
 
 <template>
   <div class="project-config-container">
-    <div class="header-actions">
-      <el-input
-        v-model="searchQuery"
-        placeholder="搜索项目代码或名称"
-        class="search-input"
-        :prefix-icon="Search"
-        clearable
-      />
-      <el-button type="primary" :icon="Plus" @click="handleAdd">添加项目</el-button>
+    <!-- Standard Page Header -->
+    <div class="page-header">
+      <div class="header-left">
+        <div class="title-row">
+          <h1 class="page-title">项目配置</h1>
+          <span class="page-badge">Project Settings</span>
+        </div>
+        <p class="page-desc">维护平台项目代号、英文缩写及飞书 Wiki 关联信息，规范测试归属与空间分布</p>
+      </div>
+      <div class="header-right">
+        <el-button type="primary" :icon="Plus" class="add-btn" @click="handleAdd">添加项目</el-button>
+      </div>
     </div>
 
-    <el-table :data="filteredProjects" v-loading="loading" style="width: 100%" border stripe>
-      <el-table-column prop="project_code" label="项目代码" width="150" />
-      <el-table-column prop="project_name" label="项目名称" min-width="150" />
-      <el-table-column prop="short_code" label="项目缩写" width="100" />
-      <el-table-column prop="workspace" label="所属空间" width="120" />
-      <el-table-column prop="wiki_url" label="项目文档关联" min-width="200">
-        <template #default="{ row }">
-          <el-link v-if="row.wiki_url" type="primary" :href="row.wiki_url" target="_blank" style="font-size: 13px;">
-            点击查看文档
-          </el-link>
-          <span v-else style="color: #999; font-size: 13px;">未关联</span>
-        </template>
-      </el-table-column>
-      <el-table-column prop="created_at" label="创建时间" width="180">
-      </el-table-column>
-      <el-table-column label="操作" width="180" fixed="right">
-        <template #default="{ row }">
-          <el-button link type="primary" :icon="Edit" @click="handleEdit(row)">编辑</el-button>
-          <el-button link type="danger" :icon="Delete" @click="handleDelete(row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    <!-- Main Content Card -->
+    <div class="content-card">
+      <div class="toolbar-actions">
+        <el-input
+          v-model="searchQuery"
+          placeholder="搜索项目代码或名称..."
+          class="search-input"
+          :prefix-icon="Search"
+          clearable
+        />
+        <div class="stat-badge">
+          <span>共 <strong class="count-num">{{ filteredProjects.length }}</strong> 个项目</span>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <el-table :data="filteredProjects" v-loading="loading" style="width: 100%" stripe>
+          <el-table-column prop="project_code" label="项目代码" width="160">
+            <template #default="{ row }">
+              <span class="code-badge">{{ row.project_code }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="project_name" label="项目名称" min-width="180">
+            <template #default="{ row }">
+              <span class="project-name">{{ row.project_name }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="short_code" label="项目缩写" width="120">
+            <template #default="{ row }">
+              <el-tag v-if="row.short_code" size="small" effect="plain" class="short-code-tag">{{ row.short_code }}</el-tag>
+              <span v-else class="text-placeholder">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="workspace" label="所属空间" width="150">
+            <template #default="{ row }">
+              <el-tag v-if="row.workspace" size="small" type="info" effect="light" class="workspace-tag">{{ row.workspace }}</el-tag>
+              <span v-else class="text-placeholder">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="wiki_url" label="项目文档关联" min-width="220">
+            <template #default="{ row }">
+              <el-link v-if="row.wiki_url" type="primary" :href="row.wiki_url" target="_blank" class="wiki-link">
+                <el-icon class="mr-1"><Document /></el-icon>
+                <span>查看项目文档</span>
+              </el-link>
+              <span v-else class="text-placeholder">未关联</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="created_at" label="创建时间" width="180">
+            <template #default="{ row }">
+              <span class="date-text">{{ row.created_at || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="160" fixed="right">
+            <template #default="{ row }">
+              <div class="action-buttons">
+                <el-button link type="primary" :icon="Edit" @click="handleEdit(row)">编辑</el-button>
+                <el-button link type="danger" :icon="Delete" @click="handleDelete(row)">删除</el-button>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </div>
 
     <!-- Project Dialog -->
     <el-dialog
       v-model="dialogVisible"
       :title="dialogType === 'add' ? '新增项目' : '编辑项目'"
-      width="500px"
+      width="520px"
+      destroy-on-close
     >
-      <el-form :model="form" label-width="100px">
+      <el-form :model="form" label-width="96px" class="project-form">
         <el-form-item label="项目代码" required>
           <el-input v-model="form.project_code" placeholder="如 A1106" :disabled="dialogType === 'edit'" />
         </el-form-item>
-        <el-form-item label="项目名称">
-        <el-input v-model="form.project_name" placeholder="请输入项目全名" />
-      </el-form-item>
-      <el-form-item label="项目缩写">
-        <el-input v-model="form.short_code" placeholder="例如: swa, swi" />
-      </el-form-item>
-      <el-form-item label="所属空间">
-        <el-select v-model="form.workspace" placeholder="请选择所属空间" clearable style="width: 100%;">
-          <el-option label="海外短剧" value="海外短剧" />
-          <el-option label="免费短剧" value="免费短剧" />
-          <el-option label="iOS订阅产品" value="iOS订阅产品" />
-          <el-option label="番茄短剧" value="番茄短剧" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="项目文档">
-        <el-input v-model="form.wiki_url" placeholder="请输入飞书文档或 Wiki 链接" />
-      </el-form-item>
-    </el-form>
+        <el-form-item label="项目名称" required>
+          <el-input v-model="form.project_name" placeholder="请输入项目全名" />
+        </el-form-item>
+        <el-form-item label="项目缩写">
+          <el-input v-model="form.short_code" placeholder="例如: swa, swi" />
+        </el-form-item>
+        <el-form-item label="所属空间">
+          <el-select v-model="form.workspace" placeholder="请选择所属空间" clearable style="width: 100%;">
+            <el-option label="海外短剧" value="海外短剧" />
+            <el-option label="免费短剧" value="免费短剧" />
+            <el-option label="iOS订阅产品" value="iOS订阅产品" />
+            <el-option label="番茄短剧" value="番茄短剧" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="项目文档">
+          <el-input v-model="form.wiki_url" placeholder="请输入飞书文档或 Wiki 链接" />
+        </el-form-item>
+      </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitForm">确定</el-button>
+        <div class="dialog-footer">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="submitForm">确定</el-button>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -166,19 +214,161 @@ onMounted(fetchProjects)
 
 <style scoped>
 .project-config-container {
-  padding: 20px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05);
+  padding: 24px;
+  max-width: 1680px;
+  margin: 0 auto;
 }
 
-.header-actions {
+/* Standard Page Header */
+.page-header {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 20px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.page-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  letter-spacing: 0.02em;
+}
+
+.page-desc {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.add-btn {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  border: none;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+  transition: all 0.2s ease;
+}
+
+.add-btn:hover {
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+  transform: translateY(-1px);
+}
+
+/* Content Card */
+.content-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.toolbar-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 18px;
 }
 
 .search-input {
-  width: 300px;
+  width: 320px;
+}
+
+.stat-badge {
+  font-size: 13px;
+  color: #64748b;
+  background: #f8fafc;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.count-num {
+  color: #2563eb;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Table Elements */
+.code-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  background: #f1f5f9;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.project-name {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.short-code-tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 600;
+  color: #475569;
+}
+
+.workspace-tag {
+  border-radius: 6px;
+}
+
+.wiki-link {
+  font-size: 13px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.text-placeholder {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.date-text {
+  font-size: 13px;
+  color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-form {
+  padding: 10px 0;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.mr-1 {
+  margin-right: 4px;
 }
 </style>

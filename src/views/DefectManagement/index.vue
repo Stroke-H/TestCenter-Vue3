@@ -7,6 +7,7 @@ import {
   CirclePlus,
   Clock,
   Filter,
+  FolderOpened,
   Histogram,
   Operation,
   Refresh,
@@ -41,6 +42,7 @@ defineOptions({ name: 'DefectManagement' })
 const loading = ref(false)
 const acting = ref(false)
 const saving = ref(false)
+const formStatusChanging = ref(false)
 const meta = ref<DefectMeta | null>(null)
 const defects = ref<Defect[]>([])
 const total = ref(0)
@@ -51,12 +53,14 @@ const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detail = ref<DefectDetail | null>(null)
 const detailRef = ref<InstanceType<typeof DefectDetailDrawer>>()
+const statsRef = ref<InstanceType<typeof DefectStatsPanel>>()
 const tableRef = ref()
 const activeSection = ref<'list' | 'stats'>('list')
 const selectedDefects = ref<Defect[]>([])
 const batchVisible = ref(false)
 const batchLoading = ref(false)
 const customFilters = reactive<Record<string, string>>({})
+const selectedProjectCode = ref('')
 
 const filters = reactive<DefectListParams>({
   search: '',
@@ -71,18 +75,19 @@ const filters = reactive<DefectListParams>({
   page_size: 20
 })
 
-const canCreate = computed(() => Object.values(meta.value?.project_actions || {}).some((actions) => actions.create))
+const canCreate = computed(() => selectedProjectCode.value
+  ? meta.value?.project_actions?.[selectedProjectCode.value]?.create === true
+  : Object.values(meta.value?.project_actions || {}).some((actions) => actions.create))
 const selectableDefect = (row: Defect) => ['process', 'verify', 'reopen', 'archive'].some((action) => row.allowed_actions?.[action] === true)
 const canBatch = computed(() => defects.value.some(selectableDefect))
-const hasFilters = computed(() => Boolean(filters.search || filters.project_code || filters.found_version || filters.status || filters.severity || filters.priority || filters.assignee_id || filters.reporter_id || Object.values(customFilters).some(Boolean)))
+const hasFilters = computed(() => Boolean(filters.search || filters.found_version || filters.status || filters.severity || filters.priority || filters.assignee_id || filters.reporter_id || Object.values(customFilters).some(Boolean)))
 const applicableListFields = computed(() => (meta.value?.fields || []).filter((field) => (
-  field.enabled && (!field.project_code || field.project_code === filters.project_code)
+  field.enabled && (!field.project_code || field.project_code === selectedProjectCode.value)
 )))
 const filterableFields = computed(() => applicableListFields.value.filter((field) => field.filterable))
 const visibleCustomFields = computed(() => applicableListFields.value.filter((field) => field.list_visible))
 const activeFilterCount = computed(() => [
   filters.search,
-  filters.project_code,
   filters.found_version,
   filters.severity,
   filters.priority,
@@ -143,7 +148,14 @@ function assigneeInitial(defect: Defect) {
 
 async function loadMeta() {
   try {
-    meta.value = await defectApi.meta()
+    const [defectMeta, devices] = await Promise.all([
+      defectApi.meta(),
+      defectApi.devices().catch((error) => {
+        console.warn('Defect device metadata loading failed', error)
+        return []
+      })
+    ])
+    meta.value = { ...defectMeta, devices }
   } catch (error) {
     ElMessage.error(errorMessage(error, '缺陷基础数据加载失败'))
   }
@@ -151,7 +163,7 @@ async function loadMeta() {
 
 async function loadSummary() {
   try {
-    summary.value = await defectApi.stats({})
+    summary.value = await defectApi.stats({ project_code: selectedProjectCode.value })
   } catch {
     summary.value = null
   }
@@ -160,7 +172,7 @@ async function loadSummary() {
 async function loadDefects() {
   loading.value = true
   try {
-    const params: DefectListParams = { ...filters }
+    const params: DefectListParams = { ...filters, project_code: selectedProjectCode.value }
     Object.entries(customFilters).forEach(([key, value]) => {
       if (value !== '') params[`cf_${key}`] = value
     })
@@ -178,6 +190,18 @@ async function loadDefects() {
 
 async function refreshAll() {
   await Promise.all([loadMeta(), loadDefects(), loadSummary()])
+  if (activeSection.value === 'stats') await statsRef.value?.refresh()
+}
+
+async function changeProjectContext(projectCode: string) {
+  selectedProjectCode.value = projectCode || ''
+  filters.project_code = selectedProjectCode.value
+  filters.found_version = ''
+  filters.page = 1
+  Object.keys(customFilters).forEach((key) => { customFilters[key] = '' })
+  selectedDefects.value = []
+  detailVisible.value = false
+  await Promise.all([loadDefects(), loadSummary()])
 }
 
 function search() {
@@ -192,7 +216,7 @@ function selectStatus(status: string) {
 
 function clearFilters() {
   Object.assign(filters, {
-    search: '', project_code: '', found_version: '', status: '', severity: '', priority: '',
+    search: '', project_code: selectedProjectCode.value, found_version: '', status: '', severity: '', priority: '',
     assignee_id: '', reporter_id: '', page: 1, page_size: filters.page_size
   })
   Object.keys(customFilters).forEach((key) => { customFilters[key] = '' })
@@ -249,6 +273,22 @@ async function saveDefect(value: DefectFormValue) {
     ElMessage.error(errorMessage(error, '保存缺陷失败'))
   } finally {
     saving.value = false
+  }
+}
+
+async function changeFormDefectStatus(status: DefectStatus) {
+  const current = formDefect.value
+  if (!current) return
+  formStatusChanging.value = true
+  try {
+    const updated = await defectApi.setStatus(current.id, { status, row_version: current.row_version })
+    formDefect.value = updated
+    ElMessage.success(`缺陷状态已修改为“${defectStatusMeta[status].label}”`)
+    await Promise.all([loadDefects(), loadSummary()])
+  } catch (error) {
+    ElMessage.error(errorMessage(error, '修改缺陷状态失败'))
+  } finally {
+    formStatusChanging.value = false
   }
 }
 
@@ -326,7 +366,25 @@ onMounted(refreshAll)
         <span class="page-title__icon"><el-icon><DefectIcon /></el-icon></span>
         <div>
           <p>QUALITY CENTER / DEFECTS</p>
-          <h1>缺陷管理</h1>
+          <div class="page-title__heading">
+            <h1>缺陷管理</h1>
+            <el-select
+              :model-value="selectedProjectCode"
+              filterable
+              placeholder="全部项目"
+              class="header-project-select"
+              @update:model-value="changeProjectContext"
+            >
+              <template #prefix><el-icon><FolderOpened /></el-icon></template>
+              <el-option label="全部项目" value="" />
+              <el-option
+                v-for="project in meta?.projects || []"
+                :key="project.id"
+                :label="`${project.project_code} · ${project.project_name}`"
+                :value="project.project_code"
+              />
+            </el-select>
+          </div>
           <span>从发现、处理到验证关闭，持续追踪产品质量</span>
         </div>
       </div>
@@ -364,8 +422,7 @@ onMounted(refreshAll)
         </div>
         <div class="filter-panel__main">
           <el-input v-model="filters.search" clearable placeholder="搜索缺陷编号、标题或描述" class="search-input" @keyup.enter="search" @clear="search"><template #prefix><el-icon><Search /></el-icon></template></el-input>
-          <el-select v-model="filters.project_code" filterable clearable placeholder="全部项目" @change="search"><el-option v-for="project in meta?.projects || []" :key="project.id" :label="`${project.project_code} · ${project.project_name}`" :value="project.project_code" /></el-select>
-          <DefectVersionSelect v-model="filters.found_version" :meta="meta" :projects="filters.project_code ? [filters.project_code] : []" filter @change="search" />
+          <DefectVersionSelect v-model="filters.found_version" :meta="meta" :projects="selectedProjectCode ? [selectedProjectCode] : []" filter @change="search" />
           <el-select v-model="filters.assignee_id" filterable clearable placeholder="全部处理人" @change="search"><el-option v-for="account in meta?.accounts || []" :key="account.id" :label="account.nickname || account.username" :value="account.id" /></el-select>
         </div>
         <div class="filter-panel__more">
@@ -401,9 +458,9 @@ onMounted(refreshAll)
       </section>
     </template>
 
-    <DefectStatsPanel v-else-if="activeSection === 'stats'" :meta="meta" />
+    <DefectStatsPanel v-else-if="activeSection === 'stats'" ref="statsRef" :meta="meta" :project-code="selectedProjectCode" />
 
-    <DefectFormDrawer v-model="formVisible" :defect="formDefect" :meta="meta" :saving="saving" @save="saveDefect" />
+    <DefectFormDrawer v-model="formVisible" :defect="formDefect" :meta="meta" :saving="saving" :status-changing="formStatusChanging" :default-project-code="selectedProjectCode" @save="saveDefect" @status-change="changeFormDefectStatus" />
     <DefectDetailDrawer ref="detailRef" v-model="detailVisible" :detail="detail" :meta="meta" :loading="detailLoading" :acting="acting" @edit="detail && openEdit(detail.defect)" @refresh="refreshDetail" @transition="transitionDefect" @comment="addComment" @upload="uploadAttachment" />
     <DefectBatchDialog v-model="batchVisible" :count="selectedDefects.length" :defects="selectedDefects" :meta="meta" :loading="batchLoading" @execute="executeBatch" />
   </main>
@@ -470,6 +527,28 @@ onMounted(refreshAll)
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.25;
+}
+
+.page-title__heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.header-project-select {
+  width: 280px;
+}
+
+.header-project-select :deep(.el-select__wrapper) {
+  min-height: 34px;
+  border-radius: 9px;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px #dbe3ef inset;
+}
+
+.header-project-select :deep(.el-select__prefix) {
+  color: #2563eb;
 }
 
 .page-title > div > span {
@@ -789,7 +868,7 @@ onMounted(refreshAll)
 
 .filter-panel__main {
   display: grid;
-  grid-template-columns: minmax(260px, 1.8fr) repeat(3, minmax(160px, 1fr));
+  grid-template-columns: minmax(260px, 1.8fr) repeat(2, minmax(180px, 1fr));
   gap: 12px;
 }
 
@@ -1186,6 +1265,8 @@ onMounted(refreshAll)
 
 @media (max-width: 720px) {
   .defect-page { padding: 16px 14px 24px; }
+  .page-title__heading { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .header-project-select { width: min(280px, 72vw); }
   .quality-overview { grid-template-columns: 1fr; }
   .filter-panel__main { grid-template-columns: 1fr; }
   .table-heading small { display: none; }

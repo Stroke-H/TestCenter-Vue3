@@ -54,6 +54,17 @@ type DefectProjectPermissionRequest struct {
 	Members        []DefectProjectMember `json:"members"`
 }
 
+type DefectMemberDefaultRole struct {
+	UserID      string `json:"user_id"`
+	Username    string `json:"username"`
+	Nickname    string `json:"nickname"`
+	DefaultRole string `json:"default_role"`
+}
+
+type DefectMemberDefaultRolesRequest struct {
+	Members []DefectMemberDefaultRole `json:"members"`
+}
+
 type DefectDistributionItem struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
@@ -112,16 +123,9 @@ func defectProjectScopeSQL(user *User) (string, []any) {
 	if user == nil {
 		return "1=0", nil
 	}
-	if isPermissionAdminUsername(user.Username) {
-		return "", nil
-	}
-	return `(NOT EXISTS (
-		SELECT 1 FROM defect_project_settings dps
-		WHERE dps.project_code = defects.project_code AND dps.permission_mode = 'restricted'
-	) OR EXISTS (
-		SELECT 1 FROM defect_role_assignments dra
-		WHERE dra.project_code = defects.project_code AND dra.user_id = ?
-	))`, []any{user.ID}
+	// All projects use open visibility. Project membership controls mutations,
+	// while authenticated users who are not members remain read-only.
+	return "", nil
 }
 
 func defectProjectRole(ctx context.Context, user *User, projectCode string) string {
@@ -135,15 +139,10 @@ func defectProjectRole(ctx context.Context, user *User, projectCode string) stri
 	if err != nil {
 		return ""
 	}
-	var mode string
-	err = db.QueryRowContext(ctx, "SELECT permission_mode FROM defect_project_settings WHERE project_code=?", projectCode).Scan(&mode)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return ""
-	}
 	var role string
 	err = db.QueryRowContext(ctx, "SELECT role_key FROM defect_role_assignments WHERE project_code=? AND user_id=?", projectCode, user.ID).Scan(&role)
-	if errors.Is(err, sql.ErrNoRows) && mode != "restricted" {
-		return "open"
+	if errors.Is(err, sql.ErrNoRows) {
+		return "viewer"
 	}
 	if err != nil {
 		return ""
@@ -157,18 +156,20 @@ func defectProjectAllows(ctx context.Context, user *User, projectCode, action st
 }
 
 func defectRoleAllows(role, action string) bool {
-	if role == "admin" || role == "open" || role == "lead" {
+	if role == "admin" || role == "lead" || role == "tester" {
 		return true
 	}
 	switch action {
 	case "view":
-		return role == "tester" || role == "developer" || role == "viewer"
+		return role == "developer" || role == "product" || role == "viewer"
 	case "comment":
-		return role == "tester" || role == "developer"
-	case "create", "verify", "reopen":
-		return role == "tester"
+		return role == "developer" || role == "product"
+	case "create":
+		return role == "product"
+	case "verify", "reopen":
+		return false
 	case "edit":
-		return role == "tester" || role == "developer"
+		return role == "developer" || role == "product"
 	case "process":
 		return role == "developer"
 	default:
@@ -471,6 +472,7 @@ func listDefectProjectPermissions(ctx context.Context) ([]DefectProjectPermissio
 			rows.Close()
 			return nil, err
 		}
+		item.PermissionMode = "open"
 		settings[item.ProjectCode] = item
 	}
 	rows.Close()
@@ -509,10 +511,11 @@ func saveDefectProjectPermission(ctx context.Context, user *User, projectCode st
 	if _, err := defectProject(projectCode); err != nil {
 		return err
 	}
-	if req.PermissionMode != "open" && req.PermissionMode != "restricted" {
+	if req.PermissionMode != "" && req.PermissionMode != "open" {
 		return errors.New("权限模式不正确")
 	}
-	allowedRoles := map[string]bool{"lead": true, "tester": true, "developer": true, "viewer": true}
+	req.PermissionMode = "open"
+	allowedRoles := map[string]bool{"lead": true, "tester": true, "developer": true, "product": true, "viewer": true}
 	seen := map[string]bool{}
 	for _, member := range req.Members {
 		if seen[member.UserID] || !allowedRoles[member.RoleKey] {
@@ -544,6 +547,73 @@ func saveDefectProjectPermission(ctx context.Context, user *User, projectCode st
 	for _, member := range req.Members {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO defect_role_assignments (project_code, user_id, role_key, updated_at)
 			VALUES (?, ?, ?, ?)`, projectCode, member.UserID, member.RoleKey, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func listDefectMemberDefaultRoles(ctx context.Context) ([]DefectMemberDefaultRole, error) {
+	accounts, err := ListAccountProfiles()
+	if err != nil {
+		return nil, err
+	}
+	db, _, err := DatabaseManager.DB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	configured := map[string]string{}
+	rows, err := db.QueryContext(ctx, "SELECT user_id, role_key FROM defect_member_default_roles")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var userID, roleKey string
+		if err := rows.Scan(&userID, &roleKey); err != nil {
+			return nil, err
+		}
+		configured[userID] = roleKey
+	}
+	result := make([]DefectMemberDefaultRole, 0, len(accounts))
+	for _, account := range accounts {
+		roleKey := configured[account.ID]
+		if roleKey == "" {
+			roleKey = "tester"
+		}
+		result = append(result, DefectMemberDefaultRole{
+			UserID: account.ID, Username: account.Username, Nickname: account.Nickname, DefaultRole: roleKey,
+		})
+	}
+	return result, rows.Err()
+}
+
+func saveDefectMemberDefaultRoles(ctx context.Context, user *User, req DefectMemberDefaultRolesRequest) error {
+	allowedRoles := map[string]bool{"tester": true, "developer": true, "product": true}
+	seen := map[string]bool{}
+	for _, member := range req.Members {
+		if member.UserID == "" || seen[member.UserID] || !allowedRoles[member.DefaultRole] {
+			return errors.New("默认成员属性配置不正确")
+		}
+		seen[member.UserID] = true
+		if _, err := GetUserByID(member.UserID); err != nil {
+			return errors.New("默认成员属性中包含不存在的账号")
+		}
+	}
+	db, _, err := DatabaseManager.DB(ctx)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Format(time.RFC3339Nano)
+	for _, member := range req.Members {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO defect_member_default_roles (user_id, role_key, updated_by, updated_at)
+			VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE role_key=VALUES(role_key), updated_by=VALUES(updated_by), updated_at=VALUES(updated_at)`,
+			member.UserID, member.DefaultRole, user.ID, now); err != nil {
 			return err
 		}
 	}
@@ -864,6 +934,35 @@ func SaveDefectProjectPermissionHandler(c *gin.Context) {
 		return
 	}
 	if err := saveDefectProjectPermission(c.Request.Context(), user, c.Param("project_code"), req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func ListDefectMemberDefaultRolesHandler(c *gin.Context) {
+	if _, ok := requirePermissionAdmin(c); !ok {
+		return
+	}
+	items, err := listDefectMemberDefaultRoles(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
+func SaveDefectMemberDefaultRolesHandler(c *gin.Context) {
+	if _, ok := requirePermissionAdmin(c); !ok {
+		return
+	}
+	user, _ := defectUser(c)
+	var req DefectMemberDefaultRolesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "默认成员属性格式不正确"})
+		return
+	}
+	if err := saveDefectMemberDefaultRoles(c.Request.Context(), user, req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

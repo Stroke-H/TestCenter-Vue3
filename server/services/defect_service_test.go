@@ -29,6 +29,25 @@ func TestValidateDefectTransition(t *testing.T) {
 	}
 }
 
+func TestDirectStatusPermission(t *testing.T) {
+	tests := []struct {
+		current, target, permission, projectAction string
+	}{
+		{DefectStatusNew, DefectStatusActive, defectPermissionProcess, "process"},
+		{DefectStatusActive, DefectStatusResolved, defectPermissionProcess, "process"},
+		{DefectStatusActive, DefectStatusClosed, defectPermissionVerify, "verify"},
+		{DefectStatusClosed, DefectStatusActive, defectPermissionVerify, "reopen"},
+		{DefectStatusResolved, DefectStatusNew, defectPermissionVerify, "reopen"},
+	}
+	for _, test := range tests {
+		permission, action := directStatusPermission(test.current, test.target)
+		if permission != test.permission || action != test.projectAction {
+			t.Fatalf("%s -> %s: got %s/%s, want %s/%s", test.current, test.target,
+				permission, action, test.permission, test.projectAction)
+		}
+	}
+}
+
 func TestNormalizeDefectSaveRequest(t *testing.T) {
 	req := DefectSaveRequest{
 		Title: "  登录失败  ", ProjectCode: " A1100 ", Severity: 9, Priority: 0,
@@ -49,5 +68,20 @@ func TestNormalizeDefectSaveRequest(t *testing.T) {
 	}
 	if len(req.Tags) != 2 {
 		t.Fatalf("unexpected tags: %#v", req.Tags)
+	}
+}
+
+func TestNormalizeAcceptanceReportVersion(t *testing.T) {
+	tests := map[string]string{
+		"1.1.1":             "1.1.1",
+		"v1.1.1":            "1.1.1",
+		"V2.65.0 (Build 8)": "2.65.0",
+		"release-3":         "3",
+		"beta":              "",
+	}
+	for input, want := range tests {
+		if got := normalizeAcceptanceReportVersion(input); got != want {
+			t.Fatalf("normalizeAcceptanceReportVersion(%q) = %q, want %q", input, got, want)
+		}
 	}
 }

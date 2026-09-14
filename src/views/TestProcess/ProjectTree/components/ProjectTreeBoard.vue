@@ -1,16 +1,31 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
 import { CollectionTag, Document, Timer } from '@element-plus/icons-vue'
-import type { ProjectTreeNode } from '../types'
+import type { ProjectTreeNode, ProjectMemoRecord } from '../types'
 
 const props = defineProps<{
   projects: ProjectTreeNode[]
   loading: boolean
+  projectMemos?: Record<string, ProjectMemoRecord>
+}>()
+
+const emit = defineEmits<{
+  selectVersionConfig: [projectCode: string, version: string]
 }>()
 
 const formatRequirements = (value?: string) => {
   const text = (value || '').trim()
   return text || '未填写测试需求点'
+}
+
+const getVersionConfigCount = (projectCode: string, version: string) => {
+  const memo = props.projectMemos?.[projectCode]
+  if (!memo) return 0
+  const ledgerVer = memo.versions?.find((v) => v.version === version)
+  if (ledgerVer && Array.isArray(ledgerVer.items)) {
+    return ledgerVer.items.length
+  }
+  return memo.items?.filter((item) => (item.version || '').trim() === version).length || 0
 }
 
 const expandedReports = shallowRef<Set<string>>(new Set())
@@ -157,9 +172,18 @@ watch(
 
           <div class="version-node__body">
             <div class="version-node__header">
-              <div>
+              <div class="version-header-left">
                 <span class="version-node__label">版本号</span>
                 <strong class="version-node__title">{{ version.version }}</strong>
+                <button
+                  v-if="getVersionConfigCount(project.projectCode, version.version) > 0"
+                  type="button"
+                  class="version-config-badge"
+                  title="点击直达该版本的配置演进时间轴"
+                  @click="emit('selectVersionConfig', project.projectCode, version.version)"
+                >
+                  <span>🎯 {{ getVersionConfigCount(project.projectCode, version.version) }} 项配置</span>
+                </button>
               </div>
               <div class="version-node__summary">
                 <el-icon><Timer /></el-icon>
@@ -367,10 +391,11 @@ watch(
   flex-wrap: wrap;
 }
 
-.version-node__header > div:first-child {
+.version-header-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .version-node__label {
@@ -392,6 +417,28 @@ watch(
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.01em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.version-config-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.version-config-badge:hover {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
 }
 
 .version-node__summary {

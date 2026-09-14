@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import DefectVersionSelect from "./DefectVersionSelect.vue"
 import { computed, nextTick, ref, watch } from "vue"
-import { ElMessage, type FormInstance, type FormRules } from "element-plus"
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "element-plus"
 import {
   CirclePlus,
   Delete,
@@ -10,15 +10,18 @@ import {
   CircleCheckFilled
 } from "@element-plus/icons-vue"
 import { v4 as uuidv4 } from "uuid"
+import { useAuthStore } from "@/stores/auth"
 import {
   defectToForm,
+  defectStatusMeta,
   defectTypeOptions,
   emptyDefectForm,
   priorityLabels,
   severityLabels,
   type Defect,
   type DefectFormValue,
-  type DefectMeta
+  type DefectMeta,
+  type DefectStatus
 } from "../types"
 
 const props = defineProps<{
@@ -26,16 +29,21 @@ const props = defineProps<{
   defect: Defect | null
   meta: DefectMeta | null
   saving: boolean
+  statusChanging?: boolean
+  defaultProjectCode?: string
 }>()
 
 const emit = defineEmits<{
   "update:modelValue": [value: boolean]
   save: [value: DefectFormValue]
+  "status-change": [status: DefectStatus]
 }>()
 
+const authStore = useAuthStore()
 const formRef = ref<FormInstance>()
 const form = ref<DefectFormValue>(emptyDefectForm())
 const isEdit = computed(() => Boolean(props.defect))
+const statusOptions: DefectStatus[] = ["new", "active", "resolved", "closed"]
 const allowedProject = (code: string) => props.defect?.project_code === code
   ? props.defect.allowed_actions?.edit === true
   : props.meta?.project_actions?.[code]?.create === true
@@ -43,6 +51,67 @@ const canSave = computed(() => (!props.defect || props.defect.allowed_actions?.e
 const applicableFields = computed(() => (props.meta?.fields || []).filter((field) => (
   field.enabled && (!field.project_code || field.project_code === form.value.project_code)
 )).sort((a, b) => a.sort_order - b.sort_order))
+
+function localToday() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, "0")
+  const day = String(now.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+function currentUserID() {
+  const user = authStore.user
+  if (!user) return ""
+  return props.meta?.accounts.find((account) => account.id === user.id)?.id
+    || props.meta?.accounts.find((account) => account.username.toLowerCase() === user.username.toLowerCase())?.id
+    || user.id
+}
+
+function projectPlatform(projectCode: string) {
+  const project = props.meta?.projects.find((item) => item.project_code === projectCode)
+  const source = `${project?.project_name || ""} ${project?.short_code || ""}`.toLowerCase()
+  if (source.includes("ttmins") || source.includes("tt mins")) return "TTmins"
+  if (/\bios\b|iphone|ipad|苹果/.test(source)) return "iOS"
+  if (/android|安卓/.test(source)) return "Android"
+  if (/\bweb\b|\bh5\b|网页/.test(source)) return "Web"
+  if (/server|backend|\bapi\b|服务端|后端/.test(source)) return "服务端"
+  return ""
+}
+
+function projectDeviceNames(projectCode: string) {
+  const names = (props.meta?.devices || [])
+    .filter((device) => device.allowed_app.split(",").some((code) => code.trim() === projectCode))
+    .map((device) => device.device_name.trim() || device.model.trim())
+    .filter(Boolean)
+  return [...new Set(names)].join("、")
+}
+
+function applyFoundVersionDefaults() {
+  const version = form.value.found_version.trim()
+  const stages = props.meta?.project_version_stages?.[form.value.project_code]
+  form.value.environment.app_version = version
+  form.value.environment.environment = version && stages?.online === version && stages.testing !== version
+    ? "正式环境"
+    : "测试环境"
+}
+
+function applyProjectDefaults(projectCode: string) {
+  const stages = props.meta?.project_version_stages?.[projectCode]
+  form.value.found_version = stages?.testing || stages?.online || ""
+  form.value.environment.platform = projectPlatform(projectCode)
+  form.value.environment.device_model = projectDeviceNames(projectCode)
+  form.value.environment.network = "WiFi"
+  applyFoundVersionDefaults()
+}
+
+function applyNewDefectDefaults() {
+  form.value.defect_type = "function"
+  form.value.due_date = localToday()
+  form.value.verifier_id = currentUserID()
+  form.value.environment.environment = "测试环境"
+  form.value.environment.network = "WiFi"
+}
 
 const rules: FormRules<DefectFormValue> = {
   title: [
@@ -58,13 +127,61 @@ watch(
   async (visible) => {
     if (!visible) return
     form.value = props.defect ? defectToForm(props.defect) : emptyDefectForm()
+    if (!props.defect) {
+      applyNewDefectDefaults()
+      if (props.defaultProjectCode) {
+        form.value.project_code = props.defaultProjectCode
+        applyProjectDefaults(props.defaultProjectCode)
+      }
+    }
     await nextTick()
     formRef.value?.clearValidate()
   }
 )
 
+watch(
+  () => props.defect?.row_version,
+  (rowVersion) => {
+    if (props.modelValue && props.defect && rowVersion !== undefined) {
+      form.value.row_version = rowVersion
+    }
+  }
+)
+
 function close() {
   emit("update:modelValue", false)
+}
+
+function canChangeToStatus(status: DefectStatus) {
+  const defect = props.defect
+  if (!defect || defect.status === status) return false
+  if (status === "closed") return defect.allowed_actions?.verify === true
+  if (status === "new") return defect.allowed_actions?.reopen === true
+  if (status === "active" && (defect.status === "resolved" || defect.status === "closed")) {
+    return defect.allowed_actions?.reopen === true
+  }
+  return defect.allowed_actions?.process === true
+}
+
+async function requestStatusChange(status: DefectStatus) {
+  if (!props.defect || !canChangeToStatus(status) || props.statusChanging) return
+  const currentLabel = defectStatusMeta[props.defect.status].label
+  const targetLabel = defectStatusMeta[status].label
+  try {
+    await ElMessageBox.confirm(
+      `确认将缺陷 ${props.defect.defect_no} 从“${currentLabel}”直接修改为“${targetLabel}”吗？`,
+      "确认修改缺陷状态",
+      {
+        confirmButtonText: `修改为${targetLabel}`,
+        cancelButtonText: "取消",
+        type: status === "closed" ? "warning" : "info",
+        customClass: "defect-status-confirm"
+      }
+    )
+    emit("status-change", status)
+  } catch {
+    // 用户取消确认时保持当前状态。
+  }
 }
 
 function addStep() {
@@ -130,6 +247,34 @@ async function submit() {
     </template>
 
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="defect-form">
+      <section v-if="isEdit && defect" class="status-direct-panel">
+        <div class="status-direct-panel__copy">
+          <span class="status-direct-panel__eyebrow">缺陷生命周期</span>
+          <strong>点击状态可直接调整</strong>
+          <p>状态修改将在确认后立即生效，并自动记录到缺陷操作历史。</p>
+        </div>
+        <div class="status-direct-track" :class="{ 'is-loading': statusChanging }">
+          <template v-for="(status, index) in statusOptions" :key="status">
+            <button
+              type="button"
+              class="status-direct-node"
+              :class="[
+                `is-${defectStatusMeta[status].tone}`,
+                { 'is-current': defect.status === status, 'is-disabled': defect.status !== status && !canChangeToStatus(status) }
+              ]"
+              :disabled="statusChanging || defect.status === status || !canChangeToStatus(status)"
+              :title="defect.status === status ? '当前状态' : (canChangeToStatus(status) ? `修改为${defectStatusMeta[status].label}` : '当前账号无权切换到此状态')"
+              @click="requestStatusChange(status)"
+            >
+              <span class="status-direct-node__dot">{{ index + 1 }}</span>
+              <span class="status-direct-node__label">{{ defectStatusMeta[status].label }}</span>
+              <small>{{ defect.status === status ? "当前" : "点击切换" }}</small>
+            </button>
+            <span v-if="index < statusOptions.length - 1" class="status-direct-track__line" />
+          </template>
+        </div>
+      </section>
+
       <!-- 01 基本属性 -->
       <section class="form-section form-section--primary">
         <div class="form-section__header">
@@ -160,7 +305,8 @@ async function submit() {
               filterable
               placeholder="选择归属项目"
               class="full-width"
-              @change="form.found_version = ''"
+              :disabled="!isEdit && Boolean(defaultProjectCode)"
+              @change="applyProjectDefaults"
             >
               <el-option
                 v-for="project in meta?.projects || []"
@@ -179,6 +325,7 @@ async function submit() {
               :meta="meta"
               :projects="form.project_code ? [form.project_code] : []"
               :historical="defect?.project_code === form.project_code ? defect?.found_version : undefined"
+              @change="applyFoundVersionDefaults"
             />
           </el-form-item>
 
@@ -379,7 +526,7 @@ async function submit() {
         <div class="form-grid form-grid--three">
           <el-form-item label="所属平台">
             <el-select v-model="form.environment.platform" clearable placeholder="选择运行端" class="full-width">
-              <el-option v-for="item in ['iOS', 'Android', 'Web', '服务端', '其他']" :key="item" :label="item" :value="item" />
+              <el-option v-for="item in ['iOS', 'Android', 'TTmins', 'Web', '服务端', '其他']" :key="item" :label="item" :value="item" />
             </el-select>
           </el-form-item>
           <el-form-item label="测试环境">
@@ -590,6 +737,133 @@ async function submit() {
 /* 表单主体与分段卡片 */
 .defect-form {
   padding-bottom: 8px;
+}
+
+.status-direct-panel {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(420px, 1.5fr);
+  align-items: center;
+  gap: 24px;
+  padding: 18px 22px;
+  margin-bottom: 18px;
+  overflow: hidden;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #f4f8ff 100%);
+  box-shadow: 0 5px 20px rgba(37, 99, 235, 0.07);
+}
+
+.status-direct-panel__copy {
+  min-width: 0;
+}
+
+.status-direct-panel__eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  color: #2563eb;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.status-direct-panel__copy strong {
+  color: #0f172a;
+  font-size: 15px;
+}
+
+.status-direct-panel__copy p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.status-direct-track {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  transition: opacity 0.2s ease;
+}
+
+.status-direct-track.is-loading {
+  opacity: 0.6;
+}
+
+.status-direct-track__line {
+  min-width: 12px;
+  height: 1px;
+  flex: 1;
+  background: #dbe3ef;
+}
+
+.status-direct-node {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  min-width: 70px;
+  padding: 7px 5px;
+  border: 0;
+  border-radius: 11px;
+  color: #475569;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.status-direct-node:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 5px 14px rgba(15, 23, 42, 0.08);
+  transform: translateY(-2px);
+}
+
+.status-direct-node__dot {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 2px solid #cbd5e1;
+  border-radius: 50%;
+  color: #64748b;
+  background: #ffffff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.status-direct-node__label {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-direct-node small {
+  color: #94a3b8;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.status-direct-node.is-current {
+  cursor: default;
+}
+
+.status-direct-node.is-current .status-direct-node__dot {
+  color: #ffffff;
+  border-color: currentColor;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
+}
+
+.status-direct-node.is-current.is-slate .status-direct-node__dot { background: #64748b; }
+.status-direct-node.is-current.is-blue .status-direct-node__dot { background: #2563eb; }
+.status-direct-node.is-current.is-amber .status-direct-node__dot { background: #d97706; }
+.status-direct-node.is-current.is-green .status-direct-node__dot { background: #16a34a; }
+.status-direct-node.is-current.is-slate { color: #475569; }
+.status-direct-node.is-current.is-blue { color: #1d4ed8; }
+.status-direct-node.is-current.is-amber { color: #b45309; }
+.status-direct-node.is-current.is-green { color: #15803d; }
+
+.status-direct-node.is-disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
 }
 
 .form-section {
@@ -960,7 +1234,38 @@ async function submit() {
   transform: translateY(-1px);
 }
 
+:global(.defect-status-confirm) {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+}
+
+:global(.defect-status-confirm .el-message-box__header) {
+  padding: 20px 22px 12px;
+}
+
+:global(.defect-status-confirm .el-message-box__content) {
+  padding: 8px 22px 18px;
+  color: #475569;
+}
+
+:global(.defect-status-confirm .el-message-box__btns) {
+  padding: 12px 22px 20px;
+}
+
+:global(.defect-status-confirm .el-button) {
+  border-radius: 9px;
+}
+
 @media (max-width: 760px) {
+  .status-direct-panel {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .status-direct-node {
+    min-width: 58px;
+  }
   .form-grid--three,
   .form-grid--two,
   .result-split-grid {

@@ -2,11 +2,14 @@ import request from '@/api/request'
 import type {
   Defect,
   DefectDetail,
+  DefectDevice,
   DefectFieldDefinition,
   DefectFormValue,
   DefectMeta,
+  DefectMemberDefaultRole,
   DefectProjectPermission,
-  DefectStats
+  DefectStats,
+  DefectStatus
 } from './types'
 
 export interface DefectListParams {
@@ -60,11 +63,13 @@ export const defectApi = {
   updateTestingVersion: (project: string, payload: { testing: string; expected_testing: string; expected_online: string }) => request.put(`/defects/testing-version/${encodeURIComponent(project)}`, payload) as Promise<{online: string; testing: string; versions: string[]}>,
   saveVersions: (project: string, stages: { online: string; testing: string }) => request.put(`/defects/versions/${encodeURIComponent(project)}`, stages),
   meta: () => request.get('/defects/meta') as Promise<DefectMeta>,
+  devices: () => request.get('/config/devices') as Promise<DefectDevice[]>,
   stats: (params: { project_code?: string; date_from?: string; date_to?: string }) => request.get('/defects/stats', { params }) as Promise<DefectStats>,
   list: (params: DefectListParams) => request.get('/defects', { params }) as Promise<DefectListResult>,
   detail: (id: string) => request.get(`/defects/${id}`) as Promise<DefectDetail>,
   create: (payload: DefectFormValue) => request.post('/defects', payload) as Promise<Defect>,
   update: (id: string, payload: DefectFormValue) => request.put(`/defects/${id}`, payload) as Promise<Defect>,
+  setStatus: (id: string, payload: { status: DefectStatus; row_version: number }) => request.put(`/defects/${id}/status`, payload) as Promise<Defect>,
   transition: (id: string, payload: DefectTransitionPayload) => request.post(`/defects/${id}/transition`, payload) as Promise<Defect>,
   batch: (payload: DefectBatchPayload) => request.post('/defects/batch', payload) as Promise<{ results: DefectBatchResult[] }>,
   fields: () => request.get('/defects/fields') as Promise<DefectFieldDefinition[]>,
@@ -73,6 +78,8 @@ export const defectApi = {
   projectPermissions: () => request.get('/defects/project-permissions') as Promise<DefectProjectPermission[]>,
   saveProjectPermission: (projectCode: string, payload: Pick<DefectProjectPermission, 'permission_mode' | 'members'>) =>
     request.put(`/defects/project-permissions/${encodeURIComponent(projectCode)}`, payload),
+  memberDefaultRoles: () => request.get('/defects/member-default-roles') as Promise<DefectMemberDefaultRole[]>,
+  saveMemberDefaultRoles: (members: DefectMemberDefaultRole[]) => request.put('/defects/member-default-roles', { members }),
   comment: (id: string, content: string) => request.post(`/defects/${id}/comments`, { content }),
   upload: (id: string, file: File) => {
     const form = new FormData()

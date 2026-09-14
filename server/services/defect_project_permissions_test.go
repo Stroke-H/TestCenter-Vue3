@@ -8,7 +8,7 @@ func TestDefectProjectRoleActionMatrix(t *testing.T) {
 		"unknown":   {},
 		"viewer":    {"view": true},
 		"developer": {"view": true, "comment": true, "edit": true, "process": true},
-		"tester":    {"view": true, "comment": true, "edit": true, "create": true, "verify": true, "reopen": true},
+		"product":   {"view": true, "comment": true, "edit": true, "create": true},
 	}
 	for role, actions := range wants {
 		for _, action := range []string{"view", "comment", "edit", "process", "create", "verify", "reopen", "archive"} {
@@ -19,12 +19,15 @@ func TestDefectProjectRoleActionMatrix(t *testing.T) {
 			})
 		}
 	}
-	for _, role := range []string{"admin", "lead", "open"} {
+	for _, role := range []string{"admin", "lead", "tester"} {
 		for _, action := range []string{"view", "comment", "edit", "process", "create", "verify", "reopen"} {
 			if !defectRoleAllows(role, action) {
 				t.Fatalf("role=%q should allow %s at the project layer", role, action)
 			}
 		}
+	}
+	if defectRoleAllows("open", "view") {
+		t.Fatal("legacy open pseudo-role must not bypass configured project membership")
 	}
 }
 

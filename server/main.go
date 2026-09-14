@@ -116,10 +116,13 @@ func main() {
 			defects.PUT("/fields/:field_id", services.RequireDefectPermission("defects.manage"), services.UpdateDefectFieldHandler)
 			defects.GET("/project-permissions", services.RequireDefectPermission("defects.manage"), services.ListDefectProjectPermissionsHandler)
 			defects.PUT("/project-permissions/:project_code", services.RequireDefectPermission("defects.manage"), services.SaveDefectProjectPermissionHandler)
+			defects.GET("/member-default-roles", services.RequireDefectPermission("defects.manage"), services.ListDefectMemberDefaultRolesHandler)
+			defects.PUT("/member-default-roles", services.RequireDefectPermission("defects.manage"), services.SaveDefectMemberDefaultRolesHandler)
 			defects.GET("", services.ListDefectsHandler)
 			defects.POST("", services.RequireDefectPermission("defects.create"), services.CreateDefectHandler)
 			defects.GET("/:id", services.GetDefectHandler)
 			defects.PUT("/:id", services.RequireDefectPermission("defects.edit"), services.UpdateDefectHandler)
+			defects.PUT("/:id/status", services.SetDefectStatusHandler)
 			defects.POST("/:id/transition", services.TransitionDefectHandler)
 			defects.POST("/:id/comments", services.AddDefectCommentHandler)
 			defects.POST("/:id/attachments", services.RequireDefectPermission("defects.edit"), services.UploadDefectAttachmentHandler)
@@ -172,7 +175,7 @@ func main() {
 			reports.POST("/project-configs/analyze-project", services.AnalyzeProjectConfigHandler)
 			reports.POST("/send-feishu", services.SendAcceptanceReportToFeishuHandler)
 			reports.POST("/sync-cloud-doc", services.SyncAcceptanceReportToCloudDocHandler)
-			reports.POST("/fetch-project-items", services.FetchAcceptanceReportProjectItemsHandler)
+			reports.POST("/fetch-defect-titles", services.FetchAcceptanceReportDefectTitlesHandler)
 		}
 
 		// Personal acceptance follow-ups and manual todos (Protected)

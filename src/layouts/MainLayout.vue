@@ -253,7 +253,7 @@ const handleUserCommand = async (command: string) => {
 /* ==================== 侧边栏 ==================== */
 .layout-sidebar {
   background: #ffffff;
-  border-right: 1px solid #f0f0f0;
+  border-right: 1px solid #eef2f6;
   display: flex;
   flex-direction: column;
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -267,7 +267,7 @@ const handleUserCommand = async (command: string) => {
   align-items: center;
   padding: 0 16px;
   gap: 12px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid #eef2f6;
   flex-shrink: 0;
 }
 
@@ -339,7 +339,7 @@ const handleUserCommand = async (command: string) => {
   height: 60px;
   background: #ffffff;
   backdrop-filter: blur(12px);
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid #eef2f6;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -403,12 +403,12 @@ const handleUserCommand = async (command: string) => {
 /* ==================== 主内容区 ==================== */
 .layout-main-container {
   flex-direction: column;
-  background: #f5f6fa;
+  background: #f8fafc;
 }
 
 .layout-content {
   padding: 24px;
-  background: #f5f6fa;
+  background: #f8fafc;
   overflow-y: auto;
   scrollbar-gutter: stable;
 }

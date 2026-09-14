@@ -90,27 +90,33 @@ onMounted(ensureCurrentUserLoaded)
 
 <template>
   <div class="profile-settings-page" v-loading="loading">
-    <div class="profile-settings-header">
-      <div>
-        <div class="profile-settings-header__eyebrow">个人设置</div>
-        <h1 class="profile-settings-header__title">维护你的平台身份信息</h1>
-        <p class="profile-settings-header__desc">支持更新头像、昵称和联系邮箱，保存后右上角信息会立即同步。</p>
+    <!-- Standard Page Header -->
+    <div class="page-header">
+      <div class="header-left">
+        <div class="title-row">
+          <h1 class="page-title">个人设置</h1>
+          <span class="page-badge">Profile & Identity</span>
+        </div>
+        <p class="page-desc">维护你在平台内的个人身份信息，更新昵称与联系邮箱，修改后全局同步生效</p>
       </div>
-      <el-button plain :icon="ArrowLeft" @click="goBack">返回</el-button>
+      <div class="header-right">
+        <el-button plain :icon="ArrowLeft" class="back-btn" @click="goBack">返回上一页</el-button>
+      </div>
     </div>
 
     <div class="profile-settings-layout">
+      <!-- Left Avatar Card -->
       <section class="profile-card profile-card--avatar">
         <div class="avatar-panel">
           <el-avatar
-            :size="104"
+            :size="96"
             :src="displayAvatar || undefined"
             :icon="UserFilled"
             class="avatar-panel__avatar"
           />
           <div class="avatar-panel__meta">
             <div class="avatar-panel__name">{{ displayName }}</div>
-            <div class="avatar-panel__sub">{{ currentUser?.username || '未登录用户' }}</div>
+            <div class="avatar-panel__sub">账号：{{ currentUser?.username || '未登录用户' }}</div>
           </div>
         </div>
 
@@ -120,34 +126,35 @@ onMounted(ensureCurrentUserLoaded)
         </div>
 
         <div class="avatar-panel__tip">
-          建议上传清晰方形头像，支持常见图片格式，大小不超过 2MB。
+          提示：建议上传清晰方形头像，支持常见图片格式，大小不超过 2MB。
         </div>
       </section>
 
+      <!-- Right Form Card -->
       <section class="profile-card profile-card--form">
         <div class="section-title">
           <el-icon><Avatar /></el-icon>
           <span>基础资料</span>
         </div>
 
-        <el-form label-width="92px" class="profile-form">
-          <el-form-item label="用户名">
+        <el-form label-width="96px" class="profile-form">
+          <el-form-item label="登录账号">
             <el-input :model-value="currentUser?.username || ''" disabled />
           </el-form-item>
-          <el-form-item label="昵称">
+          <el-form-item label="显示昵称" required>
             <el-input v-model="form.nickname" maxlength="24" show-word-limit placeholder="请输入昵称" />
           </el-form-item>
-          <el-form-item label="邮箱">
-            <el-input v-model="form.email" placeholder="可选，用于接收联系信息" />
+          <el-form-item label="工作邮箱">
+            <el-input v-model="form.email" placeholder="可选，用于接收联系信息与提醒" />
           </el-form-item>
-          <el-form-item label="用户 ID">
+          <el-form-item label="用户唯一 ID">
             <el-input :model-value="currentUser?.id || ''" disabled />
           </el-form-item>
         </el-form>
 
         <div class="profile-form__footer">
           <el-button @click="syncForm(currentUser)">重置</el-button>
-          <el-button type="primary" :loading="saving" @click="saveProfile">保存设置</el-button>
+          <el-button type="primary" class="save-btn" :loading="saving" @click="saveProfile">保存设置</el-button>
         </div>
       </section>
     </div>
@@ -157,41 +164,55 @@ onMounted(ensureCurrentUserLoaded)
 <style scoped>
 .profile-settings-page {
   padding: 24px;
-  min-height: 100%;
-  background:
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.08), transparent 28%),
-    linear-gradient(180deg, #f8fbff 0%, #f3f6fb 100%);
+  max-width: 1680px;
+  margin: 0 auto;
 }
 
-.profile-settings-header {
+/* Standard Page Header */
+.page-header {
   display: flex;
-  align-items: flex-start;
   justify-content: space-between;
-  gap: 20px;
+  align-items: center;
   margin-bottom: 24px;
 }
 
-.profile-settings-header__eyebrow {
-  font-size: 13px;
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.page-badge {
+  font-size: 12px;
   font-weight: 600;
   color: #2563eb;
-  margin-bottom: 8px;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  letter-spacing: 0.02em;
 }
 
-.profile-settings-header__title {
-  margin: 0;
-  font-size: 30px;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.profile-settings-header__desc {
-  margin: 10px 0 0;
-  font-size: 14px;
+.page-desc {
+  margin: 6px 0 0;
+  font-size: 13px;
   color: #64748b;
-  line-height: 1.7;
 }
 
+.back-btn {
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+/* Layout */
 .profile-settings-layout {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
@@ -199,14 +220,16 @@ onMounted(ensureCurrentUserLoaded)
 }
 
 .profile-card {
-  background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 24px;
-  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.06);
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 .profile-card--avatar {
   padding: 24px;
+  display: flex;
+  flex-direction: column;
 }
 
 .avatar-panel {
@@ -218,36 +241,44 @@ onMounted(ensureCurrentUserLoaded)
 }
 
 .avatar-panel__avatar {
-  border: 4px solid rgba(59, 130, 246, 0.12);
-  box-shadow: 0 12px 30px rgba(59, 130, 246, 0.18);
+  border: 3px solid #eff6ff;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.15);
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: #ffffff;
 }
 
 .avatar-panel__name {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   color: #0f172a;
 }
 
 .avatar-panel__sub {
-  font-size: 14px;
+  font-size: 13px;
   color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .avatar-panel__actions {
   display: flex;
   justify-content: center;
-  gap: 12px;
-  margin-top: 22px;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.avatar-panel__actions :deep(.el-button) {
+  border-radius: 8px;
 }
 
 .avatar-panel__tip {
-  margin-top: 16px;
+  margin-top: 20px;
   padding: 12px 14px;
-  font-size: 13px;
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: 1.6;
   color: #64748b;
   background: #f8fafc;
-  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
 }
 
 .profile-card--form {
@@ -259,45 +290,45 @@ onMounted(ensureCurrentUserLoaded)
   align-items: center;
   gap: 10px;
   margin-bottom: 24px;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   color: #0f172a;
 }
 
 .section-title .el-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(59, 130, 246, 0.12);
+  background: #eff6ff;
   color: #2563eb;
+  font-size: 16px;
 }
 
 .profile-form {
-  max-width: 620px;
-}
-
-.profile-form :deep(.el-input__wrapper) {
-  min-height: 44px;
-  border-radius: 12px;
+  max-width: 580px;
 }
 
 .profile-form__footer {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 28px;
+  margin-top: 32px;
+  padding-top: 20px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.save-btn {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  border: none;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
 }
 
 @media (max-width: 960px) {
   .profile-settings-layout {
     grid-template-columns: 1fr;
-  }
-
-  .profile-settings-header {
-    flex-direction: column;
   }
 }
 </style>

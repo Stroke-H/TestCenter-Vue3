@@ -1,5 +1,14 @@
 # ChangeLog - Settings (配置中心)
 
+## 2026-09-11
+
+### Changed
+- **Settings UI Modernization**: 系统配置中心 4 大模块页面全面完成现代化重塑。
+  - **项目配置 (ProjectConfig)**：引入标准 Page Header 与 `.content-card` 容器，表格采用等宽项目代号徽标与标签，优化新增/编辑对话框样式。
+  - **设备管理 (DeviceConfig)**：顶部引入测试设备总数、Android、iOS 设备三栏式状态统计与快捷切换卡片，更新操作系统药丸标签与表格布局。
+  - **账号配置 (AccountConfig)**：引入可登录账号、飞书已绑定、待绑定飞书统计卡片，表格集成首字母用户头像与绑定状态胶囊。
+  - **权限管理 (PermissionManagement)**：重构 Hub 侧边栏导航与快捷入口偏好卡片，卡片点击交互、选中高亮与计数徽标视觉整体对齐。
+
 ## 2026-06-09
 
 ### Changed

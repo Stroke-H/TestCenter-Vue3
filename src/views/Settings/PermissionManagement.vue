@@ -87,54 +87,89 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="settings-hub">
-    <header class="hub-heading"><span class="hub-heading__icon"><el-icon><Icons.Lock /></el-icon></span><div><h1>权限管理</h1><p>管理平台访问权限与个人快捷入口偏好</p></div></header>
+    <!-- Standard Page Header -->
+    <div class="page-header">
+      <div class="header-left">
+        <div class="title-row">
+          <h1 class="page-title">权限管理</h1>
+          <span class="page-badge">Security & Access</span>
+        </div>
+        <p class="page-desc">管理平台模块访问权限、缺陷数据权限与个人快捷入口偏好</p>
+      </div>
+    </div>
+
     <div class="hub-layout">
       <nav class="hub-sidebar" aria-label="权限管理配置分类">
-        <button v-for="tab in tabs" :key="tab.id" :class="{ 'is-active': activeTab === tab.id }" :aria-current="activeTab === tab.id ? 'page' : undefined" @click="activeTab = tab.id">
-          <el-icon><component :is="tab.icon" /></el-icon><span><strong>{{ tab.label }}</strong><small>{{ tab.detail }}</small></span><el-icon class="nav-arrow"><Icons.ArrowRight /></el-icon>
+        <button 
+          v-for="tab in tabs" 
+          :key="tab.id" 
+          :class="{ 'is-active': activeTab === tab.id }" 
+          :aria-current="activeTab === tab.id ? 'page' : undefined" 
+          @click="activeTab = tab.id"
+        >
+          <div class="tab-icon-box">
+            <el-icon><component :is="tab.icon" /></el-icon>
+          </div>
+          <span class="tab-text">
+            <strong>{{ tab.label }}</strong>
+            <small>{{ tab.detail }}</small>
+          </span>
+          <el-icon class="nav-arrow"><Icons.ArrowRight /></el-icon>
         </button>
       </nav>
+
       <section class="hub-content">
         <DashboardPermissionPanel v-if="isAdmin && activeTab === 'dashboard'" :key="auth.user?.id" />
         <div v-else-if="activeTab === 'quick'" class="personal-config">
-          <p class="personal-note">仅配置当前账号 {{ auth.user?.username }} 的快捷入口，保存在当前浏览器，可随时调整。</p>
-            <section class="permission-group quick-entry-config">
-              <div class="quick-entry-config__header">
-                <div>
-                  <h2>快捷入口配置</h2>
-                  <p>选择展示在智能助手对话框底部的入口，最多选择四个。</p>
-                </div>
-                <span>{{ selectedQuickEntryIds.length }}/{{ ASSISTANT_QUICK_ENTRY_LIMIT }}</span>
+          <div class="quick-intro-banner">
+            <p class="personal-note">仅配置当前账号 <strong class="user-highlight">{{ auth.user?.username }}</strong> 的快捷入口，保存在当前浏览器，可随时调整。</p>
+          </div>
+          
+          <section class="quick-entry-config">
+            <div class="quick-entry-config__header">
+              <div>
+                <h2>快捷入口偏好</h2>
+                <p>选择展示在智能助手对话框底部的常用快捷入口，最多选择 4 个。</p>
               </div>
-              <div class="quick-entry-groups">
-                <section
-                  v-for="group in groupedQuickEntries"
-                  :key="group.group"
-                  class="quick-entry-group"
-                >
+              <div class="entry-counter">
+                <span>{{ selectedQuickEntryIds.length }} / {{ ASSISTANT_QUICK_ENTRY_LIMIT }}</span>
+              </div>
+            </div>
+
+            <div class="quick-entry-groups">
+              <section
+                v-for="group in groupedQuickEntries"
+                :key="group.group"
+                class="quick-entry-group"
+              >
+                <div class="group-title-row">
+                  <span class="group-dot"></span>
                   <h3>{{ group.group }}</h3>
-                  <div class="quick-entry-grid">
-                    <button
-                      v-for="entry in group.items"
-                      :key="entry.id"
-                      type="button"
-                      class="quick-entry-item"
-                      :class="{ 'is-selected': selectedQuickEntryIds.includes(entry.id) }"
-                      @click="toggleQuickEntry(entry.id)"
-                    >
-                      <span class="quick-entry-item__icon" :style="{ background: entry.iconBg, color: entry.iconColor }">
-                        <el-icon><component :is="Icons[entry.iconName as keyof typeof Icons]" /></el-icon>
-                      </span>
-                      <span class="quick-entry-item__content">
-                        <strong>{{ entry.name }}</strong>
-                        <span>{{ entry.description }}</span>
-                      </span>
-                      <em>{{ selectedQuickEntryIds.includes(entry.id) ? '已选择' : '可选择' }}</em>
-                    </button>
-                  </div>
-                </section>
-              </div>
-            </section>
+                </div>
+                <div class="quick-entry-grid">
+                  <button
+                    v-for="entry in group.items"
+                    :key="entry.id"
+                    type="button"
+                    class="quick-entry-item"
+                    :class="{ 'is-selected': selectedQuickEntryIds.includes(entry.id) }"
+                    @click="toggleQuickEntry(entry.id)"
+                  >
+                    <span class="quick-entry-item__icon" :style="{ background: entry.iconBg, color: entry.iconColor }">
+                      <el-icon><component :is="Icons[entry.iconName as keyof typeof Icons]" /></el-icon>
+                    </span>
+                    <span class="quick-entry-item__content">
+                      <strong>{{ entry.name }}</strong>
+                      <span>{{ entry.description }}</span>
+                    </span>
+                    <span class="entry-status-badge">
+                      {{ selectedQuickEntryIds.includes(entry.id) ? '已选择' : '点击选择' }}
+                    </span>
+                  </button>
+                </div>
+              </section>
+            </div>
+          </section>
         </div>
         <div v-else-if="isAdmin" v-loading="metaLoading" class="defect-config">
           <el-empty v-if="metaError" description="配置加载失败"><el-button @click="loadMeta">重新加载</el-button></el-empty>
@@ -147,314 +182,309 @@ onBeforeUnmount(() => {
     </div>
   </main>
 </template>
+
 <style scoped>
-
-.permission-page {
-  display: grid;
-  gap: 18px;
+.settings-hub {
+  padding: 24px;
+  max-width: 1680px;
+  margin: 0 auto;
+  color: #1e293b;
 }
 
-.permission-page__header {
+/* Standard Page Header */
+.page-header {
   display: flex;
   justify-content: space-between;
-  gap: 18px;
   align-items: center;
-  padding: 20px 22px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  margin-bottom: 24px;
 }
 
-.permission-page__eyebrow {
-  margin: 0 0 6px;
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.page-badge {
+  font-size: 12px;
+  font-weight: 600;
   color: #2563eb;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.permission-page__header h1 {
-  margin: 0;
-  font-size: 28px;
-}
-
-.permission-page__subtitle {
-  margin: 8px 0 0;
-  color: #64748b;
-}
-
-.permission-layout {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  gap: 18px;
-}
-
-.permission-users,
-.permission-editor {
-  padding: 18px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-}
-
-.permission-users {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-}
-
-.permission-users__title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #0f172a;
-  font-weight: 700;
-}
-
-.permission-user-card {
-  display: grid;
-  gap: 4px;
-  padding: 12px;
-  color: #0f172a;
-  text-align: left;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.permission-user-card.is-active {
   background: #eff6ff;
-  border-color: #60a5fa;
+  border: 1px solid #dbeafe;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  letter-spacing: 0.02em;
 }
 
-.permission-user-card span {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.permission-editor {
-  display: grid;
-  gap: 18px;
-}
-
-.permission-editor__top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.permission-editor__identity {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.permission-editor__identity span {
-  display: block;
-  margin-top: 4px;
-  color: #64748b;
+.page-desc {
+  margin: 6px 0 0;
   font-size: 13px;
-}
-
-.permission-editor__actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.permission-editor__autosave {
   color: #64748b;
-  font-size: 12px;
-  font-weight: 700;
 }
 
-.permission-groups {
+/* Layout */
+.hub-layout {
   display: grid;
-  gap: 18px;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
 }
 
-.permission-group {
-  display: grid;
-  gap: 12px;
-}
-
-.permission-group h2 {
-  margin: 0;
-  font-size: 16px;
-  color: #0f172a;
-}
-
-.permission-grid {
-  display: grid;
-  justify-content: flex-start;
-  gap: 10px;
-  grid-template-columns: repeat(auto-fill, 180px);
-}
-
-.permission-item {
+/* Hub Sidebar */
+.hub-sidebar {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: space-between;
   gap: 6px;
-  width: 180px;
-  min-height: 90px;
-  padding: 11px 12px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  position: sticky;
+  top: 20px;
+}
+
+.hub-sidebar button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #64748b;
   text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-icon-box {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.hub-sidebar button:hover {
+  background: #f8fafc;
+  color: #1e293b;
+}
+
+.hub-sidebar button:hover .tab-icon-box {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.hub-sidebar button.is-active {
+  background: #eff6ff;
+  border-color: #dbeafe;
+  color: #2563eb;
+}
+
+.hub-sidebar button.is-active .tab-icon-box {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+}
+
+.hub-sidebar button > .tab-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.hub-sidebar strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: inherit;
+}
+
+.hub-sidebar small {
+  display: block;
+  font-size: 11px;
+  margin-top: 2px;
+  color: #94a3b8;
+}
+
+.nav-arrow {
+  font-size: 12px;
+  color: #cbd5e1;
+  transition: transform 0.2s ease;
+}
+
+.hub-sidebar button.is-active .nav-arrow {
+  color: #2563eb;
+  transform: translateX(2px);
+}
+
+/* Hub Content */
+.hub-content {
+  min-width: 0;
+}
+
+.personal-config {
+  padding: 24px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.quick-intro-banner {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.18s ease;
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 24px;
 }
 
-.permission-item:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.08);
-}
-
-.permission-item.is-enabled {
-  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
-  border-color: #60a5fa;
-}
-
-.permission-item.is-locked {
-  cursor: not-allowed;
-}
-
-.permission-item.is-saving {
-  border-color: #2563eb;
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.12);
-}
-
-.permission-item:disabled {
-  cursor: wait;
-}
-
-.permission-item.is-locked:disabled {
-  cursor: not-allowed;
-}
-
-.permission-item__content {
-  display: grid;
-  gap: 4px;
-}
-
-.permission-item__content strong {
-  color: #0f172a;
-  font-size: 14px;
-}
-
-.permission-item__content span {
+.personal-note {
+  margin: 0;
   color: #64748b;
-  font-size: 11px;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-.permission-item em {
+.user-highlight {
   color: #2563eb;
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 700;
-}
-
-.quick-entry-config {
-  padding-top: 6px;
-  border-top: 1px solid #e5e7eb;
+  font-weight: 600;
 }
 
 .quick-entry-config__header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.quick-entry-config__header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
 }
 
 .quick-entry-config__header p {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: #64748b;
   font-size: 13px;
 }
 
-.quick-entry-config__header span {
-  min-width: 44px;
-  padding: 5px 9px;
-  color: #2563eb;
-  text-align: center;
+.entry-counter {
+  padding: 6px 14px;
   background: #eff6ff;
   border: 1px solid #bfdbfe;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 800;
+  border-radius: 9999px;
+  color: #2563eb;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .quick-entry-groups {
-  display: grid;
-  gap: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .quick-entry-group {
-  display: grid;
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.group-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.group-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3b82f6;
 }
 
 .quick-entry-group h3 {
   margin: 0;
   color: #475569;
   font-size: 13px;
+  font-weight: 600;
 }
 
 .quick-entry-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
 }
 
 .quick-entry-item {
-  min-height: 88px;
-  padding: 11px;
+  min-height: 84px;
+  padding: 12px;
   text-align: left;
-  background: #f8fafc;
+  background: #ffffff;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: 10px;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 36px minmax(0, 1fr);
   grid-template-rows: 1fr auto;
-  gap: 8px 10px;
+  gap: 8px 12px;
   cursor: pointer;
-  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
 .quick-entry-item:hover {
   border-color: #93c5fd;
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.08);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
+  transform: translateY(-1px);
 }
 
 .quick-entry-item.is-selected {
-  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%);
-  border-color: #60a5fa;
+  background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%);
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
 }
 
 .quick-entry-item__icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 17px;
+  font-size: 18px;
 }
 
 .quick-entry-item__content {
   min-width: 0;
-  display: grid;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .quick-entry-item__content strong {
   color: #0f172a;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .quick-entry-item__content span {
@@ -463,47 +493,55 @@ onBeforeUnmount(() => {
   line-height: 1.4;
 }
 
-.quick-entry-item em {
+.entry-status-badge {
   grid-column: 2;
-  color: #2563eb;
   font-size: 11px;
-  font-style: normal;
-  font-weight: 800;
+  font-weight: 600;
+  color: #94a3b8;
 }
 
-@media (max-width: 1080px) {
-  .permission-layout {
+.quick-entry-item.is-selected .entry-status-badge {
+  color: #2563eb;
+}
+
+.defect-config {
+  min-height: 300px;
+}
+
+.hub-content :deep(.permission-page) {
+  padding: 0;
+}
+
+.hub-content :deep(.permission-page__eyebrow) {
+  display: none;
+}
+
+.hub-content :deep(.field-config),
+.hub-content :deep(.project-permission) {
+  min-width: 0;
+}
+
+@media (max-width: 1000px) {
+  .hub-layout {
     grid-template-columns: 1fr;
   }
-
-  .permission-grid {
-    grid-template-columns: 1fr;
+  .hub-sidebar {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
   }
-
-  .permission-item {
-    width: 100%;
-  }
-
-  .permission-page__header,
-  .permission-editor__top,
-  .quick-entry-config__header {
-    align-items: flex-start;
-    flex-direction: column;
+  .hub-sidebar button {
+    flex: 1;
+    min-width: 150px;
   }
 }
 
-.settings-hub{padding:28px;max-width:1680px;margin:0 auto;color:#1e293b}
-.hub-heading{display:flex;align-items:center;gap:14px;margin-bottom:24px}
-.hub-heading__icon{display:grid;place-items:center;width:46px;height:46px;border-radius:14px;background:#eff6ff;color:#2563eb;font-size:23px}
-.hub-heading h1{font-size:24px;margin:0 0 6px}.hub-heading p{margin:0;color:#64748b;font-size:13px}
-.hub-layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:22px;align-items:start}
-.hub-sidebar{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid #e2e8f0;border-radius:16px;background:#fff;position:sticky;top:20px}
-.hub-sidebar button{display:flex;align-items:center;gap:12px;padding:14px 10px;border:0;border-radius:11px;background:transparent;color:#64748b;text-align:left;cursor:pointer;transition:.2s}
-.hub-sidebar button:hover{background:#f8fafc}.hub-sidebar button.is-active{background:#eff6ff;color:#2563eb}
-.hub-sidebar button>span{flex:1}.hub-sidebar strong,.hub-sidebar small{display:block}.hub-sidebar strong{font-size:14px}.hub-sidebar small{font-size:11px;margin-top:6px;color:#94a3b8}.nav-arrow{font-size:12px}
-.hub-content{min-width:0}.personal-config{padding:24px;background:#fff;border:1px solid #e2e8f0;border-radius:16px}.personal-note{margin:0 0 22px;color:#64748b;font-size:13px;line-height:1.7}.defect-config{min-height:300px}
-.hub-content :deep(.permission-page){padding:0}.hub-content :deep(.permission-page__eyebrow){display:none}
-.hub-content :deep(.field-config),.hub-content :deep(.project-permission){min-width:0}
-@media(max-width:1000px){.hub-layout{grid-template-columns:1fr}.hub-sidebar{position:static;flex-direction:row;flex-wrap:wrap}.hub-sidebar button{flex:1;min-width:150px}}
-@media(max-width:600px){.settings-hub{padding:14px}.personal-config{padding:16px}}
+@media (max-width: 600px) {
+  .settings-hub {
+    padding: 14px;
+  }
+  .personal-config {
+    padding: 16px;
+  }
+}
 </style>

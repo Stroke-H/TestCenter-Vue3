@@ -85,6 +85,7 @@ const actionLabels: Record<string, string> = {
   resolve: "标记为已解决，等待验证",
   close: "验证通过并关闭",
   reopen: "重新激活了缺陷",
+  status_change: "直接调整了缺陷状态",
   comment: "添加了评论"
 }
 

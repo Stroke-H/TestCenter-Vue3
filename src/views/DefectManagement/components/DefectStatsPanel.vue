@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue"
+import { computed, onMounted, reactive, ref, watch } from "vue"
 import { ElMessage } from "element-plus"
 import { Clock, Refresh, TrendCharts, Warning, CircleCheck } from "@element-plus/icons-vue"
 import { defectApi } from "../api"
 import type { DefectMeta, DefectStats } from "../types"
 
-const props = defineProps<{ meta: DefectMeta | null }>()
+const props = defineProps<{ meta: DefectMeta | null; projectCode?: string }>()
 const loading = ref(false)
 const stats = ref<DefectStats | null>(null)
-const filters = reactive({ project_code: "", dates: [] as string[] })
+const filters = reactive({ dates: [] as string[] })
 
 const maxProject = computed(() => Math.max(1, ...(stats.value?.project_distribution || []).map((item) => item.count)))
 const maxAssignee = computed(() => Math.max(1, ...(stats.value?.assignee_distribution || []).map((item) => item.count)))
@@ -18,7 +18,7 @@ async function load() {
   loading.value = true
   try {
     stats.value = await defectApi.stats({
-      project_code: filters.project_code,
+      project_code: props.projectCode || "",
       date_from: filters.dates?.[0],
       date_to: filters.dates?.[1]
     })
@@ -34,6 +34,7 @@ function compactDate(value: string) {
 }
 
 onMounted(load)
+watch(() => props.projectCode, load)
 defineExpose({ refresh: load })
 </script>
 
@@ -46,21 +47,6 @@ defineExpose({ refresh: load })
         <span>全流程缺陷生命周期多维数据指标与趋势透视</span>
       </div>
       <div class="stats-toolbar__filters">
-        <el-select
-          v-model="filters.project_code"
-          clearable
-          filterable
-          placeholder="全部项目"
-          class="project-select"
-          @change="load"
-        >
-          <el-option
-            v-for="project in props.meta?.projects || []"
-            :key="project.id"
-            :label="`${project.project_code} · ${project.project_name}`"
-            :value="project.project_code"
-          />
-        </el-select>
         <el-date-picker
           v-model="filters.dates"
           type="daterange"

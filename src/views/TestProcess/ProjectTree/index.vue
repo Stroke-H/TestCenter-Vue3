@@ -5,6 +5,8 @@ import { CollectionTag, Refresh, Search, Plus, Delete, Edit, Check, Close, Docum
 import ProjectTreeBoard from './components/ProjectTreeBoard.vue'
 import ProjectConfigRecordsDialog from './components/ProjectConfigRecordsDialog.vue'
 import ProjectConfigLedger from './components/ProjectConfigLedger.vue'
+import ProjectConfigActiveView from './components/ProjectConfigActiveView.vue'
+import ProjectConfigTimelineView from './components/ProjectConfigTimelineView.vue'
 import { useAcceptanceProjectTree } from './composables/useAcceptanceProjectTree'
 import type { ProjectMemoColor, ProjectMemoItem } from './types'
 import {
@@ -57,6 +59,28 @@ const scheduleAIConfigRefresh = () => {
   refreshProjectTree()
   window.setTimeout(refreshProjectTree, 4000)
   window.setTimeout(refreshProjectTree, 12000)
+}
+
+// Config View Modes: 'active' (当前生效配置) | 'timeline' (版本演进时间轴) | 'notes' (经典便签模式)
+type ConfigViewMode = 'active' | 'timeline' | 'notes'
+const configViewMode = ref<ConfigViewMode>('active')
+const timelineTargetVersion = ref<string>('')
+
+const handleNavigateVersion = (version: string) => {
+  timelineTargetVersion.value = version
+  configViewMode.value = 'timeline'
+}
+
+const handleSelectVersionConfig = (projectCode: string, version: string) => {
+  if (selectedProjectCode.value !== projectCode) {
+    selectedProjectCode.value = projectCode
+  }
+  timelineTargetVersion.value = version
+  configViewMode.value = 'timeline'
+  const el = document.querySelector('.project-memo-card')
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 }
 
 // Keep track of editing notes: record of itemId -> draft state
@@ -226,11 +250,21 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="project-tree-page">
-    <header class="project-workspace-title">
-      <span class="project-workspace-title__icon"><el-icon><CollectionTag /></el-icon></span>
-      <div><h1>项目树</h1><p>追踪版本演进，查看项目配置与验收记录</p></div>
-      <span class="project-workspace-title__count">{{ projectOptions.length }} 个项目</span>
+    <!-- Standard Page Header -->
+    <header class="page-header">
+      <div class="header-left">
+        <div class="title-row">
+          <h1 class="page-title">项目树</h1>
+          <span class="page-badge">Project Traceability</span>
+        </div>
+        <p class="page-desc">追踪版本演进，查看项目配置与全量验收测试记录</p>
+      </div>
+      <div class="header-right">
+        <span class="count-pill">{{ projectOptions.length }} 个项目</span>
+      </div>
     </header>
+
+    <!-- Toolbar -->
     <div class="project-tree-page__header">
       <el-button
         type="primary"
@@ -259,7 +293,7 @@ onBeforeUnmount(() => {
           v-model="keyword"
           :prefix-icon="Search"
           clearable
-          placeholder="在当前项目内搜索版本号、需求点"
+          placeholder="在当前项目内搜索版本号、需求点..."
         />
         <el-button :icon="Refresh" :loading="loading" @click="fetchReports">
           刷新
@@ -267,187 +301,240 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- Main Project Config Workstation -->
     <section
       v-if="selectedProjectCode"
       class="project-memo-card"
     >
       <div class="project-memo-card__header">
-        <div class="project-memo-card__title">
-          <el-icon><CollectionTag /></el-icon>
-          <span>项目配置记录</span>
-        </div>
-        <div class="project-memo-card__actions">
-          <span class="project-memo-card__meta">
-            {{ selectedProject?.projectCode }}｜{{ selectedProject?.projectName || '未命名项目' }}
-          </span>
-          <div class="project-memo-card__buttons">
-            <el-button-group>
-              <el-button
-                type="success"
-                size="small"
-                plain
-                :icon="Plus"
-                @click="handleAddNewNote('green')"
-              >
-                绿色便签
-              </el-button>
-              <el-button
-                type="warning"
-                size="small"
-                plain
-                :icon="Plus"
-                @click="handleAddNewNote('orange')"
-              >
-                橙色便签
-              </el-button>
-              <el-button
-                type="danger"
-                size="small"
-                plain
-                :icon="Plus"
-                @click="handleAddNewNote('red')"
-              >
-                红色便签
-              </el-button>
-            </el-button-group>
+        <div class="project-memo-card__title-row">
+          <div class="project-memo-card__title">
+            <el-icon><CollectionTag /></el-icon>
+            <span>项目配置追踪</span>
           </div>
+          <span class="project-memo-card__meta">
+            {{ selectedProject?.projectCode }} ｜ {{ selectedProject?.projectName || '未命名项目' }}
+          </span>
+        </div>
+
+        <!-- Segmented View Mode Switcher -->
+        <div class="project-memo-card__switcher">
+          <el-radio-group v-model="configViewMode" size="default" class="view-mode-radios">
+            <el-radio-button value="active">
+              <span class="radio-label">🟢 当前生效配置</span>
+            </el-radio-button>
+            <el-radio-button value="timeline">
+              <span class="radio-label">⏱️ 版本演进时间轴</span>
+            </el-radio-button>
+            <el-radio-button value="notes">
+              <span class="radio-label">📋 经典便签模式</span>
+            </el-radio-button>
+          </el-radio-group>
         </div>
       </div>
 
-      <ProjectConfigLedger v-if="selectedProjectCode" :project-code="selectedProjectCode" :record="selectedProjectMemo || undefined" @refresh="fetchReports" />
-      <div class="memo-section-heading"><strong>当前配置与便签 <span>{{ selectedProjectMemo?.items.filter(item => !item.removed).length || 0 }}</span></strong><small>点击编辑 · 拖动排序 · 悬停查看历史</small></div>
-      <div
-        v-if="selectedProjectMemo && selectedProjectMemo.items.filter(item => !item.removed).length > 0"
-        class="project-memos-list"
-      >
-        <div
-          v-for="note in selectedProjectMemo.items.filter(item => !item.removed)"
-          :key="note.id"
-          class="memo-sticky-note"
-          :class="[
-            `memo-sticky-note--${editingNotes[note.id] ? editingNotes[note.id]!.color : note.color}`,
-            {
-              'memo-sticky-note--editing': editingNotes[note.id],
-              'memo-sticky-note--dragging': draggingNoteId === note.id,
-              'memo-sticky-note--drag-over': dragOverNoteId === note.id
-            }
-          ]"
-          :draggable="!editingNotes[note.id]"
-          @dragstart="handleNoteDragStart($event, note.id)"
-          @dragenter.prevent="handleNoteDragEnter(note.id)"
-          @dragover.prevent
-          @drop="handleNoteDrop($event, note.id)"
-          @dragend="handleNoteDragEnd"
-        >
-          <!-- Editing state -->
-          <template v-if="editingNotes[note.id]">
-            <div class="memo-sticky-note__edit">
-              <div v-if="note.kind !== 'ai'" class="memo-sticky-note__squares">
-                <button
-                  type="button"
-                  class="color-square color-square--green"
-                  :class="{ 'color-square--active': editingNotes[note.id]!.color === 'green' }"
-                  title="绿色"
-                  @click="setDraftColor(note.id, 'green')"
-                />
-                <button
-                  type="button"
-                  class="color-square color-square--orange"
-                  :class="{ 'color-square--active': editingNotes[note.id]!.color === 'orange' }"
-                  title="橙色"
-                  @click="setDraftColor(note.id, 'orange')"
-                />
-                <button
-                  type="button"
-                  class="color-square color-square--red"
-                  :class="{ 'color-square--active': editingNotes[note.id]!.color === 'red' }"
-                  title="红色"
-                  @click="setDraftColor(note.id, 'red')"
-                />
-              </div>
-              <el-input
-                v-model="editingNotes[note.id]!.content"
-                type="text"
-                placeholder="输入配置记录内容（按Enter键保存，Esc键取消）"
-                class="memo-sticky-note__input"
-                @keydown.enter="handleNoteEnter($event, note.id)"
-                @keydown.esc="cancelEditNote(note.id)"
-              />
-              <div class="memo-sticky-note__edit-actions">
-                <el-button
-                  type="success"
-                  link
-                  :icon="Check"
-                  title="保存"
-                  @click="saveEditNote(note.id)"
-                />
-                <el-button
-                  type="info"
-                  link
-                  :icon="Close"
-                  title="取消"
-                  @click="cancelEditNote(note.id)"
-                />
-              </div>
-            </div>
-          </template>
+      <!-- Function and Config Ledger Sync / Revision Banner -->
+      <ProjectConfigLedger
+        v-if="selectedProjectCode"
+        :project-code="selectedProjectCode"
+        :record="selectedProjectMemo || undefined"
+        @refresh="fetchReports"
+      />
 
-          <!-- View state -->
-          <template v-else>
-            <el-tooltip
-              effect="dark"
-              placement="top-start"
-              :content="getNoteHistoryTooltip(note)"
-              popper-class="memo-history-tooltip"
+      <!-- View 1: Active Configurations View -->
+      <ProjectConfigActiveView
+        v-if="configViewMode === 'active'"
+        :record="selectedProjectMemo || undefined"
+        :project-code="selectedProjectCode"
+        @navigate-version="handleNavigateVersion"
+      />
+
+      <!-- View 2: Version Timeline View -->
+      <ProjectConfigTimelineView
+        v-else-if="configViewMode === 'timeline'"
+        :record="selectedProjectMemo || undefined"
+        :project-version-nodes="selectedProject?.versions"
+        :project-code="selectedProjectCode"
+        :initial-version="timelineTargetVersion"
+      />
+
+      <!-- View 3: Classic Notes Mode -->
+      <div v-else class="classic-notes-wrapper">
+        <div class="classic-notes-toolbar">
+          <div class="notes-hint">
+            <strong>当前便签总数：<span>{{ selectedProjectMemo?.items.filter(item => !item.removed).length || 0 }}</span></strong>
+            <small>点击卡片快速编辑 · 拖动排序 · 悬停查看修改历史</small>
+          </div>
+          <el-button-group>
+            <el-button
+              type="success"
+              size="small"
+              plain
+              :icon="Plus"
+              @click="handleAddNewNote('green')"
             >
-              <div
-                class="memo-sticky-note__view"
-                @click="startEditNote(note)"
-              >
-                <div class="memo-sticky-note__content">
-                  <span class="memo-sticky-note__text">{{ note.content }}</span>
-                  <span class="memo-sticky-note__time">
-                    {{ formatNoteTime(note.updatedAt) }}
-                  </span>
-                </div>
-                <div class="memo-sticky-note__actions" @click.stop>
-                  <el-button
-                    type="primary"
-                    link
-                    :icon="Edit"
-                    title="编辑"
-                    @click="startEditNote(note)"
+              绿色便签
+            </el-button>
+            <el-button
+              type="warning"
+              size="small"
+              plain
+              :icon="Plus"
+              @click="handleAddNewNote('orange')"
+            >
+              橙色便签
+            </el-button>
+            <el-button
+              type="danger"
+              size="small"
+              plain
+              :icon="Plus"
+              @click="handleAddNewNote('red')"
+            >
+              红色便签
+            </el-button>
+          </el-button-group>
+        </div>
+
+        <div
+          v-if="selectedProjectMemo && selectedProjectMemo.items.filter(item => !item.removed).length > 0"
+          class="project-memos-list"
+        >
+          <div
+            v-for="note in selectedProjectMemo.items.filter(item => !item.removed)"
+            :key="note.id"
+            class="memo-sticky-note"
+            :class="[
+              `memo-sticky-note--${editingNotes[note.id] ? editingNotes[note.id]!.color : note.color}`,
+              {
+                'memo-sticky-note--editing': editingNotes[note.id],
+                'memo-sticky-note--dragging': draggingNoteId === note.id,
+                'memo-sticky-note--drag-over': dragOverNoteId === note.id
+              }
+            ]"
+            :draggable="!editingNotes[note.id]"
+            @dragstart="handleNoteDragStart($event, note.id)"
+            @dragenter.prevent="handleNoteDragEnter(note.id)"
+            @dragover.prevent
+            @drop="handleNoteDrop($event, note.id)"
+            @dragend="handleNoteDragEnd"
+          >
+            <!-- Editing state -->
+            <template v-if="editingNotes[note.id]">
+              <div class="memo-sticky-note__edit">
+                <div v-if="note.kind !== 'ai'" class="memo-sticky-note__squares">
+                  <button
+                    type="button"
+                    class="color-square color-square--green"
+                    :class="{ 'color-square--active': editingNotes[note.id]!.color === 'green' }"
+                    title="绿色"
+                    @click="setDraftColor(note.id, 'green')"
                   />
+                  <button
+                    type="button"
+                    class="color-square color-square--orange"
+                    :class="{ 'color-square--active': editingNotes[note.id]!.color === 'orange' }"
+                    title="橙色"
+                    @click="setDraftColor(note.id, 'orange')"
+                  />
+                  <button
+                    type="button"
+                    class="color-square color-square--red"
+                    :class="{ 'color-square--active': editingNotes[note.id]!.color === 'red' }"
+                    title="红色"
+                    @click="setDraftColor(note.id, 'red')"
+                  />
+                </div>
+                <el-input
+                  v-model="editingNotes[note.id]!.content"
+                  type="text"
+                  placeholder="输入配置记录内容（按Enter键保存，Esc键取消）"
+                  class="memo-sticky-note__input"
+                  @keydown.enter="handleNoteEnter($event, note.id)"
+                  @keydown.esc="cancelEditNote(note.id)"
+                />
+                <div class="memo-sticky-note__edit-actions">
                   <el-button
                     type="success"
                     link
-                    :icon="DocumentCopy"
-                    title="一键黏贴"
-                    @click="openPasteNoteDialog(note)"
+                    :icon="Check"
+                    title="保存"
+                    @click="saveEditNote(note.id)"
                   />
                   <el-button
-                    type="danger"
+                    type="info"
                     link
-                    :icon="Delete"
-                    title="删除"
-                    @click="deleteProjectMemoItem(note.id)"
+                    :icon="Close"
+                    title="取消"
+                    @click="cancelEditNote(note.id)"
                   />
                 </div>
               </div>
-            </el-tooltip>
-          </template>
+            </template>
+
+            <!-- View state -->
+            <template v-else>
+              <el-tooltip
+                effect="dark"
+                placement="top-start"
+                :content="getNoteHistoryTooltip(note)"
+                popper-class="memo-history-tooltip"
+              >
+                <div
+                  class="memo-sticky-note__view"
+                  @click="startEditNote(note)"
+                >
+                  <div class="memo-sticky-note__content">
+                    <span class="memo-sticky-note__text">{{ note.content }}</span>
+                    <span class="memo-sticky-note__time">
+                      {{ formatNoteTime(note.updatedAt) }}
+                    </span>
+                  </div>
+                  <div class="memo-sticky-note__actions" @click.stop>
+                    <el-button
+                      type="primary"
+                      link
+                      :icon="Edit"
+                      title="编辑"
+                      @click="startEditNote(note)"
+                    />
+                    <el-button
+                      type="success"
+                      link
+                      :icon="DocumentCopy"
+                      title="一键黏贴"
+                      @click="openPasteNoteDialog(note)"
+                    />
+                    <el-button
+                      type="danger"
+                      link
+                      :icon="Delete"
+                      title="删除"
+                      @click="deleteProjectMemoItem(note.id)"
+                    />
+                  </div>
+                </div>
+              </el-tooltip>
+            </template>
+          </div>
+        </div>
+        <div v-else class="project-memos-empty">
+          <span class="project-memos-empty__hint">暂无配置便签，可点击上方「绿色/橙色/红色便签」按钮添加</span>
         </div>
       </div>
-      <div v-else class="project-memos-empty">
-        <span class="project-memos-empty__hint">暂无配置便签，可点击上方「绿色/橙色/红色便签」按钮添加</span>
-      </div>
-
     </section>
 
-    <div class="version-section-heading"><h2>版本与验收记录</h2><span>按版本追溯需求变化与测试记录</span></div>
+    <!-- Version and Acceptance Records Section -->
+    <div class="version-section-heading">
+      <h2>版本与验收记录</h2>
+      <span>按版本追溯需求变化与测试记录</span>
+    </div>
+
     <ProjectTreeBoard
       :projects="projectTree"
       :loading="loading"
+      :project-memos="projectMemos"
+      @select-version-config="handleSelectVersionConfig"
     />
 
     <ProjectConfigRecordsDialog
@@ -456,6 +543,7 @@ onBeforeUnmount(() => {
       :project-memos="projectMemos"
     />
 
+    <!-- Paste Dialog -->
     <el-dialog
       v-model="pasteDialogVisible"
       width="520px"
@@ -512,53 +600,53 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* Page Layout */
 .project-tree-page {
-  min-height: 100%;
-  padding: 24px 32px;
-  background: #f8fafc;
-  box-sizing: border-box;
+  padding: 24px;
+  max-width: 1680px;
+  margin: 0 auto;
 }
 
-/* Header Banner */
-.project-workspace-title {
+/* Standard Page Header */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.title-row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 22px;
+  gap: 12px;
 }
 
-.project-workspace-title__icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  color: #ffffff;
-  font-size: 22px;
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.22);
-  flex-shrink: 0;
-}
-
-.project-workspace-title h1 {
-  font-size: 22px;
+.page-title {
+  font-size: 24px;
   font-weight: 700;
   color: #0f172a;
+  margin: 0;
   letter-spacing: -0.02em;
-  margin: 0 0 4px;
 }
 
-.project-workspace-title p {
+.page-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #dbeafe;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  letter-spacing: 0.02em;
+}
+
+.page-desc {
+  margin: 6px 0 0;
   font-size: 13px;
   color: #64748b;
-  margin: 0;
 }
 
-.project-workspace-title__count {
-  margin-left: auto;
-  padding: 5px 14px;
+.count-pill {
+  padding: 6px 14px;
   border: 1px solid #e2e8f0;
   border-radius: 999px;
   background: #ffffff;
@@ -578,7 +666,7 @@ onBeforeUnmount(() => {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
   margin-bottom: 24px;
   flex-wrap: wrap;
 }
@@ -620,6 +708,13 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+.project-memo-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .project-memo-card__title {
   display: inline-flex;
   align-items: center;
@@ -634,13 +729,6 @@ onBeforeUnmount(() => {
   color: #3b82f6;
 }
 
-.project-memo-card__actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
 .project-memo-card__meta {
   display: inline-flex;
   align-items: center;
@@ -653,37 +741,52 @@ onBeforeUnmount(() => {
   letter-spacing: 0.3px;
 }
 
-/* Section Heading */
-.memo-section-heading {
+.project-memo-card__switcher {
+  display: flex;
+  align-items: center;
+}
+
+.view-mode-radios :deep(.el-radio-button__inner) {
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+}
+
+/* Classic Notes Wrapper */
+.classic-notes-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.classic-notes-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 8px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  flex-wrap: wrap;
   gap: 12px;
-  margin: 18px 0 14px;
-  padding: 0 2px;
 }
 
-.memo-section-heading strong {
+.notes-hint strong {
   font-size: 13px;
-  font-weight: 600;
-  color: #334155;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  color: #0f172a;
+  margin-right: 8px;
 }
 
-.memo-section-heading strong span {
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #f1f5f9;
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 700;
+.notes-hint strong span {
+  color: #2563eb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-.memo-section-heading small {
+.notes-hint small {
   font-size: 12px;
-  color: #94a3b8;
+  color: #64748b;
 }
 
 /* Sticky Notes Grid */
@@ -934,7 +1037,7 @@ onBeforeUnmount(() => {
 }
 
 .version-section-heading h2 {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   color: #0f172a;
   letter-spacing: -0.01em;
@@ -952,21 +1055,6 @@ onBeforeUnmount(() => {
   overflow: hidden;
   box-shadow: 0 20px 50px rgba(15, 23, 42, 0.15);
   border: 1px solid #e2e8f0;
-}
-
-:deep(.memo-paste-dialog .el-dialog__header) {
-  margin: 0;
-  padding: 20px 24px 14px;
-  border-bottom: 1px solid #f1f5f9;
-}
-
-:deep(.memo-paste-dialog .el-dialog__body) {
-  padding: 20px 24px;
-}
-
-:deep(.memo-paste-dialog .el-dialog__footer) {
-  padding: 14px 24px 20px;
-  border-top: 1px solid #f1f5f9;
 }
 
 .memo-paste-dialog__header {
@@ -1059,10 +1147,11 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
-/* Responsive */
 @media (max-width: 900px) {
-  .project-tree-page {
-    padding: 16px;
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
   }
   .project-tree-page__header {
     flex-direction: column;
@@ -1083,27 +1172,9 @@ onBeforeUnmount(() => {
     flex-direction: column;
     align-items: flex-start;
   }
-  .project-memo-card__actions {
+  .project-memo-card__switcher {
     width: 100%;
-    justify-content: space-between;
-  }
-}
-
-@media (max-width: 600px) {
-  .project-workspace-title h1 {
-    font-size: 20px;
-  }
-  .project-workspace-title__count {
-    display: none;
-  }
-  .project-memos-list {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .memo-sticky-note {
-    transition: none;
+    overflow-x: auto;
   }
 }
 </style>
