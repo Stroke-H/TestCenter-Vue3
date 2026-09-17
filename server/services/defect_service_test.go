@@ -1,6 +1,10 @@
 package services
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestValidateDefectTransition(t *testing.T) {
 	tests := []struct {
@@ -44,6 +48,29 @@ func TestDirectStatusPermission(t *testing.T) {
 		if permission != test.permission || action != test.projectAction {
 			t.Fatalf("%s -> %s: got %s/%s, want %s/%s", test.current, test.target,
 				permission, action, test.permission, test.projectAction)
+		}
+	}
+}
+
+func TestCreateDefectsRejectsInvalidBatchSize(t *testing.T) {
+	if _, err := createDefects(context.Background(), nil, nil); err == nil || !strings.Contains(err.Error(), "至少") {
+		t.Fatalf("empty batch should be rejected, got %v", err)
+	}
+	items := make([]DefectSaveRequest, 51)
+	if _, err := createDefects(context.Background(), nil, items); err == nil || !strings.Contains(err.Error(), "50") {
+		t.Fatalf("oversized batch should be rejected, got %v", err)
+	}
+}
+
+func TestAllowedDefectAttachment(t *testing.T) {
+	for _, name := range []string{"screen.png", "trace.txt", "request.json", "notes.md", "data.csv", "config.yaml", "report.pdf"} {
+		if !allowedDefectAttachment(name) {
+			t.Fatalf("expected %q to be accepted", name)
+		}
+	}
+	for _, name := range []string{"payload.exe", "script.sh", "archive.rar", "no-extension"} {
+		if allowedDefectAttachment(name) {
+			t.Fatalf("expected %q to be rejected", name)
 		}
 	}
 }

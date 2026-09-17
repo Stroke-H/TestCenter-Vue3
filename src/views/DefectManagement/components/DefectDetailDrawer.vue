@@ -1,22 +1,25 @@
 <script setup lang="ts">
 import DefectVersionSelect from "./DefectVersionSelect.vue"
-import { computed, reactive, ref, watch } from "vue"
-import type { UploadProps } from "element-plus"
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue"
+import { ElMessage, type UploadProps } from "element-plus"
 import {
   ChatDotRound,
   Check,
   CircleCheck,
+  Close,
   Document,
   EditPen,
   Paperclip,
   RefreshLeft
 } from "@element-plus/icons-vue"
 import type { DefectTransitionPayload } from "../api"
+import { defectApi } from "../api"
 import {
   defectStatusMeta,
   defectTypeOptions,
   priorityLabels,
   severityLabels,
+  type DefectAttachment,
   type DefectDetail,
   type DefectMeta
 } from "../types"
@@ -41,6 +44,17 @@ const emit = defineEmits<{
 const commentText = ref("")
 const transitionVisible = ref(false)
 const transition = reactive<DefectTransitionPayload>({ action: "confirm", comment: "" })
+const attachmentPreview = reactive({
+  visible: false,
+  loading: false,
+  title: "",
+  type: "file" as "image" | "text" | "pdf" | "file",
+  source: "",
+  content: "",
+  mimeType: "",
+  size: 0
+})
+let attachmentPreviewUrl = ""
 
 const defect = computed(() => props.detail?.defect || null)
 const canEdit = computed(() => defect.value?.allowed_actions?.edit === true)
@@ -112,6 +126,64 @@ function formatSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
+const imageExtensions = new Set(["png", "jpg", "jpeg", "gif", "webp"])
+const textExtensions = new Set(["txt", "log", "json", "md", "csv", "xml", "yaml", "yml"])
+
+function attachmentExtension(name: string) {
+  return name.split(".").pop()?.toLowerCase() || ""
+}
+
+function isImageAttachment(item: DefectAttachment) {
+  return item.mime_type.startsWith("image/") || imageExtensions.has(attachmentExtension(item.original_name))
+}
+
+function isTextAttachment(item: DefectAttachment) {
+  return item.mime_type.startsWith("text/") || textExtensions.has(attachmentExtension(item.original_name))
+}
+
+function clearAttachmentPreview() {
+  if (attachmentPreviewUrl) URL.revokeObjectURL(attachmentPreviewUrl)
+  attachmentPreviewUrl = ""
+  attachmentPreview.source = ""
+  attachmentPreview.content = ""
+}
+
+async function previewAttachment(item: DefectAttachment) {
+  if (!defect.value) return
+  clearAttachmentPreview()
+  attachmentPreview.visible = true
+  attachmentPreview.loading = true
+  attachmentPreview.title = item.original_name
+  attachmentPreview.mimeType = item.mime_type
+  attachmentPreview.size = item.size
+  try {
+    const blob = await defectApi.attachmentBlob(defect.value.id, item.id)
+    if (isImageAttachment(item)) {
+      attachmentPreview.type = "image"
+      attachmentPreviewUrl = URL.createObjectURL(blob)
+      attachmentPreview.source = attachmentPreviewUrl
+    } else if (isTextAttachment(item)) {
+      attachmentPreview.type = "text"
+      const previewLimit = 2 * 1024 * 1024
+      attachmentPreview.content = await blob.slice(0, previewLimit).text()
+      if (blob.size > previewLimit) attachmentPreview.content += "\n\n……文件内容较大，仅预览前 2MB……"
+    } else if (attachmentExtension(item.original_name) === "pdf") {
+      attachmentPreview.type = "pdf"
+      attachmentPreviewUrl = URL.createObjectURL(blob)
+      attachmentPreview.source = attachmentPreviewUrl
+    } else {
+      attachmentPreview.type = "file"
+    }
+  } catch {
+    attachmentPreview.visible = false
+    ElMessage.error("附件内容加载失败")
+  } finally {
+    attachmentPreview.loading = false
+  }
+}
+
+onBeforeUnmount(clearAttachmentPreview)
+
 function customValueLabel(value: unknown, fieldType?: string) {
   if (fieldType === "user") {
     const account = props.meta?.accounts.find((item) => item.id === value)
@@ -156,23 +228,60 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
   <el-drawer
     :model-value="modelValue"
     size="min(880px, 96vw)"
+    :show-close="false"
     class="defect-detail-drawer"
     @close="emit('update:modelValue', false)"
   >
     <template #header>
-      <div v-if="defect" class="detail-heading">
+      <div class="detail-heading">
         <div class="detail-heading__main">
-          <div class="detail-heading__meta">
-            <span class="defect-no-badge">{{ defect.defect_no }}</span>
-            <span class="status-pill" :class="`is-${defectStatusMeta[defect.status].tone}`">
-              {{ defectStatusMeta[defect.status].label }}
-            </span>
-          </div>
-          <h2 class="defect-title">{{ defect.title }}</h2>
+          <template v-if="defect">
+            <div class="detail-heading__meta">
+              <span class="defect-no-badge">{{ defect.defect_no }}</span>
+              <span class="status-pill" :class="`is-${defectStatusMeta[defect.status].tone}`">
+                {{ defectStatusMeta[defect.status].label }}
+              </span>
+            </div>
+            <h2 class="defect-title">{{ defect.title }}</h2>
+          </template>
+          <template v-else>
+            <div class="detail-heading__meta">
+              <span class="defect-no-badge">DEFECT</span>
+            </div>
+            <h2 class="defect-title">缺陷详情</h2>
+          </template>
         </div>
         <div class="detail-heading__actions">
-          <el-button circle :icon="RefreshLeft" title="刷新" @click="emit('refresh')" />
-          <el-button v-if="canEdit" :icon="EditPen" @click="emit('edit')">编辑</el-button>
+          <button
+            type="button"
+            class="header-btn header-btn--refresh"
+            :class="{ 'is-loading': loading }"
+            title="刷新数据"
+            aria-label="刷新"
+            @click="emit('refresh')"
+          >
+            <el-icon><RefreshLeft /></el-icon>
+          </button>
+          <button
+            v-if="canEdit"
+            type="button"
+            class="header-btn header-btn--edit"
+            title="编辑缺陷"
+            aria-label="编辑"
+            @click="emit('edit')"
+          >
+            <el-icon><EditPen /></el-icon>
+            <span>编辑</span>
+          </button>
+          <button
+            type="button"
+            class="header-btn header-btn--close"
+            title="关闭 (Esc)"
+            aria-label="关闭"
+            @click="emit('update:modelValue', false)"
+          >
+            <el-icon><Close /></el-icon>
+          </button>
         </div>
       </div>
     </template>
@@ -293,9 +402,32 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
               <p>{{ defect.expected_result || "未填写" }}</p>
             </div>
           </div>
-          <div v-if="defect.description" class="text-block">
-            <span class="block-label">补充说明</span>
-            <p>{{ defect.description }}</p>
+          <div v-if="defect.description || detail?.attachments.length || canEdit" class="text-block supplement-detail-block">
+            <div class="supplement-detail-heading">
+              <span class="block-label">补充说明</span>
+              <el-upload v-if="canEdit" :show-file-list="false" :before-upload="interceptUpload" :disabled="acting" multiple>
+                <el-button size="small" :icon="Paperclip" plain :loading="acting">添加附件</el-button>
+              </el-upload>
+            </div>
+            <p v-if="defect.description">{{ defect.description }}</p>
+            <p v-else-if="!detail?.attachments.length" class="empty-text">暂无补充说明或附件</p>
+            <div v-if="detail?.attachments.length" class="attachment-list supplement-attachment-list">
+              <button
+                v-for="item in detail.attachments"
+                :key="item.id"
+                type="button"
+                class="attachment-card"
+                :class="{ 'is-image': isImageAttachment(item) }"
+                @click="previewAttachment(item)"
+              >
+                <img v-if="isImageAttachment(item)" :src="item.download_url" :alt="item.original_name" class="attachment-thumbnail" />
+                <span v-else class="attachment-icon"><el-icon><Document /></el-icon></span>
+                <div class="attachment-meta">
+                  <strong class="attachment-name" :title="item.original_name">{{ item.original_name }}</strong>
+                  <small class="attachment-sub">{{ formatSize(item.size) }} · {{ item.uploader_name }}</small>
+                </div>
+              </button>
+            </div>
           </div>
         </section>
 
@@ -326,29 +458,6 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
               <strong class="info-value">{{ customValueLabel(item.value, item.definition?.field_type) }}</strong>
             </div>
           </div>
-        </section>
-
-        <!-- 附件卡片 -->
-        <section class="detail-section">
-          <div class="section-heading">
-            <div class="section-title">
-              <span class="section-badge">附件</span>
-              <h3>附件文档</h3>
-            </div>
-            <span class="sub-hint">支持图片、视频、日志、JSON、ZIP 和 PDF，单个不超过 20MB</span>
-          </div>
-          <div v-if="detail?.attachments.length" class="attachment-list">
-            <a v-for="item in detail.attachments" :key="item.id" :href="item.download_url" class="attachment-card" target="_blank">
-              <span class="attachment-icon"><el-icon><Document /></el-icon></span>
-              <div class="attachment-meta">
-                <strong class="attachment-name" :title="item.original_name">{{ item.original_name }}</strong>
-                <small class="attachment-sub">{{ formatSize(item.size) }} · {{ item.uploader_name }}</small>
-              </div>
-            </a>
-          </div>
-          <el-upload v-if="canEdit" :show-file-list="false" :before-upload="interceptUpload" :disabled="acting">
-            <el-button :icon="Paperclip" plain :loading="acting">上传附件</el-button>
-          </el-upload>
         </section>
 
         <!-- 活动记录 / 评论 -->
@@ -406,17 +515,56 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
         <el-button type="primary" :icon="transition.action === 'reopen' ? RefreshLeft : CircleCheck" :loading="acting" :disabled="transition.action === 'resolve' && !transition.resolution || transition.action === 'reopen' && !transition.comment?.trim()" @click="submitTransition">确认操作</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="attachmentPreview.visible"
+      :title="attachmentPreview.title"
+      width="min(860px, 92vw)"
+      append-to-body
+      align-center
+      destroy-on-close
+      class="defect-detail-attachment-preview"
+      @closed="clearAttachmentPreview"
+    >
+      <div v-loading="attachmentPreview.loading" class="detail-attachment-preview-body">
+        <img v-if="attachmentPreview.type === 'image' && attachmentPreview.source" :src="attachmentPreview.source" :alt="attachmentPreview.title" class="detail-attachment-preview-image" />
+        <pre v-else-if="attachmentPreview.type === 'text'" class="detail-attachment-preview-text">{{ attachmentPreview.content }}</pre>
+        <iframe v-else-if="attachmentPreview.type === 'pdf' && attachmentPreview.source" :src="attachmentPreview.source" class="detail-attachment-preview-pdf" title="PDF 附件预览" />
+        <div v-else-if="!attachmentPreview.loading" class="detail-attachment-preview-file">
+          <span><el-icon><Document /></el-icon></span>
+          <strong>{{ attachmentPreview.title }}</strong>
+          <p>{{ attachmentPreview.mimeType || '未知文件类型' }} · {{ formatSize(attachmentPreview.size) }}</p>
+          <small>该文件类型暂不支持直接展开内容，可在附件地址中下载查看。</small>
+        </div>
+      </div>
+    </el-dialog>
   </el-drawer>
 </template>
 
 <style scoped>
+/* 抽屉基底与头部规范 */
+.defect-detail-drawer :deep(.el-drawer__header) {
+  margin-bottom: 0;
+  padding: 16px 20px 16px 24px;
+  border-bottom: 1px solid #edf2f7;
+  background: #ffffff;
+}
+
+.defect-detail-drawer :deep(.el-drawer__body) {
+  padding: 20px 24px;
+  background: #f8fafc;
+}
+
+.defect-detail-drawer :deep(.el-drawer__close-btn) {
+  display: none !important;
+}
+
 .detail-heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
   width: 100%;
-  padding-right: 12px;
 }
 
 .detail-heading__main {
@@ -457,6 +605,90 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.header-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #475569;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.header-btn:active {
+  transform: scale(0.95);
+}
+
+.header-btn--refresh {
+  width: 32px;
+  padding: 0;
+  font-size: 15px;
+}
+
+.header-btn--refresh .el-icon {
+  display: inline-flex;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.header-btn--refresh:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #2563eb;
+}
+
+.header-btn--refresh:hover .el-icon {
+  transform: rotate(-60deg);
+}
+
+.header-btn--refresh.is-loading .el-icon {
+  animation: refresh-spin 0.8s linear infinite;
+}
+
+@keyframes refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+.header-btn--edit {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.header-btn--edit:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.header-btn--close {
+  width: 32px;
+  padding: 0;
+  font-size: 15px;
+  color: #64748b;
+}
+
+.header-btn--close:hover {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #ef4444;
+  transform: scale(1.05);
 }
 
 .status-pill {
@@ -704,6 +936,28 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
   font-size: 13px;
 }
 
+.supplement-detail-block {
+  border-color: #dbeafe;
+  background: linear-gradient(135deg, #f8fafc 0%, #f5f9ff 100%);
+}
+
+.supplement-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.supplement-detail-heading .block-label { margin-bottom: 0; }
+
+.supplement-detail-heading .el-button {
+  border-color: #bfdbfe;
+  border-radius: 8px;
+  color: #2563eb;
+  background: #ffffff;
+}
+
 .step-ol {
   margin: 0;
   padding: 0;
@@ -836,17 +1090,36 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
   margin-bottom: 14px;
 }
 
+.supplement-attachment-list {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
 .attachment-card {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 12px;
+  width: 100%;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   color: inherit;
   text-decoration: none;
   background: #ffffff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   transition: all 0.2s ease;
+}
+
+.attachment-thumbnail {
+  display: block;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  border-radius: 9px;
+  object-fit: cover;
+  background: #e2e8f0;
 }
 
 .attachment-card:hover {
@@ -879,6 +1152,87 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+:global(.defect-detail-attachment-preview) {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+}
+
+:global(.defect-detail-attachment-preview .el-dialog__header) {
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+:global(.defect-detail-attachment-preview .el-dialog__body) { padding: 0; }
+
+.detail-attachment-preview-body {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  max-height: 76vh;
+  overflow: auto;
+  background: #f8fafc;
+}
+
+.detail-attachment-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 74vh;
+  margin: auto;
+  object-fit: contain;
+}
+
+.detail-attachment-preview-text {
+  align-self: stretch;
+  justify-self: stretch;
+  min-height: 300px;
+  margin: 0;
+  padding: 22px 24px;
+  overflow: auto;
+  color: #1e293b;
+  background: #f8fafc;
+  font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detail-attachment-preview-pdf {
+  width: 100%;
+  height: 72vh;
+  border: 0;
+  background: #ffffff;
+}
+
+.detail-attachment-preview-file {
+  display: grid;
+  justify-items: center;
+  max-width: 480px;
+  padding: 38px;
+  text-align: center;
+}
+
+.detail-attachment-preview-file > span {
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  margin-bottom: 14px;
+  border-radius: 18px;
+  color: #2563eb;
+  background: #dbeafe;
+  font-size: 30px;
+}
+
+.detail-attachment-preview-file strong { color: #0f172a; font-size: 15px; }
+
+.detail-attachment-preview-file p,
+.detail-attachment-preview-file small {
+  margin: 7px 0 0;
+  color: #64748b;
+  font-size: 12px;
 }
 
 .attachment-name {

@@ -120,6 +120,7 @@ func main() {
 			defects.PUT("/member-default-roles", services.RequireDefectPermission("defects.manage"), services.SaveDefectMemberDefaultRolesHandler)
 			defects.GET("", services.ListDefectsHandler)
 			defects.POST("", services.RequireDefectPermission("defects.create"), services.CreateDefectHandler)
+			defects.POST("/batch-create", services.RequireDefectPermission("defects.create"), services.BatchCreateDefectsHandler)
 			defects.GET("/:id", services.GetDefectHandler)
 			defects.PUT("/:id", services.RequireDefectPermission("defects.edit"), services.UpdateDefectHandler)
 			defects.PUT("/:id/status", services.SetDefectStatusHandler)
@@ -127,6 +128,7 @@ func main() {
 			defects.POST("/:id/comments", services.AddDefectCommentHandler)
 			defects.POST("/:id/attachments", services.RequireDefectPermission("defects.edit"), services.UploadDefectAttachmentHandler)
 			defects.GET("/:id/attachments/:attachment_id", services.DownloadDefectAttachmentHandler)
+			defects.DELETE("/:id/attachments/:attachment_id", services.RequireDefectPermission("defects.edit"), services.DeleteDefectAttachmentHandler)
 		}
 
 		// Database Infrastructure

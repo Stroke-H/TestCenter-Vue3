@@ -68,6 +68,7 @@ export const defectApi = {
   list: (params: DefectListParams) => request.get('/defects', { params }) as Promise<DefectListResult>,
   detail: (id: string) => request.get(`/defects/${id}`) as Promise<DefectDetail>,
   create: (payload: DefectFormValue) => request.post('/defects', payload) as Promise<Defect>,
+  batchCreate: (items: DefectFormValue[]) => request.post('/defects/batch-create', { items }) as Promise<{ items: Defect[] }>,
   update: (id: string, payload: DefectFormValue) => request.put(`/defects/${id}`, payload) as Promise<Defect>,
   setStatus: (id: string, payload: { status: DefectStatus; row_version: number }) => request.put(`/defects/${id}/status`, payload) as Promise<Defect>,
   transition: (id: string, payload: DefectTransitionPayload) => request.post(`/defects/${id}/transition`, payload) as Promise<Defect>,
@@ -88,5 +89,10 @@ export const defectApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 30000
     })
-  }
+  },
+  deleteAttachment: (id: string, attachmentId: string) => request.delete(`/defects/${id}/attachments/${attachmentId}`),
+  attachmentBlob: (id: string, attachmentId: string) => request.get(`/defects/${id}/attachments/${attachmentId}`, {
+    responseType: 'blob',
+    timeout: 30000
+  }) as Promise<Blob>
 }

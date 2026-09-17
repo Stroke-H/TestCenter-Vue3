@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import DefectVersionSelect from "./DefectVersionSelect.vue"
-import { computed, nextTick, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from "element-plus"
 import {
   CirclePlus,
+  Close,
   Delete,
+  Document,
   DocumentChecked,
+  Paperclip,
+  Plus,
   WarningFilled,
   CircleCheckFilled
 } from "@element-plus/icons-vue"
 import { v4 as uuidv4 } from "uuid"
 import { useAuthStore } from "@/stores/auth"
+import { defectApi } from "../api"
 import {
   defectToForm,
   defectStatusMeta,
@@ -19,6 +24,7 @@ import {
   priorityLabels,
   severityLabels,
   type Defect,
+  type DefectAttachment,
   type DefectFormValue,
   type DefectMeta,
   type DefectStatus
@@ -27,6 +33,7 @@ import {
 const props = defineProps<{
   modelValue: boolean
   defect: Defect | null
+  attachments?: DefectAttachment[]
   meta: DefectMeta | null
   saving: boolean
   statusChanging?: boolean
@@ -35,13 +42,33 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:modelValue": [value: boolean]
-  save: [value: DefectFormValue]
+  save: [value: DefectFormValue, titles: string[], files: File[], removedAttachmentIds: string[]]
   "status-change": [status: DefectStatus]
 }>()
 
 const authStore = useAuthStore()
 const formRef = ref<FormInstance>()
 const form = ref<DefectFormValue>(emptyDefectForm())
+const additionalTitles = ref<string[]>([])
+interface PendingAttachment {
+  id: string
+  file: File
+  objectUrl: string
+}
+const pendingAttachments = ref<PendingAttachment[]>([])
+const removedAttachmentIds = ref<string[]>([])
+const fileInputRef = ref<HTMLInputElement>()
+const preview = reactive({
+  visible: false,
+  loading: false,
+  title: "",
+  type: "file" as "image" | "text" | "pdf" | "file",
+  source: "",
+  content: "",
+  mimeType: "",
+  size: 0
+})
+let ownedPreviewUrl = ""
 const isEdit = computed(() => Boolean(props.defect))
 const statusOptions: DefectStatus[] = ["new", "active", "resolved", "closed"]
 const allowedProject = (code: string) => props.defect?.project_code === code
@@ -51,6 +78,52 @@ const canSave = computed(() => (!props.defect || props.defect.allowed_actions?.e
 const applicableFields = computed(() => (props.meta?.fields || []).filter((field) => (
   field.enabled && (!field.project_code || field.project_code === form.value.project_code)
 )).sort((a, b) => a.sort_order - b.sort_order))
+const numberedTitlePrefix = /^\s*\d+\s*[.．、)）]\s*/
+
+function parseTitleBlock(value: string) {
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  if (lines.length <= 1) return lines
+  return lines.map((line) => line.replace(numberedTitlePrefix, "").trim()).filter(Boolean)
+}
+
+const parsedTitles = computed(() => [form.value.title, ...additionalTitles.value]
+  .flatMap(parseTitleBlock)
+  .filter(Boolean))
+const batchTitleCount = computed(() => parsedTitles.value.length)
+const visibleAttachments = computed(() => (props.attachments || []).filter((item) => !removedAttachmentIds.value.includes(item.id)))
+const imageExtensions = new Set(["png", "jpg", "jpeg", "gif", "webp"])
+const textExtensions = new Set(["txt", "log", "json", "md", "csv", "xml", "yaml", "yml"])
+const allowedAttachmentExtensions = new Set([...imageExtensions, ...textExtensions, "zip", "pdf", "mp4", "mov"])
+
+function attachmentExtension(name: string) {
+  return name.split(".").pop()?.toLowerCase() || ""
+}
+
+function isImageAttachment(name: string, mimeType = "") {
+  return mimeType.startsWith("image/") || imageExtensions.has(attachmentExtension(name))
+}
+
+function isTextAttachment(name: string, mimeType = "") {
+  return mimeType.startsWith("text/") || textExtensions.has(attachmentExtension(name))
+}
+
+function formatAttachmentSize(size: number) {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function revokePendingAttachments() {
+  pendingAttachments.value.forEach((item) => URL.revokeObjectURL(item.objectUrl))
+  pendingAttachments.value = []
+}
+
+function closeAttachmentPreview() {
+  if (ownedPreviewUrl) URL.revokeObjectURL(ownedPreviewUrl)
+  ownedPreviewUrl = ""
+  preview.source = ""
+  preview.content = ""
+}
 
 function localToday() {
   const now = new Date()
@@ -115,8 +188,7 @@ function applyNewDefectDefaults() {
 
 const rules: FormRules<DefectFormValue> = {
   title: [
-    { required: true, message: "请输入缺陷标题", trigger: "blur" },
-    { max: 255, message: "标题不能超过 255 个字符", trigger: "blur" }
+    { required: true, message: "请输入缺陷标题", trigger: "blur" }
   ],
   project_code: [{ required: true, message: "请选择所属项目", trigger: "change" }],
   defect_type: [{ required: true, message: "请选择缺陷类型", trigger: "change" }]
@@ -125,8 +197,15 @@ const rules: FormRules<DefectFormValue> = {
 watch(
   () => props.modelValue,
   async (visible) => {
-    if (!visible) return
+    if (!visible) {
+      revokePendingAttachments()
+      closeAttachmentPreview()
+      return
+    }
+    revokePendingAttachments()
     form.value = props.defect ? defectToForm(props.defect) : emptyDefectForm()
+    additionalTitles.value = []
+    removedAttachmentIds.value = []
     if (!props.defect) {
       applyNewDefectDefaults()
       if (props.defaultProjectCode) {
@@ -149,6 +228,8 @@ watch(
 )
 
 function close() {
+  revokePendingAttachments()
+  closeAttachmentPreview()
   emit("update:modelValue", false)
 }
 
@@ -188,6 +269,126 @@ function addStep() {
   form.value.steps.push({ id: uuidv4(), content: "" })
 }
 
+function addTitleInput() {
+  if (batchTitleCount.value >= 50 || additionalTitles.value.length >= 49) {
+    ElMessage.warning("单次最多批量提交 50 个缺陷")
+    return
+  }
+  additionalTitles.value.push("")
+}
+
+function removeTitleInput(index: number) {
+  additionalTitles.value.splice(index, 1)
+}
+
+function normalizeClipboardFile(file: File, index: number) {
+  if (attachmentExtension(file.name)) return file
+  const extension = file.type.startsWith("image/") ? (file.type.split("/")[1] || "png") : "txt"
+  return new File([file], `clipboard-${Date.now()}-${index + 1}.${extension}`, { type: file.type })
+}
+
+function addAttachmentFiles(files: File[]) {
+  files.forEach((original, index) => {
+    const file = normalizeClipboardFile(original, index)
+    if (!allowedAttachmentExtensions.has(attachmentExtension(file.name))) {
+      ElMessage.warning(`不支持附件“${file.name}”的文件类型`)
+      return
+    }
+    if (file.size <= 0 || file.size > 20 * 1024 * 1024) {
+      ElMessage.warning(`附件“${file.name}”必须小于 20MB`)
+      return
+    }
+    pendingAttachments.value.push({ id: uuidv4(), file, objectUrl: URL.createObjectURL(file) })
+  })
+}
+
+function handleAttachmentPaste(event: ClipboardEvent) {
+  const files = Array.from(event.clipboardData?.files || [])
+  if (!files.length) return
+  event.preventDefault()
+  addAttachmentFiles(files)
+}
+
+function chooseAttachmentFiles() {
+  fileInputRef.value?.click()
+}
+
+function handleAttachmentSelection(event: Event) {
+  const input = event.target as HTMLInputElement
+  addAttachmentFiles(Array.from(input.files || []))
+  input.value = ""
+}
+
+function removePendingAttachment(id: string) {
+  const index = pendingAttachments.value.findIndex((item) => item.id === id)
+  if (index < 0) return
+  URL.revokeObjectURL(pendingAttachments.value[index]!.objectUrl)
+  pendingAttachments.value.splice(index, 1)
+}
+
+function removeExistingAttachment(id: string) {
+  if (!removedAttachmentIds.value.includes(id)) removedAttachmentIds.value.push(id)
+  ElMessage.info("附件将在保存修改后删除")
+}
+
+async function showAttachmentPreview(options: { name: string; mimeType: string; size: number; blob: Blob; source?: string }) {
+  closeAttachmentPreview()
+  preview.visible = true
+  preview.loading = true
+  preview.title = options.name
+  preview.mimeType = options.mimeType
+  preview.size = options.size
+  try {
+    if (isImageAttachment(options.name, options.mimeType)) {
+      preview.type = "image"
+      preview.source = options.source || URL.createObjectURL(options.blob)
+      if (!options.source) ownedPreviewUrl = preview.source
+    } else if (isTextAttachment(options.name, options.mimeType)) {
+      preview.type = "text"
+      const previewLimit = 2 * 1024 * 1024
+      preview.content = await options.blob.slice(0, previewLimit).text()
+      if (options.blob.size > previewLimit) preview.content += "\n\n……文件内容较大，仅预览前 2MB……"
+    } else if (attachmentExtension(options.name) === "pdf") {
+      preview.type = "pdf"
+      preview.source = URL.createObjectURL(options.blob)
+      ownedPreviewUrl = preview.source
+    } else {
+      preview.type = "file"
+    }
+  } finally {
+    preview.loading = false
+  }
+}
+
+async function previewPendingAttachment(item: PendingAttachment) {
+  await showAttachmentPreview({
+    name: item.file.name,
+    mimeType: item.file.type,
+    size: item.file.size,
+    blob: item.file,
+    source: isImageAttachment(item.file.name, item.file.type) ? item.objectUrl : undefined
+  })
+}
+
+async function previewExistingAttachment(item: DefectAttachment) {
+  if (!props.defect) return
+  preview.visible = true
+  preview.loading = true
+  preview.title = item.original_name
+  try {
+    const blob = await defectApi.attachmentBlob(props.defect.id, item.id)
+    await showAttachmentPreview({ name: item.original_name, mimeType: item.mime_type, size: item.size, blob })
+  } catch {
+    preview.visible = false
+    ElMessage.error("附件内容加载失败")
+  }
+}
+
+onBeforeUnmount(() => {
+  revokePendingAttachments()
+  closeAttachmentPreview()
+})
+
 function removeStep(index: number) {
   if (form.value.steps.length === 1) {
     const firstStep = form.value.steps[0]
@@ -199,6 +400,20 @@ function removeStep(index: number) {
 
 async function submit() {
   if (!canSave.value) return
+  const titles = isEdit.value ? [form.value.title.trim()] : parsedTitles.value
+  if (!titles.length) {
+    ElMessage.warning("请至少填写一个缺陷标题")
+    return
+  }
+  if (titles.length > 50) {
+    ElMessage.warning("单次最多批量提交 50 个缺陷")
+    return
+  }
+  const oversizedIndex = titles.findIndex((title) => title.length > 255)
+  if (oversizedIndex >= 0) {
+    ElMessage.warning(`第 ${oversizedIndex + 1} 个缺陷标题超过 255 个字符`)
+    return
+  }
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
   const missingField = applicableFields.value.find((field) => {
@@ -215,11 +430,12 @@ async function submit() {
     .map((field) => [field.field_key, form.value.custom_fields[field.field_key]]))
   emit("save", {
     ...form.value,
+    title: titles[0] || "",
     steps: form.value.steps.map((item) => ({ ...item })),
     environment: { ...form.value.environment },
     tags: [...form.value.tags],
     custom_fields: customFields
-  })
+  }, titles, pendingAttachments.value.map((item) => item.file), [...removedAttachmentIds.value])
 }
 </script>
 
@@ -228,6 +444,7 @@ async function submit() {
     :model-value="modelValue"
     size="min(880px, 96vw)"
     :close-on-click-modal="false"
+    :show-close="false"
     class="defect-form-drawer"
     @close="close"
   >
@@ -243,6 +460,15 @@ async function submit() {
           </div>
           <p>{{ isEdit ? "修改缺陷的关键属性、重现现场或责任指派" : "完整详细地记录问题现场，便于测试与开发快速定位并验证" }}</p>
         </div>
+        <button
+          type="button"
+          class="drawer-close-btn"
+          title="关闭 (Esc)"
+          aria-label="关闭"
+          @click="close"
+        >
+          <el-icon><Close /></el-icon>
+        </button>
       </div>
     </template>
 
@@ -288,14 +514,62 @@ async function submit() {
         </div>
 
         <el-form-item label="缺陷标题" prop="title" class="title-item">
-          <el-input
-            v-model="form.title"
-            maxlength="255"
-            show-word-limit
-            size="large"
-            placeholder="用一句话清晰概述缺陷现象（如：结算页点击支付按钮无响应）"
-            class="title-input"
-          />
+          <div class="title-editor">
+            <div class="title-list">
+              <div class="title-row" :class="{ 'has-index': !isEdit && additionalTitles.length > 0 }">
+                <span v-if="!isEdit && additionalTitles.length > 0" class="title-row__badge">1</span>
+                <el-input
+                  v-model="form.title"
+                  :type="isEdit ? 'text' : 'textarea'"
+                  :autosize="isEdit ? undefined : { minRows: 1, maxRows: 6 }"
+                  :maxlength="isEdit ? 255 : 13000"
+                  :resize="isEdit ? undefined : 'none'"
+                  size="large"
+                  :placeholder="!isEdit && additionalTitles.length > 0 ? '用一句话清晰概述缺陷现象 1（也可粘贴多行编号列表）' : '用一句话清晰概述缺陷现象（也可以粘贴多行编号列表）'"
+                  class="title-input"
+                />
+                <button
+                  v-if="!isEdit"
+                  type="button"
+                  class="title-action-btn title-action-btn--add"
+                  title="添加一个缺陷标题"
+                  aria-label="添加一个缺陷标题"
+                  @click="addTitleInput"
+                >
+                  <el-icon><Plus /></el-icon>
+                </button>
+              </div>
+
+              <div
+                v-for="(_, index) in additionalTitles"
+                :key="index"
+                class="title-row has-index"
+              >
+                <span class="title-row__badge">{{ index + 2 }}</span>
+                <el-input
+                  v-model="additionalTitles[index]"
+                  size="large"
+                  maxlength="255"
+                  :placeholder="`用一句话清晰概述缺陷现象 ${index + 2}`"
+                  class="title-input"
+                />
+                <button
+                  type="button"
+                  class="title-action-btn title-action-btn--delete"
+                  title="删除此缺陷标题"
+                  aria-label="删除此缺陷标题"
+                  @click="removeTitleInput(index)"
+                >
+                  <el-icon><Delete /></el-icon>
+                </button>
+              </div>
+            </div>
+
+            <div v-if="!isEdit" class="title-editor__hint">
+              <span>支持逐条添加，也可粘贴按行编号的标题列表</span>
+              <strong v-if="batchTitleCount > 1">已识别 {{ batchTitleCount }} 个缺陷</strong>
+            </div>
+          </div>
         </el-form-item>
 
         <div class="form-grid form-grid--three">
@@ -501,13 +775,81 @@ async function submit() {
         </div>
 
         <el-form-item label="补充说明" class="desc-item">
-          <el-input
-            v-model="form.description"
-            type="textarea"
-            :rows="3"
-            placeholder="发生频率（必现 / 偶现）、受影响的用户范围或技术日志补充..."
-            class="soft-textarea"
-          />
+          <div class="supplement-editor" @paste="handleAttachmentPaste">
+            <el-input
+              v-model="form.description"
+              type="textarea"
+              :rows="3"
+              placeholder="发生频率、影响范围或日志补充；可直接按 Command/Ctrl + V 粘贴图片或文件..."
+              class="soft-textarea"
+            />
+            <div class="supplement-toolbar">
+              <span><el-icon><Paperclip /></el-icon> 支持粘贴图片、TXT、日志、JSON、PDF 等文件，单个不超过 20MB</span>
+              <el-button plain :icon="Paperclip" @click="chooseAttachmentFiles">选择文件</el-button>
+              <input
+                ref="fileInputRef"
+                class="attachment-file-input"
+                type="file"
+                multiple
+                accept=".png,.jpg,.jpeg,.gif,.webp,.txt,.log,.json,.md,.csv,.xml,.yaml,.yml,.pdf,.zip,.mp4,.mov"
+                @change="handleAttachmentSelection"
+              />
+            </div>
+
+            <div v-if="visibleAttachments.length || pendingAttachments.length" class="supplement-attachments">
+              <article
+                v-for="item in visibleAttachments"
+                :key="item.id"
+                class="supplement-attachment"
+                :class="{ 'is-image': isImageAttachment(item.original_name, item.mime_type) }"
+                @click="previewExistingAttachment(item)"
+              >
+                <img
+                  v-if="isImageAttachment(item.original_name, item.mime_type)"
+                  :src="item.download_url"
+                  :alt="item.original_name"
+                />
+                <span v-else class="supplement-attachment__icon"><el-icon><Document /></el-icon></span>
+                <div class="supplement-attachment__meta">
+                  <strong :title="item.original_name">{{ item.original_name }}</strong>
+                  <small>{{ formatAttachmentSize(item.size) }} · 已上传</small>
+                </div>
+                <el-button
+                  text
+                  :icon="Delete"
+                  class="supplement-attachment__delete"
+                  title="删除附件"
+                  @click.stop="removeExistingAttachment(item.id)"
+                />
+              </article>
+
+              <article
+                v-for="item in pendingAttachments"
+                :key="item.id"
+                class="supplement-attachment is-pending"
+                :class="{ 'is-image': isImageAttachment(item.file.name, item.file.type) }"
+                @click="previewPendingAttachment(item)"
+              >
+                <img
+                  v-if="isImageAttachment(item.file.name, item.file.type)"
+                  :src="item.objectUrl"
+                  :alt="item.file.name"
+                />
+                <span v-else class="supplement-attachment__icon"><el-icon><Document /></el-icon></span>
+                <div class="supplement-attachment__meta">
+                  <strong :title="item.file.name">{{ item.file.name }}</strong>
+                  <small>{{ formatAttachmentSize(item.file.size) }} · 待上传</small>
+                </div>
+                <el-button
+                  text
+                  :icon="Delete"
+                  class="supplement-attachment__delete"
+                  title="移除附件"
+                  @click.stop="removePendingAttachment(item.id)"
+                />
+              </article>
+            </div>
+          </div>
         </el-form-item>
       </section>
 
@@ -638,7 +980,7 @@ async function submit() {
       <div class="drawer-footer">
         <div class="drawer-footer__hint">
           <span class="hint-dot" />
-          <span>保存后可在详情页直接上传附件或指派协同人员</span>
+          <span>粘贴或选择的附件将随缺陷内容一并保存</span>
         </div>
         <div class="drawer-footer__actions">
           <el-button class="cancel-btn" @click="close">取消</el-button>
@@ -649,12 +991,35 @@ async function submit() {
             :loading="saving"
             @click="submit"
           >
-            {{ isEdit ? "保存修改" : "提交缺陷" }}
+            {{ isEdit ? "保存修改" : (batchTitleCount > 1 ? `批量提交 ${batchTitleCount} 个缺陷` : "提交缺陷") }}
           </el-button>
         </div>
       </div>
     </template>
   </el-drawer>
+
+  <el-dialog
+    v-model="preview.visible"
+    :title="preview.title"
+    width="min(860px, 92vw)"
+    append-to-body
+    align-center
+    destroy-on-close
+    class="defect-attachment-preview"
+    @closed="closeAttachmentPreview"
+  >
+    <div v-loading="preview.loading" class="attachment-preview-body">
+      <img v-if="preview.type === 'image' && preview.source" :src="preview.source" :alt="preview.title" class="attachment-preview-image" />
+      <pre v-else-if="preview.type === 'text'" class="attachment-preview-text">{{ preview.content }}</pre>
+      <iframe v-else-if="preview.type === 'pdf' && preview.source" :src="preview.source" class="attachment-preview-pdf" title="PDF 附件预览" />
+      <div v-else-if="!preview.loading" class="attachment-preview-file">
+        <span><el-icon><Document /></el-icon></span>
+        <strong>{{ preview.title }}</strong>
+        <p>{{ preview.mimeType || '未知文件类型' }} · {{ formatAttachmentSize(preview.size) }}</p>
+        <small>该文件类型暂不支持直接展开内容，可保存缺陷后在详情页下载查看。</small>
+      </div>
+    </div>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -682,6 +1047,7 @@ async function submit() {
   display: flex;
   align-items: center;
   gap: 16px;
+  width: 100%;
 }
 
 .drawer-heading__icon {
@@ -732,6 +1098,38 @@ async function submit() {
   color: #64748b;
   font-size: 13px;
   line-height: 1.4;
+}
+
+.drawer-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 16px;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.drawer-close-btn:hover {
+  background: #fee2e2;
+  border-color: #fecaca;
+  color: #ef4444;
+  transform: scale(1.05);
+}
+
+.drawer-close-btn:active {
+  transform: scale(0.95);
+}
+
+.defect-form-drawer :deep(.el-drawer__close-btn) {
+  display: none !important;
 }
 
 /* 表单主体与分段卡片 */
@@ -942,17 +1340,156 @@ async function submit() {
   margin-bottom: 18px;
 }
 
+.title-editor {
+  width: 100%;
+}
+
+.title-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.title-row__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.title-row .title-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.title-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
+  font-size: 16px;
+  cursor: pointer;
+  outline: none;
+  border: 1px solid transparent;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.title-action-btn:active {
+  transform: scale(0.95);
+}
+
+.title-action-btn--add {
+  border-color: #bfdbfe;
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.title-action-btn--add:hover {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  background: #dbeafe;
+  transform: scale(1.04);
+}
+
+.title-action-btn--delete {
+  border-color: #e2e8f0;
+  color: #94a3b8;
+  background: #ffffff;
+}
+
+.title-action-btn--delete:hover {
+  border-color: #fecaca;
+  color: #ef4444;
+  background: #fee2e2;
+  transform: scale(1.04);
+}
+
+.title-editor__hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 0 2px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.title-editor__hint strong {
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #1d4ed8;
+  background: #dbeafe;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* 统一输入框与文本域尺寸、圆角与聚焦效果，保证主/次标题 100% 视觉一致 */
 .title-input :deep(.el-input__wrapper) {
+  height: 40px;
+  line-height: 40px;
+  padding: 0 14px;
   border-radius: 10px;
   box-shadow: 0 0 0 1px #cbd5e1 inset;
-  background-color: #f8fafc;
+  background-color: #ffffff;
+  font-size: 14px;
   font-weight: 500;
+  color: #0f172a;
   transition: all 0.2s ease;
+}
+
+.title-input :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 0 0 1px #94a3b8 inset;
 }
 
 .title-input :deep(.el-input__wrapper.is-focus) {
   background-color: #ffffff;
   box-shadow: 0 0 0 1px #3b82f6 inset, 0 0 0 3px rgba(59, 130, 246, 0.12) !important;
+}
+
+.title-input :deep(.el-textarea__inner) {
+  min-height: 40px !important;
+  height: 40px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px #cbd5e1 inset;
+  background-color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  padding: 8px 14px;
+  color: #0f172a;
+  resize: none;
+  transition: all 0.2s ease;
+}
+
+.title-input :deep(.el-textarea__inner:hover) {
+  box-shadow: 0 0 0 1px #94a3b8 inset;
+}
+
+.title-input :deep(.el-textarea__inner:focus) {
+  background-color: #ffffff;
+  box-shadow: 0 0 0 1px #3b82f6 inset, 0 0 0 3px rgba(59, 130, 246, 0.12) !important;
+  outline: none;
 }
 
 /* 统一输入框与文本域圆润视觉 */
@@ -1025,6 +1562,197 @@ async function submit() {
 
 .soft-textarea :deep(.el-textarea__inner:focus) {
   background-color: #ffffff;
+}
+
+.supplement-editor { width: 100%; }
+
+.supplement-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.supplement-toolbar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.supplement-toolbar .el-button {
+  border-color: #dbeafe;
+  border-radius: 9px;
+  color: #2563eb;
+  background: #f8fbff;
+}
+
+.attachment-file-input { display: none; }
+
+.supplement-attachments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.supplement-attachment {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 8px 8px 8px 10px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.supplement-attachment:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 7px 18px rgba(37, 99, 235, 0.1);
+  transform: translateY(-1px);
+}
+
+.supplement-attachment.is-pending {
+  border-style: dashed;
+  background: #f0f7ff;
+}
+
+.supplement-attachment img,
+.supplement-attachment__icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 9px;
+}
+
+.supplement-attachment img {
+  display: block;
+  object-fit: cover;
+  background: #e2e8f0;
+}
+
+.supplement-attachment__icon {
+  display: grid;
+  place-items: center;
+  color: #2563eb;
+  background: #dbeafe;
+  font-size: 22px;
+}
+
+.supplement-attachment__meta { min-width: 0; }
+
+.supplement-attachment__meta strong,
+.supplement-attachment__meta small { display: block; }
+
+.supplement-attachment__meta strong {
+  overflow: hidden;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supplement-attachment__meta small {
+  margin-top: 4px;
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.supplement-attachment__delete { color: #94a3b8; }
+
+.supplement-attachment__delete:hover {
+  color: #dc2626;
+  background: #fee2e2;
+}
+
+:global(.defect-attachment-preview) {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+}
+
+:global(.defect-attachment-preview .el-dialog__header) {
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+:global(.defect-attachment-preview .el-dialog__body) { padding: 0; }
+
+.attachment-preview-body {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  max-height: 76vh;
+  overflow: auto;
+  background: #f8fafc;
+}
+
+.attachment-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 74vh;
+  margin: auto;
+  object-fit: contain;
+}
+
+.attachment-preview-text {
+  align-self: stretch;
+  justify-self: stretch;
+  min-height: 300px;
+  margin: 0;
+  padding: 22px 24px;
+  overflow: auto;
+  color: #1e293b;
+  background: #f8fafc;
+  font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.attachment-preview-pdf {
+  width: 100%;
+  height: 72vh;
+  border: 0;
+  background: #ffffff;
+}
+
+.attachment-preview-file {
+  display: grid;
+  justify-items: center;
+  max-width: 480px;
+  padding: 38px;
+  text-align: center;
+}
+
+.attachment-preview-file > span {
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  margin-bottom: 14px;
+  border-radius: 18px;
+  color: #2563eb;
+  background: #dbeafe;
+  font-size: 30px;
+}
+
+.attachment-preview-file strong { color: #0f172a; font-size: 15px; }
+
+.attachment-preview-file p,
+.attachment-preview-file small {
+  margin: 7px 0 0;
+  color: #64748b;
+  font-size: 12px;
 }
 
 /* 重现步骤卡片列表 */
@@ -1266,6 +1994,11 @@ async function submit() {
   .status-direct-node {
     min-width: 58px;
   }
+  .title-row {
+    align-items: flex-start;
+  }
+  .supplement-attachments { grid-template-columns: 1fr; }
+  .supplement-toolbar > span { display: none; }
   .form-grid--three,
   .form-grid--two,
   .result-split-grid {

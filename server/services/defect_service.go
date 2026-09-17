@@ -170,6 +170,10 @@ type DefectDirectStatusRequest struct {
 	RowVersion int    `json:"row_version"`
 }
 
+type DefectBatchCreateRequest struct {
+	Items []DefectSaveRequest `json:"items"`
+}
+
 type DefectCommentRequest struct {
 	Content string `json:"content"`
 }
@@ -543,44 +547,45 @@ func insertDefectHistory(ctx context.Context, tx *sql.Tx, defectID, action strin
 	return err
 }
 
-func createDefect(ctx context.Context, user *User, req DefectSaveRequest) (*Defect, error) {
+type preparedDefectCreate struct {
+	request      DefectSaveRequest
+	projectName  string
+	assigneeName string
+	verifierName string
+}
+
+func prepareDefectCreate(ctx context.Context, user *User, req DefectSaveRequest) (preparedDefectCreate, error) {
 	if err := normalizeDefectSaveRequest(&req); err != nil {
-		return nil, err
+		return preparedDefectCreate{}, err
 	}
 	projectName, err := defectProject(req.ProjectCode)
 	if err != nil {
-		return nil, err
-	}
-	if err := ensureDefectSchema(ctx); err != nil {
-		return nil, err
+		return preparedDefectCreate{}, err
 	}
 	if !defectProjectAllows(ctx, user, req.ProjectCode, "create") {
-		return nil, errors.New("没有在该项目提交缺陷的权限")
+		return preparedDefectCreate{}, errors.New("没有在该项目提交缺陷的权限")
 	}
 	if err := validateDefectVersion(ctx, req.ProjectCode, req.FoundVersion, ""); err != nil {
-		return nil, err
+		return preparedDefectCreate{}, err
 	}
 	assigneeName, err := defectAccount(req.AssigneeID)
 	if err != nil {
-		return nil, err
+		return preparedDefectCreate{}, err
 	}
 	verifierName, err := defectAccount(req.VerifierID)
 	if err != nil {
-		return nil, err
+		return preparedDefectCreate{}, err
 	}
 	if err := validateDefectCustomFields(ctx, req.ProjectCode, req.CustomFields); err != nil {
-		return nil, err
+		return preparedDefectCreate{}, err
 	}
-	db, _, err := DatabaseManager.DB(ctx)
-	if err != nil {
-		return nil, err
-	}
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
+	return preparedDefectCreate{
+		request: req, projectName: projectName, assigneeName: assigneeName, verifierName: verifierName,
+	}, nil
+}
 
+func insertPreparedDefect(ctx context.Context, tx *sql.Tx, user *User, prepared preparedDefectCreate) (*Defect, error) {
+	req := prepared.request
 	defectNo, err := nextDefectNo(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -591,13 +596,15 @@ func createDefect(ctx context.Context, user *User, req DefectSaveRequest) (*Defe
 	tagsJSON, _ := json.Marshal(req.Tags)
 	defect := Defect{
 		ID: uuid.NewString(), DefectNo: defectNo, Title: req.Title,
-		ProjectCode: req.ProjectCode, ProjectName: projectName, FoundVersion: req.FoundVersion,
+		ProjectCode: req.ProjectCode, ProjectName: prepared.projectName, FoundVersion: req.FoundVersion,
 		DefectType: req.DefectType, Severity: req.Severity, Priority: req.Priority,
 		Status: DefectStatusNew, ReporterID: user.ID, ReporterName: userDisplayName(user),
-		AssigneeID: req.AssigneeID, AssigneeName: assigneeName, VerifierID: req.VerifierID, VerifierName: verifierName,
+		AssigneeID: req.AssigneeID, AssigneeName: prepared.assigneeName,
+		VerifierID: req.VerifierID, VerifierName: prepared.verifierName,
 		DueDate: req.DueDate, Precondition: req.Precondition, Steps: req.Steps,
 		ActualResult: req.ActualResult, ExpectedResult: req.ExpectedResult, Description: req.Description,
-		Environment: req.Environment, Tags: req.Tags, CustomFields: req.CustomFields, RowVersion: 1, CreatedAt: now, UpdatedAt: now,
+		Environment: req.Environment, Tags: req.Tags, CustomFields: req.CustomFields,
+		RowVersion: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO defects (
@@ -620,10 +627,56 @@ func createDefect(ctx context.Context, user *User, req DefectSaveRequest) (*Defe
 	if err := saveDefectCustomFields(ctx, tx, defect.ID, defect.ProjectCode, req.CustomFields); err != nil {
 		return nil, err
 	}
+	return &defect, nil
+}
+
+func createDefects(ctx context.Context, user *User, requests []DefectSaveRequest) ([]Defect, error) {
+	if len(requests) == 0 {
+		return nil, errors.New("至少需要提交一个缺陷")
+	}
+	if len(requests) > 50 {
+		return nil, errors.New("单次最多批量提交 50 个缺陷")
+	}
+	if err := ensureDefectSchema(ctx); err != nil {
+		return nil, err
+	}
+	preparedItems := make([]preparedDefectCreate, 0, len(requests))
+	for index, req := range requests {
+		prepared, err := prepareDefectCreate(ctx, user, req)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 个缺陷：%w", index+1, err)
+		}
+		preparedItems = append(preparedItems, prepared)
+	}
+	db, _, err := DatabaseManager.DB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	created := make([]Defect, 0, len(preparedItems))
+	for _, prepared := range preparedItems {
+		defect, err := insertPreparedDefect(ctx, tx, user, prepared)
+		if err != nil {
+			return nil, err
+		}
+		created = append(created, *defect)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &defect, nil
+	return created, nil
+}
+
+func createDefect(ctx context.Context, user *User, req DefectSaveRequest) (*Defect, error) {
+	defects, err := createDefects(ctx, user, []DefectSaveRequest{req})
+	if err != nil {
+		return nil, err
+	}
+	return &defects[0], nil
 }
 
 const defectSelectColumns = `
@@ -1234,7 +1287,8 @@ func allowedDefectAttachment(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	allowed := map[string]bool{
 		".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
-		".txt": true, ".log": true, ".json": true, ".zip": true, ".pdf": true,
+		".txt": true, ".log": true, ".json": true, ".md": true, ".csv": true,
+		".xml": true, ".yaml": true, ".yml": true, ".zip": true, ".pdf": true,
 		".mp4": true, ".mov": true,
 	}
 	return allowed[ext]
@@ -1316,6 +1370,41 @@ func getDefectAttachment(ctx context.Context, defectID, attachmentID string) (*D
 		return nil, nil
 	}
 	return &item, err
+}
+
+func deleteDefectAttachment(ctx context.Context, user *User, defectID, attachmentID string) error {
+	defect, err := getDefect(ctx, defectID)
+	if err != nil {
+		return err
+	}
+	if defect == nil {
+		return errors.New("缺陷不存在")
+	}
+	if !defectCanEditRecord(ctx, user, *defect) {
+		return errors.New("没有删除该缺陷附件的权限")
+	}
+	attachment, err := getDefectAttachment(ctx, defectID, attachmentID)
+	if err != nil {
+		return err
+	}
+	if attachment == nil {
+		return errors.New("附件不存在")
+	}
+	db, _, err := DatabaseManager.DB(ctx)
+	if err != nil {
+		return err
+	}
+	result, err := db.ExecContext(ctx, "DELETE FROM defect_attachments WHERE id=? AND defect_id=?", attachmentID, defectID)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected != 1 {
+		return errors.New("附件不存在或已被删除")
+	}
+	path := filepath.Join("data", "defect_attachments", defectID, attachment.storageName)
+	_ = os.Remove(path)
+	return nil
 }
 
 func GetDefectMetaHandler(c *gin.Context) {
@@ -1407,6 +1496,21 @@ func CreateDefectHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, defect)
+}
+
+func BatchCreateDefectsHandler(c *gin.Context) {
+	user, _ := defectUser(c)
+	var req DefectBatchCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "批量缺陷数据格式不正确"})
+		return
+	}
+	defects, err := createDefects(c.Request.Context(), user, req.Items)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"items": defects})
 }
 
 func GetDefectHandler(c *gin.Context) {
@@ -1570,4 +1674,19 @@ func DownloadDefectAttachmentHandler(c *gin.Context) {
 	}
 	path := filepath.Join("data", "defect_attachments", attachment.DefectID, attachment.storageName)
 	c.FileAttachment(path, attachment.OriginalName)
+}
+
+func DeleteDefectAttachmentHandler(c *gin.Context) {
+	user, _ := defectUser(c)
+	if err := deleteDefectAttachment(c.Request.Context(), user, c.Param("id"), c.Param("attachment_id")); err != nil {
+		status := http.StatusBadRequest
+		if strings.Contains(err.Error(), "权限") {
+			status = http.StatusForbidden
+		} else if strings.Contains(err.Error(), "不存在") {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }

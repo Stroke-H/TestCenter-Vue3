@@ -29,6 +29,7 @@ import {
   priorityLabels,
   severityLabels,
   type Defect,
+  type DefectAttachment,
   type DefectDetail,
   type DefectFieldDefinition,
   type DefectFormValue,
@@ -49,6 +50,7 @@ const total = ref(0)
 const summary = ref<DefectStats | null>(null)
 const formVisible = ref(false)
 const formDefect = ref<Defect | null>(null)
+const formAttachments = ref<DefectAttachment[]>([])
 const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detail = ref<DefectDetail | null>(null)
@@ -250,23 +252,68 @@ async function executeBatch(payload: Omit<DefectBatchPayload, 'ids'>) {
 
 function openCreate() {
   formDefect.value = null
+  formAttachments.value = []
   formVisible.value = true
 }
 
-function openEdit(defect: Defect) {
+async function openEdit(defect: Defect) {
   formDefect.value = defect
+  formAttachments.value = detail.value?.defect.id === defect.id ? [...detail.value.attachments] : []
   detailVisible.value = false
+  if (!formAttachments.value.length) {
+    try {
+      const loaded = await defectApi.detail(defect.id)
+      formDefect.value = loaded.defect
+      formAttachments.value = loaded.attachments || []
+    } catch (error) {
+      ElMessage.error(errorMessage(error, '缺陷附件加载失败'))
+    }
+  }
   nextTick(() => { formVisible.value = true })
 }
 
-async function saveDefect(value: DefectFormValue) {
+async function syncFormAttachments(defects: Defect[], files: File[], removedAttachmentIds: string[]) {
+  let failed = 0
+  if (defects.length === 1) {
+    for (const attachmentId of removedAttachmentIds) {
+      try {
+        await defectApi.deleteAttachment(defects[0]!.id, attachmentId)
+      } catch {
+        failed++
+      }
+    }
+  }
+  for (const defect of defects) {
+    for (const file of files) {
+      try {
+        await defectApi.upload(defect.id, file)
+      } catch {
+        failed++
+      }
+    }
+  }
+  return failed
+}
+
+async function saveDefect(value: DefectFormValue, titles: string[], files: File[], removedAttachmentIds: string[]) {
   saving.value = true
   try {
+    if (!formDefect.value && titles.length > 1) {
+      const result = await defectApi.batchCreate(titles.map((title) => ({ ...value, title })))
+      const failedAttachments = await syncFormAttachments(result.items, files, [])
+      formVisible.value = false
+      if (failedAttachments) ElMessage.warning(`已提交 ${result.items.length} 个缺陷，但有 ${failedAttachments} 个附件上传失败`)
+      else ElMessage.success(`已批量提交 ${result.items.length} 个缺陷`)
+      await Promise.all([loadDefects(), loadSummary()])
+      return
+    }
     const saved = formDefect.value
       ? await defectApi.update(formDefect.value.id, value)
-      : await defectApi.create(value)
+      : await defectApi.create({ ...value, title: titles[0] || value.title })
+    const failedAttachments = await syncFormAttachments([saved], files, formDefect.value ? removedAttachmentIds : [])
     formVisible.value = false
-    ElMessage.success(formDefect.value ? '缺陷已更新' : `缺陷 ${saved.defect_no} 已提交`)
+    if (failedAttachments) ElMessage.warning(`缺陷已保存，但有 ${failedAttachments} 个附件操作失败`)
+    else ElMessage.success(formDefect.value ? '缺陷已更新' : `缺陷 ${saved.defect_no} 已提交`)
     await Promise.all([loadDefects(), loadSummary()])
     await openDetail(saved)
   } catch (error) {
@@ -460,7 +507,7 @@ onMounted(refreshAll)
 
     <DefectStatsPanel v-else-if="activeSection === 'stats'" ref="statsRef" :meta="meta" :project-code="selectedProjectCode" />
 
-    <DefectFormDrawer v-model="formVisible" :defect="formDefect" :meta="meta" :saving="saving" :status-changing="formStatusChanging" :default-project-code="selectedProjectCode" @save="saveDefect" @status-change="changeFormDefectStatus" />
+    <DefectFormDrawer v-model="formVisible" :defect="formDefect" :attachments="formAttachments" :meta="meta" :saving="saving" :status-changing="formStatusChanging" :default-project-code="selectedProjectCode" @save="saveDefect" @status-change="changeFormDefectStatus" />
     <DefectDetailDrawer ref="detailRef" v-model="detailVisible" :detail="detail" :meta="meta" :loading="detailLoading" :acting="acting" @edit="detail && openEdit(detail.defect)" @refresh="refreshDetail" @transition="transitionDefect" @comment="addComment" @upload="uploadAttachment" />
     <DefectBatchDialog v-model="batchVisible" :count="selectedDefects.length" :defects="selectedDefects" :meta="meta" :loading="batchLoading" @execute="executeBatch" />
   </main>
