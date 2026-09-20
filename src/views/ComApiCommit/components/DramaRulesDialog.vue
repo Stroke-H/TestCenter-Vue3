@@ -4,7 +4,7 @@ import { Lock, Setting } from '@element-plus/icons-vue'
 defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 
-// 只读说明，对照 prepare_data.js / drama_check_flow.js（2026-09-07）。
+// 只读说明，对照 prepare_data.js / drama_check_flow.js（2026-09-18）。
 // 判定规则变更时同步更新此说明；此组件不参与执行配置。
 const sections = [
   { title: '检测范围', note: '分类日期限制不影响其他检查', rows: [
@@ -18,7 +18,7 @@ const sections = [
     ['网赚短剧 / TT_IAA_媒资库组', '要求 ad；coin / coins 判为异常。'],
     ['TT_IAP_媒资库组', '要求 coins，兼容 coin；即使同时存在广告组，ad 也判为异常。IAA 与 IAP 按最接近的标准组名区分。'],
     ['ShortsWave', 'cn_name 未命中 DS 时，分组命中 ShortsWave 且解锁类型为 ad 则报错。'],
-    ['DS 标识', 'cn_name 命中 DS 时，必须且只能属于 TT-Minis 分销组。忽略 DS 大小写和外围命名格式差异。'],
+    ['DS 标识', 'cn_name 命中 DS 时，App Group 必须有且只有一个，且只能是 TT_IAA_媒资库组或 TT-Minis 分销组。两组同时存在、存在额外分组或命中 TT_IAP_媒资库组都会上报。忽略 DS 大小写和外围命名格式差异。'],
     ['其他广告分组', '非 DS 剧集使用 ad，但没有命中广告允许组、也不满足仅 MD-产品组例外时，判为异常。'],
   ] },
   { title: '分类与命名', note: '命名问题与业务规则分别检查', rows: [
@@ -54,7 +54,7 @@ const sections = [
     <div class="drama-rule-view">
       <div class="drama-rule-view__intro">
         <span class="drama-rule-view__icon"><el-icon><Setting /></el-icon></span>
-        <div><strong>当前筛选与检查规则</strong><p>规则说明版本：2026-09-07 · 展示现行规则，不支持修改。</p></div>
+        <div><strong>当前筛选与检查规则</strong><p>规则说明版本：2026-09-18 · 展示现行规则，不支持修改。</p></div>
         <span class="drama-rule-view__readonly"><el-icon><Lock /></el-icon>只读</span>
       </div>
       <div class="drama-rule-view__scroll" tabindex="0" aria-label="规则详情">

@@ -48,6 +48,8 @@ export interface Defect {
   reopen_count: number
   row_version: number
   archived: boolean
+  sync_to_feishu: boolean
+  feishu_sync_status: 'synced' | 'failed' | 'not_synced'
   resolved_at: string
   closed_at: string
   created_at: string
@@ -85,11 +87,27 @@ export interface DefectAttachment {
   download_url: string
 }
 
+export interface DefectFeishuSync {
+  defect_id: string
+  project_key: string
+  work_item_type: string
+  work_item_id: string
+  work_item_url: string
+  sync_status: 'pending' | 'syncing' | 'synced' | 'failed'
+  synced_row_version: number
+  retry_count: number
+  last_error: string
+  last_attempt_at: string
+  next_retry_at: string
+  updated_at: string
+}
+
 export interface DefectDetail {
   defect: Defect
   comments: DefectComment[]
   history: DefectHistory[]
   attachments: DefectAttachment[]
+  feishu_sync?: DefectFeishuSync
 }
 
 export interface DefectProject {
@@ -199,6 +217,7 @@ export interface DefectFormValue {
   environment: DefectEnvironment
   tags: string[]
   custom_fields: Record<string, any>
+  sync_to_feishu: boolean
   row_version: number
 }
 
@@ -259,6 +278,7 @@ export function emptyDefectForm(): DefectFormValue {
     },
     tags: [],
     custom_fields: {},
+    sync_to_feishu: true,
     row_version: 0
   }
 }
@@ -282,6 +302,7 @@ export function defectToForm(defect: Defect): DefectFormValue {
     environment: { ...defect.environment },
     tags: [...(defect.tags || [])],
     custom_fields: { ...(defect.custom_fields || {}) },
+    sync_to_feishu: defect.sync_to_feishu,
     row_version: defect.row_version
   }
 }

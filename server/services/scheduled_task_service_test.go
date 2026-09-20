@@ -28,7 +28,7 @@ func TestSplitScheduledDramaFailures(t *testing.T) {
 		},
 		{
 			DramaID: "6a61c109e124f7d6d95cbeca",
-			Errors:  []string{"• [分组规则] cn_name 包含 -DS 时，App Group 必须且只能为 TT-Minis 分销组"},
+			Errors:  []string{"• [分组规则] cn_name 包含 -DS 时，App Group 必须有且只有一个，并且只能为 TT-Minis 分销组或TT_IAA_媒资库组"},
 		},
 	}
 

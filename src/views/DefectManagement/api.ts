@@ -59,6 +59,18 @@ export interface DefectBatchResult {
   error?: string
 }
 
+export interface DefectFeishuRefreshResult {
+  read: number
+  created: number
+  updated: number
+  skipped: number
+  conflicts: number
+  unresolved: number
+  failed: number
+  duration_ms: number
+  issues: Array<{ workspace: string; work_item_id: string; title: string; reason: string }>
+}
+
 export const defectApi = {
   updateTestingVersion: (project: string, payload: { testing: string; expected_testing: string; expected_online: string }) => request.put(`/defects/testing-version/${encodeURIComponent(project)}`, payload) as Promise<{online: string; testing: string; versions: string[]}>,
   saveVersions: (project: string, stages: { online: string; testing: string }) => request.put(`/defects/versions/${encodeURIComponent(project)}`, stages),
@@ -69,6 +81,7 @@ export const defectApi = {
   detail: (id: string) => request.get(`/defects/${id}`) as Promise<DefectDetail>,
   create: (payload: DefectFormValue) => request.post('/defects', payload) as Promise<Defect>,
   batchCreate: (items: DefectFormValue[]) => request.post('/defects/batch-create', { items }) as Promise<{ items: Defect[] }>,
+  refreshFromFeishu: (projectCode?: string) => request.post('/defects/feishu-refresh', { project_code: projectCode || '' }) as Promise<DefectFeishuRefreshResult>,
   update: (id: string, payload: DefectFormValue) => request.put(`/defects/${id}`, payload) as Promise<Defect>,
   setStatus: (id: string, payload: { status: DefectStatus; row_version: number }) => request.put(`/defects/${id}/status`, payload) as Promise<Defect>,
   transition: (id: string, payload: DefectTransitionPayload) => request.post(`/defects/${id}/transition`, payload) as Promise<Defect>,
@@ -91,6 +104,7 @@ export const defectApi = {
     })
   },
   deleteAttachment: (id: string, attachmentId: string) => request.delete(`/defects/${id}/attachments/${attachmentId}`),
+  retryFeishuSync: (id: string) => request.post(`/defects/${id}/feishu-sync/retry`) as Promise<{ status: string }>,
   attachmentBlob: (id: string, attachmentId: string) => request.get(`/defects/${id}/attachments/${attachmentId}`, {
     responseType: 'blob',
     timeout: 30000

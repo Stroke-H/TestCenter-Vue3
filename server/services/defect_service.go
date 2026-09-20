@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -51,41 +52,43 @@ type DefectEnvironment struct {
 }
 
 type Defect struct {
-	AllowedActions  map[string]bool   `json:"allowed_actions,omitempty"`
-	ID              string            `json:"id"`
-	DefectNo        string            `json:"defect_no"`
-	Title           string            `json:"title"`
-	ProjectCode     string            `json:"project_code"`
-	ProjectName     string            `json:"project_name"`
-	FoundVersion    string            `json:"found_version"`
-	ResolvedVersion string            `json:"resolved_version"`
-	DefectType      string            `json:"defect_type"`
-	Severity        int               `json:"severity"`
-	Priority        int               `json:"priority"`
-	Status          string            `json:"status"`
-	Resolution      string            `json:"resolution"`
-	ReporterID      string            `json:"reporter_id"`
-	ReporterName    string            `json:"reporter_name"`
-	AssigneeID      string            `json:"assignee_id"`
-	AssigneeName    string            `json:"assignee_name"`
-	VerifierID      string            `json:"verifier_id"`
-	VerifierName    string            `json:"verifier_name"`
-	DueDate         string            `json:"due_date"`
-	Precondition    string            `json:"precondition"`
-	Steps           []DefectStep      `json:"steps"`
-	ActualResult    string            `json:"actual_result"`
-	ExpectedResult  string            `json:"expected_result"`
-	Description     string            `json:"description"`
-	Environment     DefectEnvironment `json:"environment"`
-	Tags            []string          `json:"tags"`
-	CustomFields    map[string]any    `json:"custom_fields"`
-	ReopenCount     int               `json:"reopen_count"`
-	RowVersion      int               `json:"row_version"`
-	Archived        bool              `json:"archived"`
-	ResolvedAt      string            `json:"resolved_at"`
-	ClosedAt        string            `json:"closed_at"`
-	CreatedAt       string            `json:"created_at"`
-	UpdatedAt       string            `json:"updated_at"`
+	AllowedActions   map[string]bool   `json:"allowed_actions,omitempty"`
+	ID               string            `json:"id"`
+	DefectNo         string            `json:"defect_no"`
+	Title            string            `json:"title"`
+	ProjectCode      string            `json:"project_code"`
+	ProjectName      string            `json:"project_name"`
+	FoundVersion     string            `json:"found_version"`
+	ResolvedVersion  string            `json:"resolved_version"`
+	DefectType       string            `json:"defect_type"`
+	Severity         int               `json:"severity"`
+	Priority         int               `json:"priority"`
+	Status           string            `json:"status"`
+	Resolution       string            `json:"resolution"`
+	ReporterID       string            `json:"reporter_id"`
+	ReporterName     string            `json:"reporter_name"`
+	AssigneeID       string            `json:"assignee_id"`
+	AssigneeName     string            `json:"assignee_name"`
+	VerifierID       string            `json:"verifier_id"`
+	VerifierName     string            `json:"verifier_name"`
+	DueDate          string            `json:"due_date"`
+	Precondition     string            `json:"precondition"`
+	Steps            []DefectStep      `json:"steps"`
+	ActualResult     string            `json:"actual_result"`
+	ExpectedResult   string            `json:"expected_result"`
+	Description      string            `json:"description"`
+	Environment      DefectEnvironment `json:"environment"`
+	Tags             []string          `json:"tags"`
+	CustomFields     map[string]any    `json:"custom_fields"`
+	ReopenCount      int               `json:"reopen_count"`
+	RowVersion       int               `json:"row_version"`
+	Archived         bool              `json:"archived"`
+	SyncToFeishu     bool              `json:"sync_to_feishu"`
+	FeishuSyncStatus string            `json:"feishu_sync_status"`
+	ResolvedAt       string            `json:"resolved_at"`
+	ClosedAt         string            `json:"closed_at"`
+	CreatedAt        string            `json:"created_at"`
+	UpdatedAt        string            `json:"updated_at"`
 }
 
 type DefectComment struct {
@@ -127,6 +130,7 @@ type DefectDetail struct {
 	Comments    []DefectComment    `json:"comments"`
 	History     []DefectHistory    `json:"history"`
 	Attachments []DefectAttachment `json:"attachments"`
+	FeishuSync  *DefectFeishuSync  `json:"feishu_sync,omitempty"`
 }
 
 type DefectListResponse struct {
@@ -154,6 +158,7 @@ type DefectSaveRequest struct {
 	Environment    DefectEnvironment `json:"environment"`
 	Tags           []string          `json:"tags"`
 	CustomFields   map[string]any    `json:"custom_fields"`
+	SyncToFeishu   *bool             `json:"sync_to_feishu"`
 	RowVersion     int               `json:"row_version"`
 }
 
@@ -232,6 +237,7 @@ func ensureDefectSchema(parent context.Context) error {
 			reopen_count INT NOT NULL DEFAULT 0,
 			row_version INT NOT NULL DEFAULT 1,
 			archived TINYINT(1) NOT NULL DEFAULT 0,
+			sync_to_feishu TINYINT(1) NOT NULL DEFAULT 0,
 			resolved_at VARCHAR(64) NOT NULL,
 			closed_at VARCHAR(64) NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
@@ -277,6 +283,28 @@ func ensureDefectSchema(parent context.Context) error {
 			uploader_name VARCHAR(128) NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
 			INDEX idx_defect_attachments_defect (defect_id, created_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+		`CREATE TABLE IF NOT EXISTS defect_feishu_syncs (
+			defect_id VARCHAR(36) PRIMARY KEY,
+			project_key VARCHAR(128) NOT NULL,
+			work_item_type VARCHAR(128) NOT NULL,
+			work_item_id VARCHAR(128) NOT NULL DEFAULT '',
+			work_item_url TEXT NOT NULL,
+			sync_status VARCHAR(32) NOT NULL,
+			synced_row_version INT NOT NULL DEFAULT 0,
+			retry_count INT NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL,
+			last_attempt_at VARCHAR(64) NOT NULL,
+			next_retry_at VARCHAR(64) NOT NULL,
+			created_at VARCHAR(64) NOT NULL,
+			updated_at VARCHAR(64) NOT NULL,
+			INDEX idx_defect_feishu_sync_due (sync_status, next_retry_at)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+		`CREATE TABLE IF NOT EXISTS defect_feishu_inbound_states (
+			project_key VARCHAR(128) PRIMARY KEY,
+			last_refresh_at VARCHAR(64) NOT NULL,
+			updated_by VARCHAR(128) NOT NULL,
+			updated_at VARCHAR(64) NOT NULL
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 		`CREATE TABLE IF NOT EXISTS defect_field_definitions (
 			id VARCHAR(36) PRIMARY KEY,
@@ -334,6 +362,27 @@ func ensureDefectSchema(parent context.Context) error {
 
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return err
+		}
+	}
+	// Bidirectional synchronization metadata. Keep these migrations additive so
+	// existing outbound synchronization records remain valid.
+	for _, statement := range []string{
+		`ALTER TABLE defect_feishu_syncs ADD COLUMN remote_payload_hash VARCHAR(64) NOT NULL DEFAULT ''`,
+		`ALTER TABLE defect_feishu_syncs ADD COLUMN remote_updated_at VARCHAR(64) NOT NULL DEFAULT ''`,
+		`ALTER TABLE defect_feishu_syncs ADD COLUMN last_inbound_at VARCHAR(64) NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return err
+		}
+	}
+	var syncColumnCount int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='defects' AND COLUMN_NAME='sync_to_feishu'`).Scan(&syncColumnCount); err != nil {
+		return err
+	}
+	if syncColumnCount == 0 {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE defects ADD COLUMN sync_to_feishu TINYINT(1) NOT NULL DEFAULT 0 AFTER archived"); err != nil {
 			return err
 		}
 	}
@@ -604,6 +653,7 @@ func insertPreparedDefect(ctx context.Context, tx *sql.Tx, user *User, prepared 
 		DueDate: req.DueDate, Precondition: req.Precondition, Steps: req.Steps,
 		ActualResult: req.ActualResult, ExpectedResult: req.ExpectedResult, Description: req.Description,
 		Environment: req.Environment, Tags: req.Tags, CustomFields: req.CustomFields,
+		SyncToFeishu: req.SyncToFeishu != nil && *req.SyncToFeishu, FeishuSyncStatus: "not_synced",
 		RowVersion: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	_, err = tx.ExecContext(ctx, `
@@ -612,12 +662,12 @@ func insertPreparedDefect(ctx context.Context, tx *sql.Tx, user *User, prepared 
 			defect_type, severity, priority, status, resolution, reporter_id, reporter_name,
 			assignee_id, assignee_name, verifier_id, verifier_name, due_date, precondition,
 			steps_json, actual_result, expected_result, description, environment_json, tags_json,
-			reopen_count, row_version, archived, resolved_at, closed_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 0, '', '', ?, ?)
+			reopen_count, row_version, archived, sync_to_feishu, resolved_at, closed_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, 0, ?, '', '', ?, ?)
 	`, defect.ID, defect.DefectNo, defect.Title, defect.ProjectCode, defect.ProjectName, defect.FoundVersion,
 		defect.DefectType, defect.Severity, defect.Priority, defect.Status, defect.ReporterID, defect.ReporterName,
 		defect.AssigneeID, defect.AssigneeName, defect.VerifierID, defect.VerifierName, defect.DueDate, defect.Precondition,
-		string(stepsJSON), defect.ActualResult, defect.ExpectedResult, defect.Description, string(environmentJSON), string(tagsJSON), now, now)
+		string(stepsJSON), defect.ActualResult, defect.ExpectedResult, defect.Description, string(environmentJSON), string(tagsJSON), defect.SyncToFeishu, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -684,7 +734,7 @@ const defectSelectColumns = `
 	defect_type, severity, priority, status, resolution, reporter_id, reporter_name,
 	assignee_id, assignee_name, verifier_id, verifier_name, due_date, precondition,
 	steps_json, actual_result, expected_result, description, environment_json, tags_json,
-	reopen_count, row_version, archived, resolved_at, closed_at, created_at, updated_at`
+	reopen_count, row_version, archived, sync_to_feishu, resolved_at, closed_at, created_at, updated_at`
 
 type defectScanner interface {
 	Scan(dest ...any) error
@@ -693,7 +743,7 @@ type defectScanner interface {
 func scanDefect(scanner defectScanner) (Defect, error) {
 	var defect Defect
 	var stepsJSON, environmentJSON, tagsJSON string
-	var archived int
+	var archived, syncToFeishu int
 	err := scanner.Scan(
 		&defect.ID, &defect.DefectNo, &defect.Title, &defect.ProjectCode, &defect.ProjectName,
 		&defect.FoundVersion, &defect.ResolvedVersion, &defect.DefectType, &defect.Severity,
@@ -701,12 +751,14 @@ func scanDefect(scanner defectScanner) (Defect, error) {
 		&defect.AssigneeID, &defect.AssigneeName, &defect.VerifierID, &defect.VerifierName,
 		&defect.DueDate, &defect.Precondition, &stepsJSON, &defect.ActualResult, &defect.ExpectedResult,
 		&defect.Description, &environmentJSON, &tagsJSON, &defect.ReopenCount, &defect.RowVersion,
-		&archived, &defect.ResolvedAt, &defect.ClosedAt, &defect.CreatedAt, &defect.UpdatedAt,
+		&archived, &syncToFeishu, &defect.ResolvedAt, &defect.ClosedAt, &defect.CreatedAt, &defect.UpdatedAt,
 	)
 	if err != nil {
 		return defect, err
 	}
 	defect.Archived = archived != 0
+	defect.SyncToFeishu = syncToFeishu != 0
+	defect.FeishuSyncStatus = "not_synced"
 	defect.Steps = []DefectStep{}
 	defect.Tags = []string{}
 	_ = json.Unmarshal([]byte(stepsJSON), &defect.Steps)
@@ -818,6 +870,9 @@ func listDefects(ctx context.Context, user *User, values map[string]string) (Def
 	if err := hydrateDefectCustomFields(ctx, response.Items); err != nil {
 		return response, err
 	}
+	if err := hydrateDefectFeishuSyncStatuses(ctx, response.Items); err != nil {
+		return response, err
+	}
 	return response, nil
 }
 
@@ -872,6 +927,9 @@ func updateDefect(ctx context.Context, user *User, id string, req DefectSaveRequ
 	updated.DueDate, updated.Precondition = req.DueDate, req.Precondition
 	updated.Steps, updated.ActualResult, updated.ExpectedResult = req.Steps, req.ActualResult, req.ExpectedResult
 	updated.Description, updated.Environment, updated.Tags, updated.CustomFields = req.Description, req.Environment, req.Tags, req.CustomFields
+	if req.SyncToFeishu != nil {
+		updated.SyncToFeishu = *req.SyncToFeishu
+	}
 	updated.RowVersion++
 	updated.UpdatedAt = time.Now().Format(time.RFC3339Nano)
 	stepsJSON, _ := json.Marshal(updated.Steps)
@@ -891,11 +949,11 @@ func updateDefect(ctx context.Context, user *User, id string, req DefectSaveRequ
 		UPDATE defects SET title=?, project_code=?, project_name=?, found_version=?, defect_type=?,
 		severity=?, priority=?, assignee_id=?, assignee_name=?, verifier_id=?, verifier_name=?, due_date=?,
 		precondition=?, steps_json=?, actual_result=?, expected_result=?, description=?, environment_json=?,
-		tags_json=?, row_version=?, updated_at=? WHERE id=? AND row_version=? AND archived=0
+		tags_json=?, sync_to_feishu=?, row_version=?, updated_at=? WHERE id=? AND row_version=? AND archived=0
 	`, updated.Title, updated.ProjectCode, updated.ProjectName, updated.FoundVersion, updated.DefectType,
 		updated.Severity, updated.Priority, updated.AssigneeID, updated.AssigneeName, updated.VerifierID,
 		updated.VerifierName, updated.DueDate, updated.Precondition, string(stepsJSON), updated.ActualResult,
-		updated.ExpectedResult, updated.Description, string(environmentJSON), string(tagsJSON), updated.RowVersion,
+		updated.ExpectedResult, updated.Description, string(environmentJSON), string(tagsJSON), updated.SyncToFeishu, updated.RowVersion,
 		updated.UpdatedAt, id, current.RowVersion)
 	if err != nil {
 		return nil, err
@@ -1254,7 +1312,11 @@ func defectDetail(ctx context.Context, id string) (*DefectDetail, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &DefectDetail{Defect: *defect, Comments: comments, History: history, Attachments: attachments}, nil
+	feishuSync, err := getDefectFeishuSync(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &DefectDetail{Defect: *defect, Comments: comments, History: history, Attachments: attachments, FeishuSync: feishuSync}, nil
 }
 
 func addDefectComment(ctx context.Context, user *User, defectID, content string) (*DefectComment, error) {
@@ -1495,6 +1557,9 @@ func CreateDefectHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if _, syncErr := queueDefectFeishuSync(c.Request.Context(), defect.ID); syncErr != nil {
+		log.Printf("[DefectFeishuSync] queue defect %s failed: %v", defect.ID, syncErr)
+	}
 	c.JSON(http.StatusCreated, defect)
 }
 
@@ -1509,6 +1574,11 @@ func BatchCreateDefectsHandler(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	for index := range defects {
+		if _, syncErr := queueDefectFeishuSync(c.Request.Context(), defects[index].ID); syncErr != nil {
+			log.Printf("[DefectFeishuSync] queue defect %s failed: %v", defects[index].ID, syncErr)
+		}
 	}
 	c.JSON(http.StatusCreated, gin.H{"items": defects})
 }
@@ -1552,6 +1622,9 @@ func UpdateDefectHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "缺陷不存在"})
 		return
 	}
+	if _, syncErr := queueDefectFeishuSync(c.Request.Context(), defect.ID); syncErr != nil {
+		log.Printf("[DefectFeishuSync] queue defect %s failed: %v", defect.ID, syncErr)
+	}
 	c.JSON(http.StatusOK, defect)
 }
 
@@ -1574,6 +1647,9 @@ func TransitionDefectHandler(c *gin.Context) {
 	if defect == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "缺陷不存在"})
 		return
+	}
+	if _, syncErr := queueDefectFeishuSync(c.Request.Context(), defect.ID); syncErr != nil {
+		log.Printf("[DefectFeishuSync] queue defect %s failed: %v", defect.ID, syncErr)
 	}
 	c.JSON(http.StatusOK, defect)
 }
@@ -1598,8 +1674,54 @@ func SetDefectStatusHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "缺陷不存在"})
 		return
 	}
+	if _, syncErr := queueDefectFeishuSync(c.Request.Context(), defect.ID); syncErr != nil {
+		log.Printf("[DefectFeishuSync] queue defect %s failed: %v", defect.ID, syncErr)
+	}
 	defect.AllowedActions = defectAllowedActions(c.Request.Context(), user, *defect)
 	c.JSON(http.StatusOK, defect)
+}
+
+func RetryDefectFeishuSyncHandler(c *gin.Context) {
+	user, _ := defectUser(c)
+	defect, err := getDefect(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if defect == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "缺陷不存在"})
+		return
+	}
+	if !defectCanEditRecord(c.Request.Context(), user, *defect) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "没有重试该缺陷同步的权限"})
+		return
+	}
+	if !defectUsesFeishuSync(defect.ProjectCode) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "仅所属空间为海外短剧或番茄短剧的项目支持飞书缺陷同步"})
+		return
+	}
+	if !defect.SyncToFeishu {
+		db, _, dbErr := DatabaseManager.DB(c.Request.Context())
+		if dbErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": dbErr.Error()})
+			return
+		}
+		if _, dbErr = db.ExecContext(c.Request.Context(), "UPDATE defects SET sync_to_feishu=1 WHERE id=?", defect.ID); dbErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": dbErr.Error()})
+			return
+		}
+		defect.SyncToFeishu = true
+	}
+	queued, err := queueDefectFeishuSync(c.Request.Context(), defect.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !queued {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "仅所属空间为海外短剧或番茄短剧的项目支持飞书缺陷同步"})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"status": "pending"})
 }
 
 func AddDefectCommentHandler(c *gin.Context) {

@@ -19,7 +19,8 @@ import {
   Collection,
   Iphone,
   Lock,
-  Bell
+  Bell,
+  Connection
 } from '@element-plus/icons-vue'
 import { User as UserMenuIcon } from '@element-plus/icons-vue'
 
@@ -115,6 +116,11 @@ const handleMenuSelect = (path: string) => {
 const handleUserCommand = async (command: string) => {
 	if (command === 'todos') {
 		router.push('/my-todos')
+		return
+	}
+
+	if (command === 'feishu-project-auth') {
+		router.push('/feishu-project-auth')
 		return
 	}
 
@@ -214,8 +220,9 @@ const handleUserCommand = async (command: string) => {
               <span class="username">{{ authStore.user?.nickname || authStore.user?.username || '用户' }}</span>
             </div>
             <template #dropdown>
-              <el-dropdown-menu>
+			  <el-dropdown-menu>
 				<el-dropdown-item command="todos" :icon="Bell">我的待办</el-dropdown-item>
+				<el-dropdown-item command="feishu-project-auth" :icon="Connection">飞书项目授权</el-dropdown-item>
                 <el-dropdown-item command="profile" :icon="Setting">个人设置</el-dropdown-item>
                 <el-dropdown-item divided command="logout" :icon="SwitchButton">
                   退出登录

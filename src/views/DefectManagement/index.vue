@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElNotification } from 'element-plus'
 import {
   ArrowRight,
   CircleCheck,
@@ -41,6 +41,7 @@ import {
 defineOptions({ name: 'DefectManagement' })
 
 const loading = ref(false)
+const refreshing = ref(false)
 const acting = ref(false)
 const saving = ref(false)
 const formStatusChanging = ref(false)
@@ -190,9 +191,34 @@ async function loadDefects() {
   }
 }
 
-async function refreshAll() {
+async function loadAllLocal() {
   await Promise.all([loadMeta(), loadDefects(), loadSummary()])
   if (activeSection.value === 'stats') await statsRef.value?.refresh()
+}
+
+async function refreshAll() {
+  refreshing.value = true
+  try {
+    if (!canCreate.value) {
+      await loadAllLocal()
+      ElMessage.success('本地数据已刷新')
+      return
+    }
+    const result = await defectApi.refreshFromFeishu(selectedProjectCode.value)
+    await loadAllLocal()
+    const attention = result.conflicts + result.unresolved + result.failed
+    ElNotification({
+      title: attention ? '刷新完成，部分记录需确认' : '飞书数据刷新完成',
+      type: attention ? 'warning' : 'success',
+      duration: attention ? 8000 : 4500,
+      message: `读取 ${result.read} 条；新增 ${result.created}，更新 ${result.updated}，未变化 ${result.skipped}，冲突 ${result.conflicts}，待确认 ${result.unresolved}，失败 ${result.failed}`
+    })
+  } catch (error) {
+    ElMessage.error(errorMessage(error, '飞书数据刷新失败'))
+    await loadAllLocal()
+  } finally {
+    refreshing.value = false
+  }
 }
 
 async function changeProjectContext(projectCode: string) {
@@ -403,7 +429,21 @@ async function uploadAttachment(file: File) {
   }
 }
 
-onMounted(refreshAll)
+async function retryFeishuSync() {
+  if (!detail.value) return
+  acting.value = true
+  try {
+    await defectApi.retryFeishuSync(detail.value.defect.id)
+    ElMessage.success('已重新加入飞书同步队列')
+    window.setTimeout(() => refreshDetail(), 1200)
+  } catch (error) {
+    ElMessage.error(errorMessage(error, '飞书同步重试失败'))
+  } finally {
+    acting.value = false
+  }
+}
+
+onMounted(loadAllLocal)
 </script>
 
 <template>
@@ -436,7 +476,7 @@ onMounted(refreshAll)
         </div>
       </div>
       <div class="page-actions">
-        <el-button class="refresh-button" :icon="Refresh" :loading="loading" @click="refreshAll">刷新数据</el-button>
+        <el-button class="refresh-button" :icon="Refresh" :loading="refreshing" :disabled="loading" @click="refreshAll">刷新数据</el-button>
         <el-button v-if="canCreate" class="create-button" type="primary" :icon="CirclePlus" @click="openCreate">提交缺陷</el-button>
       </div>
     </header>
@@ -490,7 +530,7 @@ onMounted(refreshAll)
         <div class="table-heading"><div><strong>缺陷列表</strong><span>{{ total }}</span></div><small>单击任意记录查看详情与完整流转历史</small></div>
         <el-table ref="tableRef" v-loading="loading" :data="defects" row-key="id" row-class-name="defect-row" class="defect-table" @selection-change="selectionChanged" @row-click="openDetail">
           <el-table-column v-if="canBatch" type="selection" width="46" :selectable="selectableDefect" />
-          <el-table-column label="缺陷" min-width="330"><template #default="{ row }"><div class="defect-cell"><div class="defect-cell__meta"><span>{{ row.defect_no }}</span><em>{{ typeLabel(row.defect_type) }}</em></div><strong>{{ row.title }}</strong><div><el-tag v-for="tag in row.tags?.slice(0,2)" :key="tag" size="small" effect="plain">{{ tag }}</el-tag></div></div></template></el-table-column>
+          <el-table-column label="缺陷" min-width="380"><template #default="{ row }"><div class="defect-cell"><div class="defect-cell__meta"><span>{{ row.defect_no }}</span><em>{{ typeLabel(row.defect_type) }}</em><span class="space-sync-badge" :class="`is-${row.feishu_sync_status || 'not_synced'}`">{{ row.feishu_sync_status === 'synced' ? '已同步空间' : row.feishu_sync_status === 'failed' ? '同步空间失败' : '未同步空间' }}</span></div><strong>{{ row.title }}</strong><div><el-tag v-for="tag in row.tags?.slice(0,2)" :key="tag" size="small" effect="plain">{{ tag }}</el-tag></div></div></template></el-table-column>
           <el-table-column label="所属项目" min-width="190"><template #default="{ row }"><div class="project-cell"><strong>{{ row.project_code }}</strong><span>{{ row.project_name }}</span><small>发现于 {{ row.found_version || '未填写版本' }}</small></div></template></el-table-column>
           <el-table-column label="严重 / 优先" width="140"><template #default="{ row }"><div class="level-cell"><span :class="`severity-${row.severity}`"><i />S{{ row.severity }} · {{ severityLabels[row.severity] }}</span><small>{{ priorityLabels[row.priority] }}</small></div></template></el-table-column>
           <el-table-column label="状态" width="110"><template #default="{ row }"><span class="table-status" :class="`is-${defectStatusMeta[row.status as DefectStatus].tone}`">{{ defectStatusMeta[row.status as DefectStatus].label }}</span></template></el-table-column>
@@ -508,7 +548,7 @@ onMounted(refreshAll)
     <DefectStatsPanel v-else-if="activeSection === 'stats'" ref="statsRef" :meta="meta" :project-code="selectedProjectCode" />
 
     <DefectFormDrawer v-model="formVisible" :defect="formDefect" :attachments="formAttachments" :meta="meta" :saving="saving" :status-changing="formStatusChanging" :default-project-code="selectedProjectCode" @save="saveDefect" @status-change="changeFormDefectStatus" />
-    <DefectDetailDrawer ref="detailRef" v-model="detailVisible" :detail="detail" :meta="meta" :loading="detailLoading" :acting="acting" @edit="detail && openEdit(detail.defect)" @refresh="refreshDetail" @transition="transitionDefect" @comment="addComment" @upload="uploadAttachment" />
+    <DefectDetailDrawer ref="detailRef" v-model="detailVisible" :detail="detail" :meta="meta" :loading="detailLoading" :acting="acting" @edit="detail && openEdit(detail.defect)" @refresh="refreshDetail" @transition="transitionDefect" @comment="addComment" @upload="uploadAttachment" @retry-feishu-sync="retryFeishuSync" />
     <DefectBatchDialog v-model="batchVisible" :count="selectedDefects.length" :defects="selectedDefects" :meta="meta" :loading="batchLoading" @execute="executeBatch" />
   </main>
 </template>
@@ -1066,7 +1106,7 @@ onMounted(refreshAll)
   margin-bottom: 4px;
 }
 
-.defect-cell__meta > span {
+.defect-cell__meta > span:first-child {
   color: #2563eb;
   font-size: 12px;
   font-weight: 700;
@@ -1074,7 +1114,8 @@ onMounted(refreshAll)
   letter-spacing: 0.3px;
 }
 
-.defect-cell__meta > em {
+.defect-cell__meta > em,
+.space-sync-badge {
   padding: 1px 6px;
   border-radius: 4px;
   background: #f1f5f9;
@@ -1082,6 +1123,20 @@ onMounted(refreshAll)
   font-size: 11px;
   font-style: normal;
   font-weight: 500;
+}
+
+.space-sync-badge {
+  color: #64748b;
+}
+
+.space-sync-badge.is-synced {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.space-sync-badge.is-failed {
+  background: #fee2e2;
+  color: #dc2626;
 }
 
 .defect-cell > strong {

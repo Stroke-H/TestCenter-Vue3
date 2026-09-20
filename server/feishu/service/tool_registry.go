@@ -658,7 +658,7 @@ func init() {
 				"海外短剧":    "shortwave",
 				"免费短剧":    "freedrama",
 				"iOS订阅产品": "ios_sub",
-				"番茄短剧":    "tomato",
+				"番茄短剧":    "mangogo",
 			}
 
 			projectKey := projectKeyMap[project.Workspace]

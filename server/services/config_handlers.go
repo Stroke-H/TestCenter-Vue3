@@ -2,6 +2,8 @@ package services
 
 import (
 	"net/http"
+	"strings"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"testcenter-server/models"
@@ -28,6 +30,16 @@ func SaveProjectHandler(c *gin.Context) {
 	var p models.Project
 	if err := c.ShouldBindJSON(&p); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	p.ProjectCode = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, p.ProjectCode)
+	if p.ProjectCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "project_code is required"})
 		return
 	}
 	if p.ID == "" {

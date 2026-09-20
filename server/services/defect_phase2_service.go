@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -857,6 +858,8 @@ func BatchDefectsHandler(c *gin.Context) {
 		result.Success = actionErr == nil
 		if actionErr != nil {
 			result.Error = actionErr.Error()
+		} else if _, syncErr := queueDefectFeishuSync(c.Request.Context(), id); syncErr != nil {
+			log.Printf("[DefectFeishuSync] queue defect %s failed: %v", id, syncErr)
 		}
 		results = append(results, result)
 	}

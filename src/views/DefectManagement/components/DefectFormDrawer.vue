@@ -679,6 +679,13 @@ async function submit() {
             class="full-width"
           />
         </el-form-item>
+
+        <div v-if="!isEdit" class="feishu-sync-option" :class="{ 'is-disabled': !form.sync_to_feishu }">
+          <el-checkbox v-model="form.sync_to_feishu">
+            <span class="feishu-sync-option__title">是否同步到飞书空间</span>
+          </el-checkbox>
+          <p>{{ form.sync_to_feishu ? "提交成功后，将自动在对应飞书项目空间创建缺陷记录" : "本次仅在平台内创建缺陷，并标记为未同步空间" }}</p>
+        </div>
       </section>
 
       <!-- 02 问题现场 -->
@@ -1554,6 +1561,48 @@ async function submit() {
 
 .full-width {
   width: 100%;
+}
+
+.feishu-sync-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 54px;
+  padding: 10px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fbff 100%);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.feishu-sync-option.is-disabled {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.feishu-sync-option :deep(.el-checkbox) {
+  flex: none;
+  height: auto;
+  margin-right: 0;
+}
+
+.feishu-sync-option__title {
+  color: #1e3a8a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.feishu-sync-option.is-disabled .feishu-sync-option__title {
+  color: #475569;
+}
+
+.feishu-sync-option p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: right;
 }
 
 .soft-textarea :deep(.el-textarea__inner) {

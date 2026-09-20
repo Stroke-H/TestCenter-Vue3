@@ -66,7 +66,14 @@ const handleDelete = (row: Project) => {
   })
 }
 
+const normalizeProjectCode = (value: string) => String(value || '').replace(/\s+/g, '')
+
+const handleProjectCodeInput = (value: string) => {
+  form.value.project_code = normalizeProjectCode(value)
+}
+
 const submitForm = async () => {
+  form.value.project_code = normalizeProjectCode(form.value.project_code)
   if (!form.value.project_code || !form.value.project_name) {
     ElMessage.warning('项目代号和名称不能为空')
     return
@@ -182,7 +189,12 @@ onMounted(fetchProjects)
     >
       <el-form :model="form" label-width="96px" class="project-form">
         <el-form-item label="项目代码" required>
-          <el-input v-model="form.project_code" placeholder="如 A1106" :disabled="dialogType === 'edit'" />
+          <el-input
+            v-model="form.project_code"
+            placeholder="如 A1106"
+            :disabled="dialogType === 'edit'"
+            @input="handleProjectCodeInput"
+          />
         </el-form-item>
         <el-form-item label="项目名称" required>
           <el-input v-model="form.project_name" placeholder="请输入项目全名" />

@@ -139,7 +139,12 @@ const fetchProjects = async () => {
   try {
     const res = await retryFetch(`${API_BASE}/config/projects`)
     const data = await res.json()
-    projects.value = Array.isArray(data) ? data : []
+    projects.value = Array.isArray(data)
+      ? data.map((item: ProjectOption) => ({
+          ...item,
+          project_code: String(item.project_code || '').trim()
+        }))
+      : []
   } catch (err) {
     console.error('Failed to fetch projects', err)
   }
@@ -175,10 +180,11 @@ const currentPreviewProject = computed(() => {
 })
 
 const filteredDevices = computed(() => {
-  if (!reportForm.value.project_code) return []
+  const projectCode = String(reportForm.value.project_code || '').trim()
+  if (!projectCode) return []
   return devices.value.filter((item) => {
     const allowedApps = (item.allowed_app || '').split(',').map(app => app.trim()).filter(Boolean)
-    return allowedApps.includes(reportForm.value.project_code)
+    return allowedApps.includes(projectCode)
   })
 })
 

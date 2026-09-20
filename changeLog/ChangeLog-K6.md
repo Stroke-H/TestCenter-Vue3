@@ -1,5 +1,10 @@
 # ChangeLog - K6 Integration
 
+## 2026-09-18
+
+### Updated
+- **DS App Group Rule**: `cn_name` 包含 `DS` 时，App Group 必须有且只有一个，允许 `TT_IAA_媒资库组` 或 `TT-Minis 分销组`。两者同时存在、混入其他分组或出现 `TT_IAP_媒资库组` 时继续上报分组异常。
+
 ## 2026-07-23
 
 ### Updated

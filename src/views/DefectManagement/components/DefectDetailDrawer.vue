@@ -10,6 +10,7 @@ import {
   Document,
   EditPen,
   Paperclip,
+  Position,
   RefreshLeft
 } from "@element-plus/icons-vue"
 import type { DefectTransitionPayload } from "../api"
@@ -39,6 +40,7 @@ const emit = defineEmits<{
   transition: [payload: DefectTransitionPayload]
   comment: [content: string]
   upload: [file: File]
+  "retry-feishu-sync": []
 }>()
 
 const commentText = ref("")
@@ -57,11 +59,20 @@ const attachmentPreview = reactive({
 let attachmentPreviewUrl = ""
 
 const defect = computed(() => props.detail?.defect || null)
+const feishuSync = computed(() => props.detail?.feishu_sync || null)
+const feishuSyncMeta = computed(() => {
+  const status = feishuSync.value?.sync_status
+  if (status === "synced") return { label: "已同步", type: "success" as const }
+  if (status === "failed") return { label: "同步失败", type: "danger" as const }
+  if (status === "syncing") return { label: "同步中", type: "warning" as const }
+  return { label: "等待同步", type: "info" as const }
+})
 const canEdit = computed(() => defect.value?.allowed_actions?.edit === true)
 const canProcess = computed(() => defect.value?.allowed_actions?.process === true)
 const canVerify = computed(() => defect.value?.allowed_actions?.verify === true)
 const canReopen = computed(() => defect.value?.allowed_actions?.reopen === true)
 const canComment = computed(() => defect.value?.allowed_actions?.comment === true)
+const canSyncToFeishu = computed(() => canEdit.value && (!feishuSync.value || feishuSync.value.sync_status === "failed"))
 const defectTypeLabel = computed(() => defectTypeOptions.find((item) => item.value === defect.value?.defect_type)?.label || defect.value?.defect_type || "未设置")
 const customFieldEntries = computed(() => {
   const values = defect.value?.custom_fields || {}
@@ -274,6 +285,18 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
             <span>编辑</span>
           </button>
           <button
+            v-if="canSyncToFeishu"
+            type="button"
+            class="header-btn header-btn--sync"
+            :disabled="acting"
+            title="将当前缺陷同步到飞书项目空间"
+            aria-label="同步到空间"
+            @click="emit('retry-feishu-sync')"
+          >
+            <el-icon><Position /></el-icon>
+            <span>{{ acting ? "同步中" : "同步到空间" }}</span>
+          </button>
+          <button
             type="button"
             class="header-btn header-btn--close"
             title="关闭 (Esc)"
@@ -365,6 +388,32 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
           </div>
           <div v-if="defect.tags?.length" class="tag-row">
             <el-tag v-for="tag in defect.tags" :key="tag" effect="plain" round class="custom-tag">{{ tag }}</el-tag>
+          </div>
+          <div v-if="feishuSync" class="feishu-sync-card" :class="`is-${feishuSync.sync_status}`">
+            <div class="feishu-sync-main">
+              <div class="feishu-sync-title">
+                <span>飞书项目</span>
+                <el-tag size="small" :type="feishuSyncMeta.type" effect="light" round>{{ feishuSyncMeta.label }}</el-tag>
+              </div>
+              <p v-if="feishuSync.last_error" class="feishu-sync-message" :title="feishuSync.last_error">
+                {{ feishuSync.last_error }}
+              </p>
+              <p v-else class="feishu-sync-message">
+                {{ feishuSync.work_item_id ? `工作项 ${feishuSync.work_item_id}` : "保存后由后台异步写入海外短剧空间" }}
+              </p>
+            </div>
+            <div class="feishu-sync-actions">
+              <el-button
+                v-if="feishuSync.work_item_url"
+                tag="a"
+                :href="feishuSync.work_item_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                size="small"
+                type="primary"
+                plain
+              >打开飞书</el-button>
+            </div>
           </div>
         </section>
 
@@ -677,6 +726,24 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
   color: #1d4ed8;
 }
 
+.header-btn--sync {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+  font-weight: 600;
+}
+
+.header-btn--sync:hover:not(:disabled) {
+  border-color: #86efac;
+  background: #dcfce7;
+  color: #166534;
+}
+
+.header-btn--sync:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .header-btn--close {
   width: 32px;
   padding: 0;
@@ -905,6 +972,52 @@ defineExpose({ closeTransition: () => { transitionVisible.value = false } })
 
 .custom-tag {
   font-size: 12px;
+}
+
+.feishu-sync-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 11px;
+  background: linear-gradient(135deg, #f8fbff 0%, #f5f8ff 100%);
+}
+
+.feishu-sync-card.is-failed {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+.feishu-sync-main {
+  min-width: 0;
+}
+
+.feishu-sync-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.feishu-sync-message {
+  max-width: 620px;
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feishu-sync-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
 }
 
 .issue-section {

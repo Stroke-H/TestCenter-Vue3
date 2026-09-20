@@ -121,14 +121,24 @@ func main() {
 			defects.GET("", services.ListDefectsHandler)
 			defects.POST("", services.RequireDefectPermission("defects.create"), services.CreateDefectHandler)
 			defects.POST("/batch-create", services.RequireDefectPermission("defects.create"), services.BatchCreateDefectsHandler)
+			defects.POST("/feishu-refresh", services.RequireDefectPermission("defects.create"), services.RefreshDefectsFromFeishuHandler)
 			defects.GET("/:id", services.GetDefectHandler)
 			defects.PUT("/:id", services.RequireDefectPermission("defects.edit"), services.UpdateDefectHandler)
 			defects.PUT("/:id/status", services.SetDefectStatusHandler)
 			defects.POST("/:id/transition", services.TransitionDefectHandler)
+			defects.POST("/:id/feishu-sync/retry", services.RequireDefectPermission("defects.edit"), services.RetryDefectFeishuSyncHandler)
 			defects.POST("/:id/comments", services.AddDefectCommentHandler)
 			defects.POST("/:id/attachments", services.RequireDefectPermission("defects.edit"), services.UploadDefectAttachmentHandler)
 			defects.GET("/:id/attachments/:attachment_id", services.DownloadDefectAttachmentHandler)
 			defects.DELETE("/:id/attachments/:attachment_id", services.RequireDefectPermission("defects.edit"), services.DeleteDefectAttachmentHandler)
+		}
+
+		feishuProjectOAuth := api.Group("/feishu-project/oauth")
+		{
+			feishuProjectOAuth.GET("/status", services.GetFeishuProjectOAuthStatusHandler)
+			feishuProjectOAuth.POST("/device/start", services.StartFeishuProjectOAuthHandler)
+			feishuProjectOAuth.GET("/device/status", services.PollFeishuProjectOAuthHandler)
+			feishuProjectOAuth.DELETE("/authorization", services.DeleteFeishuProjectOAuthHandler)
 		}
 
 		// Database Infrastructure
@@ -309,6 +319,10 @@ func main() {
 
 	// Initialize Feishu Bot Bridge
 	feishu.InitFeishuBridge(r)
+	if err := services.InitFeishuProjectOAuthService(); err != nil {
+		log.Printf("[FeishuProjectOAuth] schema initialization deferred: %v", err)
+	}
+	services.InitDefectFeishuSyncService()
 	services.InitScheduledTaskService()
 	services.InitAcceptanceTodoReminderService()
 	services.InitMonkeyRetentionService()

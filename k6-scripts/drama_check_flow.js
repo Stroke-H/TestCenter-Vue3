@@ -46,9 +46,11 @@ const APP_GROUP_METADATA_ERROR = String(APP_GROUP_VALIDATION_META.error || '').t
 const TOKEN = config.auth.x_token;
 const API_BASE = config.apiBase || "http://35.225.224.94:8080";
 const DS_EXCLUSIVE_GROUP_NAME = 'TT-Minis 分销组';
+const TT_IAA_MEDIA_GROUP_NAME = 'TT_IAA_媒资库组';
 const MD_PRODUCT_GROUP_NAME = 'MD-产品组';
-const NEW_AD_UNLOCK_GROUP_NAMES = ['网赚短剧', 'TT_IAA_媒资库组'];
+const NEW_AD_UNLOCK_GROUP_NAMES = ['网赚短剧', TT_IAA_MEDIA_GROUP_NAME];
 const COIN_UNLOCK_GROUP_NAME = 'TT_IAP_媒资库组';
+const DS_ALLOWED_GROUP_NAMES = [DS_EXCLUSIVE_GROUP_NAME, TT_IAA_MEDIA_GROUP_NAME];
 const AD_UNLOCK_ALLOWED_GROUP_NAMES = ['IAA组', '漫剧产品组-IAA', 'AIGC组', '内容二组-觉醒纪元', DS_EXCLUSIVE_GROUP_NAME, ...NEW_AD_UNLOCK_GROUP_NAMES];
 const SUPPORTED_UNLOCK_TYPES = ['coin', 'coins', 'ad'];
 const DUBBING_MARKETING_POSITION = '配音剧';
@@ -331,9 +333,9 @@ function buildUnlockTypeRuleErrors(dramaId, includeAppGroupMetadataError) {
     const groupHasIAA = groupNames.some(hasLooseIAA);
     const groupHasShortsWave = groupNames.some(hasLooseShortsWave);
     const groupHasAllowedAdUnlockName = groupNames.some(name => AD_UNLOCK_ALLOWED_GROUP_NAMES.some(canonical => matchesCanonicalGroupName(name, canonical)));
-    const hasOnlyDSExclusiveGroup = appGroupIds.length === 1
+    const hasOnlyAllowedDSGroup = appGroupIds.length === 1
         && groupNames.length === 1
-        && matchesCanonicalGroupName(groupNames[0], DS_EXCLUSIVE_GROUP_NAME);
+        && DS_ALLOWED_GROUP_NAMES.some(canonical => matchesCanonicalGroupName(groupNames[0], canonical));
     const hasOnlyMDProductGroup = appGroupIds.length === 1
         && groupNames.length === 1
         && matchesCanonicalGroupName(groupNames[0], MD_PRODUCT_GROUP_NAME);
@@ -356,10 +358,10 @@ function buildUnlockTypeRuleErrors(dramaId, includeAppGroupMetadataError) {
         });
     }
 
-    if (cnNameHasDS && groupMetadataAvailable && !hasOnlyDSExclusiveGroup) {
+    if (cnNameHasDS && groupMetadataAvailable && !hasOnlyAllowedDSGroup) {
         errors.push({
             type: 'unlock',
-            msg: `[分组规则] cn_name 包含 -DS 时，App Group 必须且只能为 ${DS_EXCLUSIVE_GROUP_NAME}。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`,
+            msg: `[分组规则] cn_name 包含 -DS 时，App Group 必须有且只有一个，并且只能为 ${DS_ALLOWED_GROUP_NAMES.join('或')}。cn_name=${formatEmpty(meta.cnName)}，app_groups=${formatGroupNames(groupNames)}`,
             count: 1
         });
     }

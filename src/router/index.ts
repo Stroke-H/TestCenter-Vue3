@@ -109,6 +109,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '个人设置', hidden: true }
       },
 	  {
+		path: 'feishu-project-auth',
+		name: 'FeishuProjectAuth',
+		component: () => import('@/views/FeishuProjectAuth/index.vue'),
+		meta: { title: '飞书项目授权', hidden: true }
+	  },
+	  {
 		path: 'my-todos',
 		name: 'MyTodos',
 		component: () => import('@/views/MyTodos/index.vue'),
