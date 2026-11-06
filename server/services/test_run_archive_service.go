@@ -266,6 +266,18 @@ func copyDramaRunDiagnosticArtifacts(reportDir string, artifactDir string) {
 		"drama_failure_summary.json",
 		"drama_retry_result.json",
 		"drama_retry_candidates.json",
+		"drama_initial_rules.json",
+		"drama_retry_rules.json",
+		"drama_initial_language_review.json",
+		"drama_retry_language_review.json",
+		"drama_initial_coverage.json",
+		"drama_retry_coverage.json",
+		"drama_scope.json",
+		"drama_initial_scope.json",
+		"drama_retry_scope.json",
+		"drama_retry_scope_changes.json",
+		"metadata_retry_case_ids.json",
+		"drama_k6_diagnostics.json",
 	} {
 		content, err := os.ReadFile(filepath.Join(reportDir, fileName))
 		if err != nil {
@@ -317,9 +329,24 @@ func GetTestRunArtifactHandler(c *gin.Context) {
 
 	rootDir := projectRootDir()
 	path := filepath.Join(testRunStorageRoot(rootDir), runID, "artifacts", "report.html")
+	if c.Query("view") != "original" {
+		if b, err := os.ReadFile(filepath.Join(testRunStorageRoot(rootDir), runID, "metadata.json")); err == nil {
+			var archive TestRunArchive
+			if json.Unmarshal(b, &archive) == nil && archive.TestType == "drama" {
+				serveDramaReportPage(c, rootDir, c.DefaultQuery("category", "all"), "剧集播放接口测试报告")
+				return
+			}
+		}
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "artifact not found"})
+		return
+	}
+	if c.Query("view") == "original" && c.Query("download") == "1" {
+		c.Header("Content-Disposition", `attachment; filename="drama-report.html"`)
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 		return
 	}
 	reportHTML := applyFullscreenReportPresentation(string(content))

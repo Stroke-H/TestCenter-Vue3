@@ -1,6 +1,11 @@
 {
     "vus": 30,
-    "maxDuration": "10m",
+    "skipGroupChecks": false,
+    "skipUnlockTypeChecks": false,
+    "skipFreeChapterChecks": false,
+    "skipCopyrightChecks": false,
+    "skipDubbingClassificationChecks": false,
+    "maxDuration": "30m",
     "testEnv": "test",
     "timeout": "15s",
     "reportTitle": "Drama Detection Report (核心剧集章节检测报表)"

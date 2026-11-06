@@ -30,6 +30,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '仪表盘', icon: 'Odometer' }
       },
       {
+        path: 'payment-records',
+        name: 'PaymentRecords',
+        component: () => import('@/views/PaymentRecords/index.vue'),
+        meta: { title: '支付记录', icon: 'CreditCard' }
+      },
+      {
         path: 'defects',
         name: 'DefectManagement',
         component: () => import('@/views/DefectManagement/index.vue'),

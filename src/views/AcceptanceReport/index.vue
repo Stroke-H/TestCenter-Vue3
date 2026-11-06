@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed, watch, markRaw, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { Plus, Search, Calendar, User, Money, Loading, Close } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Plus, Search, Calendar, User, Money, Loading, Close, DocumentCopy } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { retryFetch } from '@/utils/retryFetch'
 import { notifyAcceptanceReportsChanged } from '@/utils/acceptanceReportEvents'
@@ -56,6 +56,12 @@ const associatingDevices = ref(false)
 const deviceAssociationPanelStyle = ref<Record<string, string>>({})
 const autoFetchingDefectTitles = ref(false)
 const autoFetchDefectTitlesError = ref('')
+const requirementsPickerVisible = ref(false)
+const requirementsLoading = ref(false)
+const requirementsLoadError = ref('')
+const requirementsProjectCode = ref('')
+const requirementsReportID = ref('')
+const requirementsReports = ref<any[]>([])
 let autoFetchDefectTitlesTimer: ReturnType<typeof setTimeout> | null = null
 let autoFetchDefectTitlesSeq = 0
 
@@ -425,6 +431,76 @@ const getReportTimestamp = (report: any) => {
   return idTime ? Number(idTime) : 0
 }
 
+const requirementsProjects = computed(() => {
+  const options = new Map<string, { code: string; name: string }>()
+  for (const project of projects.value) {
+    const code = normalizeProjectCode(project.project_code || '')
+    if (code) options.set(code, { code, name: project.project_name })
+  }
+  for (const report of requirementsReports.value) {
+    const code = normalizeProjectCode(report.project_code || '')
+    if (code && !options.has(code)) options.set(code, { code, name: report.project_name || '' })
+  }
+  return [...options.values()].sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
+})
+
+const selectableRequirementReports = computed(() => requirementsReports.value
+  .filter(report => normalizeProjectCode(String(report.project_code || '')) === requirementsProjectCode.value
+    && String(report.update_requirements || '').trim())
+  .sort((a, b) => getReportTimestamp(b) - getReportTimestamp(a)))
+
+const selectedRequirementReport = computed(() => selectableRequirementReports.value
+  .find(report => report.id === requirementsReportID.value))
+
+const formatRequirementReportTime = (report: any) => {
+  const timestamp = getReportTimestamp(report)
+  return timestamp ? new Date(timestamp).toLocaleString('zh-CN', { hour12: false }) : '时间未记录'
+}
+
+const openRequirementsPicker = async () => {
+  requirementsProjectCode.value = ''
+  requirementsReportID.value = ''
+  requirementsReports.value = []
+  requirementsLoadError.value = ''
+  requirementsPickerVisible.value = true
+  requirementsLoading.value = true
+  try {
+    const response = await retryFetch(`${API_BASE}/acceptance-reports/list`, {
+      credentials: 'include', headers: { Authorization: authStore.token }
+    })
+    if (!response.ok) throw new Error(`加载历史报告失败 (${response.status})`)
+    const data = await response.json()
+    if (!Array.isArray(data)) throw new Error('历史报告数据格式异常')
+    requirementsReports.value = data
+    const latestReport = [...data]
+      .filter(report => String(report.project_code || '').trim())
+      .sort((a, b) => getReportTimestamp(b) - getReportTimestamp(a))[0]
+    requirementsProjectCode.value = normalizeProjectCode(String(latestReport?.project_code || ''))
+  } catch (error: any) {
+    requirementsLoadError.value = error?.message || '加载历史报告失败，请重试'
+  } finally {
+    requirementsLoading.value = false
+  }
+}
+
+const importRequirements = async () => {
+  const content = String(selectedRequirementReport.value?.update_requirements || '')
+  if (!content.trim()) return
+  const existing = String(reportForm.value.update_requirements || '')
+  if (existing.trim() && existing !== content) {
+    try {
+      await ElMessageBox.confirm('带入后将替换当前已填写的测试需求点，是否继续？', '带入历史需求', {
+        confirmButtonText: '确认替换', cancelButtonText: '取消', type: 'warning'
+      })
+    } catch { return }
+  }
+  reportForm.value.update_requirements = content
+  requirementsPickerVisible.value = false
+  ElMessage.success('历史需求点已带入')
+}
+
+watch(requirementsProjectCode, () => { requirementsReportID.value = '' })
+
 const latestProjectVersion = computed(() => {
   if (previewMode.value !== 'create') return ''
 
@@ -734,7 +810,10 @@ watch(() => reportForm.value.project_code, () => {
 })
 
 watch(previewVisible, (visible) => {
-  if (!visible) closeDeviceAssociationPanel()
+  if (!visible) {
+    closeDeviceAssociationPanel()
+    requirementsPickerVisible.value = false
+  }
 })
 
 watch(
@@ -1092,6 +1171,7 @@ onBeforeUnmount(() => {
           <div class="preview-detail">
             <h4 class="detail-title detail-title--inline">
               <span>测试需求点 (Acceptance Requirements)</span>
+              <el-button v-if="previewMode === 'create'" type="primary" plain size="small" :icon="DocumentCopy" @click="openRequirementsPicker">带入需求</el-button>
             </h4>
             <el-input
               v-model="reportForm.update_requirements"
@@ -1153,6 +1233,27 @@ onBeforeUnmount(() => {
           </el-button>
         </span>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="requirementsPickerVisible" title="带入历史需求" width="min(720px, calc(100vw - 32px))" align-center append-to-body destroy-on-close>
+      <div class="requirements-picker" v-loading="requirementsLoading">
+        <label class="requirements-picker__label">选择项目</label>
+        <el-select v-model="requirementsProjectCode" filterable clearable :disabled="requirementsLoading" placeholder="选择项目，或输入项目编号 / 名称搜索" class="requirements-picker__select">
+          <el-option v-for="project in requirementsProjects" :key="project.code" :value="project.code" :label="`${project.code} · ${project.name}`" />
+        </el-select>
+        <el-alert v-if="requirementsLoadError" :title="requirementsLoadError" type="error" :closable="false" show-icon />
+        <div class="requirements-picker__heading"><strong>历史报告需求点</strong><span>按报告更新时间从近到远</span></div>
+        <div class="requirements-picker__reports" role="group" aria-label="选择历史报告">
+          <button v-for="report in selectableRequirementReports" :key="report.id" type="button" class="requirements-report" :class="{ 'is-selected': requirementsReportID === report.id }" :aria-pressed="requirementsReportID === report.id" @click="requirementsReportID = report.id">
+            <div class="requirements-report__meta"><strong>{{ report.version || '未填写版本号' }}</strong><time>{{ formatRequirementReportTime(report) }}</time></div>
+            <span class="requirements-report__reporter">{{ report.reporter || report.test_owner || '未填写报告人' }}</span>
+            <p>{{ report.update_requirements }}</p>
+          </button>
+          <el-empty v-if="!requirementsLoading && !requirementsLoadError && !selectableRequirementReports.length" :description="requirementsProjectCode ? '该项目暂无包含需求点的历史报告' : '请先选择项目'" :image-size="64" />
+        </div>
+        <div v-if="selectedRequirementReport" class="requirements-picker__preview"><strong>需求预览</strong><pre>{{ selectedRequirementReport.update_requirements }}</pre></div>
+      </div>
+      <template #footer><el-button @click="requirementsPickerVisible = false">取消</el-button><el-button type="primary" :disabled="!selectedRequirementReport || requirementsLoading" @click="importRequirements">带入选中需求</el-button></template>
     </el-dialog>
 
     <Teleport to="body">
@@ -1237,6 +1338,22 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.requirements-picker { display:flex; flex-direction:column; gap:12px; }
+.requirements-picker__label { color:#334155; font-size:13px; font-weight:600; }
+.requirements-picker__select { width:100%; }
+.requirements-picker__heading { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:6px; font-size:13px; color:#334155; }
+.requirements-picker__heading span { font-size:12px; color:#94a3b8; }
+.requirements-picker__reports { display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto; }
+.requirements-report { width:100%; text-align:left; padding:12px 14px; border:1px solid #e2e8f0; border-radius:10px; background:#fff; color:#334155; cursor:pointer; font:inherit; transition:border-color .2s,background .2s; }
+.requirements-report:hover,.requirements-report:focus-visible { border-color:#93c5fd; background:#f8fafc; }
+.requirements-report.is-selected { border-color:#3b82f6; background:#eff6ff; }
+.requirements-report__meta { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+.requirements-report__meta strong { font-size:14px; color:#1e293b; }
+.requirements-report__meta time,.requirements-report__reporter { font-size:12px; color:#64748b; }
+.requirements-report p { margin:6px 0 0; font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.requirements-picker__preview { padding:14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; }
+.requirements-picker__preview strong { font-size:13px; color:#334155; }
+.requirements-picker__preview pre { margin:8px 0 0; max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-family:inherit; font-size:13px; line-height:1.7; color:#475569; }
 .acceptance-container {
   padding: 8px;
   font-family: 'Inter', -apple-system, sans-serif;

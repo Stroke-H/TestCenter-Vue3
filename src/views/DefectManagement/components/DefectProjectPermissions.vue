@@ -9,6 +9,9 @@ const props = defineProps<{ meta: DefectMeta | null }>()
 const loading = ref(false)
 const saving = ref(false)
 const savingDefaults = ref(false)
+const defaultMemberVisible = ref(false)
+const newDefaultUserID = ref("")
+const newDefaultRole = ref<DefectMemberDefaultRole["default_role"]>("tester")
 const search = ref("")
 const items = ref<DefectProjectPermission[]>([])
 const selectedCode = ref("")
@@ -21,6 +24,7 @@ const filteredItems = computed(() => {
 })
 const selected = computed(() => items.value.find((item) => item.project_code === selectedCode.value) || null)
 const availableAccounts = computed(() => (props.meta?.accounts || []).filter((account) => !draftMembers.value.some((member) => member.user_id === account.id)))
+const availableDefaultAccounts = computed(() => (props.meta?.accounts || []).filter((account) => !defaultMembers.value.some((member) => member.user_id === account.id)))
 const defaultRoleByUser = computed(() => new Map(defaultMembers.value.map((member) => [member.user_id, member.default_role])))
 
 const roleOptions = [
@@ -72,6 +76,36 @@ function addMember() {
     nickname: account.nickname,
     role_key: defaultRoleByUser.value.get(account.id) || "tester"
   })
+}
+
+function openAddDefaultMember() {
+  const account = availableDefaultAccounts.value[0]
+  if (!account) {
+    ElMessage.info("所有平台账号均已配置默认属性")
+    return
+  }
+  newDefaultUserID.value = account.id
+  newDefaultRole.value = "tester"
+  defaultMemberVisible.value = true
+}
+
+function confirmAddDefaultMember() {
+  const account = props.meta?.accounts.find((item) => item.id === newDefaultUserID.value)
+  if (!account) {
+    ElMessage.warning("请选择需要添加的平台账号")
+    return
+  }
+  if (defaultMembers.value.some((member) => member.user_id === account.id)) {
+    ElMessage.info("该成员已经配置默认属性")
+    return
+  }
+  defaultMembers.value.push({
+    user_id: account.id,
+    username: account.username,
+    nickname: account.nickname,
+    default_role: newDefaultRole.value
+  })
+  defaultMemberVisible.value = false
 }
 
 function changeMemberUser(index: number, userID: string) {
@@ -136,7 +170,10 @@ onMounted(load)
           <strong>默认成员属性</strong>
           <span>成员加入任意项目时，自动带入这里配置的人员属性，项目内仍可单独调整。</span>
         </div>
-        <el-button type="primary" plain :loading="savingDefaults" @click="saveDefaults">保存默认属性</el-button>
+        <div class="default-role-actions">
+          <el-button :icon="Plus" :disabled="!availableDefaultAccounts.length" @click="openAddDefaultMember">添加默认成员</el-button>
+          <el-button type="primary" plain :loading="savingDefaults" @click="saveDefaults">保存默认属性</el-button>
+        </div>
       </div>
       <div class="default-role-grid">
         <div v-for="member in defaultMembers" :key="member.user_id" class="default-role-item">
@@ -149,6 +186,11 @@ onMounted(load)
             <el-option v-for="role in defaultRoleOptions" :key="role.value" :label="role.label" :value="role.value" />
           </el-select>
         </div>
+      </div>
+      <div v-if="!defaultMembers.length" class="default-role-empty">
+        <el-icon><User /></el-icon>
+        <strong>尚未配置默认成员</strong>
+        <span>添加后，成员加入项目时会自动带入所选角色。</span>
       </div>
     </section>
 
@@ -239,6 +281,38 @@ onMounted(load)
         </div>
       </main>
     </div>
+
+    <el-dialog v-model="defaultMemberVisible" title="添加默认成员" width="440px" append-to-body destroy-on-close class="default-member-dialog">
+      <div class="default-member-form">
+        <label>
+          <span>平台账号</span>
+          <el-select v-model="newDefaultUserID" filterable placeholder="请选择平台账号">
+            <el-option
+              v-for="account in availableDefaultAccounts"
+              :key="account.id"
+              :label="account.nickname ? `${account.nickname} (${account.username})` : account.username"
+              :value="account.id"
+            />
+          </el-select>
+        </label>
+        <label>
+          <span>默认成员属性</span>
+          <el-select v-model="newDefaultRole">
+            <el-option v-for="role in defaultRoleOptions" :key="role.value" :label="role.label" :value="role.value">
+              <div class="role-option">
+                <strong>{{ role.label }}</strong>
+                <small>{{ role.description }}</small>
+              </div>
+            </el-option>
+          </el-select>
+        </label>
+        <p>保存后，该账号后续加入项目时会自动使用此默认属性，项目内仍可单独调整。</p>
+      </div>
+      <template #footer>
+        <el-button @click="defaultMemberVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!newDefaultUserID" @click="confirmAddDefaultMember">确认添加</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -332,6 +406,13 @@ onMounted(load)
   font-size: 12px;
 }
 
+.default-role-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .default-role-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
@@ -348,6 +429,66 @@ onMounted(load)
   border: 1px solid #e8eef5;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.9);
+}
+
+.default-role-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 92px;
+  margin-top: 14px;
+  border: 1px dashed #dbe5f0;
+  border-radius: 10px;
+  color: #94a3b8;
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.default-role-empty .el-icon {
+  font-size: 22px;
+}
+
+.default-role-empty strong {
+  color: #475569;
+  font-size: 13px;
+}
+
+.default-role-empty span {
+  font-size: 11px;
+}
+
+.default-member-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 4px 2px 2px;
+}
+
+.default-member-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.default-member-form label > span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.default-member-form .el-select {
+  width: 100%;
+}
+
+.default-member-form p {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 9px;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .default-role-user {

@@ -326,6 +326,11 @@ func (job *dramaRunJob) execute(ctx context.Context, rootDir string, env []strin
 		return
 	}
 
+	job.publishLog("[简介语种] 正在本地识别在线剧集简介...")
+	if err := prepareDramaDescriptionLanguages(ctx, rootDir, job.publishLog); err != nil {
+		job.fail(fmt.Sprintf("description language preparation failed: %v", err))
+		return
+	}
 	job.publishLog("\n[Step 2/2] 数据初始化成功，开始并发检测环节...")
 	dramaTotal := readDramaTotal(rootDir)
 	dramaCompleted := 0
@@ -344,7 +349,8 @@ func (job *dramaRunJob) execute(ctx context.Context, rootDir string, env []strin
 
 	job.publishLog("Ready to execute K6 test: drama_check_flow.js")
 	job.publishLog("----------------------------------------")
-	if err := job.runK6Stream(ctx, rootDir, env, handleProgressLine); err != nil {
+	runPhase := func(nextEnv []string) error { return job.runK6Stream(ctx, rootDir, nextEnv, handleProgressLine) }
+	if err := runPhase(env); err != nil {
 		if ctx.Err() != nil {
 			return
 		}
@@ -352,6 +358,10 @@ func (job *dramaRunJob) execute(ctx context.Context, rootDir string, env []strin
 		return
 	}
 
+	if err := finishDramaPhaseCoverage(ctx, rootDir, reportDir, env, "initial", readDramaIDs(rootDir), job.publishLog, runPhase); err != nil {
+		job.fail(fmt.Sprintf("drama coverage failed: %v", err))
+		return
+	}
 	if err := rerunDramaRetryCandidates(ctx, rootDir, reportDir, env, func(message string) {
 		if strings.HasPrefix(message, "DRAMA_PROGRESS:") {
 			job.handleControlMessage(message)
@@ -921,6 +931,12 @@ func RunK6TestHandler(c *gin.Context) {
 			ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:prepare data failed"))
 			return
 		}
+		if err := prepareDramaDescriptionLanguages(c.Request.Context(), rootDir, func(message string) {
+			ws.WriteMessage(websocket.TextMessage, []byte(message))
+		}); err != nil {
+			ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:description language preparation failed: "+err.Error()))
+			return
+		}
 		ws.WriteMessage(websocket.TextMessage, []byte("\n[Step 2/2] 数据初始化成功，开始并发检测环节..."))
 	}
 
@@ -1001,6 +1017,14 @@ func RunK6TestHandler(c *gin.Context) {
 		ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:k6 command failed"))
 	} else {
 		if scriptName == "drama_check_flow.js" {
+			if err := finishDramaPhaseCoverage(c.Request.Context(), rootDir, reportDir, env, "initial", readDramaIDs(rootDir), func(message string) {
+				ws.WriteMessage(websocket.TextMessage, []byte(message))
+			}, func(nextEnv []string) error {
+				return runCommand(c.Request.Context(), rootDir, nextEnv, "k6", "run", scriptPath)
+			}); err != nil {
+				ws.WriteMessage(websocket.TextMessage, []byte("EXECUTION_STATUS:failed:drama coverage failed: "+err.Error()))
+				return
+			}
 			if err := rerunDramaRetryCandidates(c.Request.Context(), rootDir, reportDir, env, func(message string) {
 				ws.WriteMessage(websocket.TextMessage, []byte(message))
 			}, true); err != nil {
@@ -1093,8 +1117,12 @@ func rerunDramaRetryCandidates(ctx context.Context, rootDir string, reportDir st
 	}
 
 	ids := make([]string, 0, len(candidates))
+	metadataRetryIDs := []string{}
 	retryAllDramas := false
 	for _, candidate := range candidates {
+		if strings.Contains(candidate.Kind, "app_group_metadata") || strings.Contains(candidate.Reason, "[App Group元数据]") {
+			metadataRetryIDs = append(metadataRetryIDs, candidate.DramaID)
+		}
 		if candidate.DramaID != "" {
 			ids = append(ids, candidate.DramaID)
 		}
@@ -1114,33 +1142,67 @@ func rerunDramaRetryCandidates(ctx context.Context, rootDir string, reportDir st
 	logIfPresent(logMessage, "DRAMA_PROGRESS:96", logToServer)
 	prepareCmd := exec.CommandContext(ctx, "node", filepath.Join("k6-scripts", "prepare_data.js"))
 	prepareCmd.Dir = rootDir
-	prepareCmd.Env = env
+	prepareCmd.Env = dramaPhaseEnv(env, map[string]string{"DRAMA_PREPARE_PHASE": "retry"})
 	prepareOutput, prepareErr := prepareCmd.CombinedOutput()
 	if len(prepareOutput) > 0 {
 		logIfPresent(logMessage, removeANSI(string(prepareOutput)), logToServer)
 	}
 	if prepareErr != nil {
-		return fmt.Errorf("refresh metadata before second confirmation: %w", prepareErr)
+		return &dramaPhaseError{fmt.Errorf("refresh metadata before second confirmation: %w", prepareErr)}
+	}
+	if err := prepareDramaDescriptionLanguages(ctx, rootDir, func(message string) {
+		logIfPresent(logMessage, message, logToServer)
+	}); err != nil {
+		return &dramaPhaseError{fmt.Errorf("refresh description languages before second confirmation: %w", err)}
 	}
 	if retryAllDramas {
 		if refreshedIDs := uniqueNonEmptyStrings(readDramaIDs(rootDir)); len(refreshedIDs) > 0 {
 			ids = refreshedIDs
+			metadataRetryIDs = refreshedIDs
 		}
+	}
+	// Preparation has already applied the allowlist. Do not reintroduce old
+	// candidates that moved out of scope (or are no longer online) on refresh.
+	eligibleIDs := uniqueNonEmptyStrings(readDramaIDs(rootDir))
+	filteredIDs, removedIDs := filterDramaRetryScope(ids, eligibleIDs)
+	var initialScope struct {
+		IncludedIDs []string `json:"includedIds"`
+	}
+	if b, err := os.ReadFile(filepath.Join(rootDir, reportDir, "drama_initial_scope.json")); err == nil && json.Unmarshal(b, &initialScope) == nil {
+		_, removedInitial := filterDramaRetryScope(initialScope.IncludedIDs, eligibleIDs)
+		removedIDs = uniqueNonEmptyStrings(append(removedIDs, removedInitial...))
+	}
+	if err := writeDramaJSON(filepath.Join(rootDir, reportDir, "drama_retry_scope_changes.json"), map[string]any{"removedIds": removedIDs, "reason": "刷新后不再属于在线白名单检测范围；移出范围不代表异常恢复"}); err != nil {
+		return &dramaPhaseError{err}
+	}
+	ids = filteredIDs
+	if len(ids) == 0 {
+		if err := writeDramaJSON(filepath.Join(rootDir, reportDir, "drama_retry_coverage.json"), dramaCoverageFile{Phase: "retry", Complete: true, ExpectedIDs: []string{}, CompletedIDs: []string{}, MissingIDs: []string{}}); err != nil {
+			return err
+		}
+		return appendDramaRetrySection(rootDir, reportDir, nil, "全部候选已移出在线白名单检测范围，不执行任何复验，不计为异常恢复。")
 	}
 
 	logIfPresent(logMessage, fmt.Sprintf("[Retry] 元数据刷新完成，开始对 %d 个case执行二次确认...", len(ids)), logToServer)
-	retryEnv := append([]string{}, env...)
-	retryEnv = append(retryEnv, "DRAMA_RETRY_PHASE=1", "DRAMA_RETRY_IDS="+strings.Join(ids, ","))
-
-	cmd := exec.CommandContext(ctx, "k6", "run", filepath.Join("k6-scripts", "drama_check_flow.js"))
-	cmd.Dir = rootDir
-	cmd.Env = retryEnv
-	output, runErr := cmd.CombinedOutput()
-	if len(output) > 0 {
-		logIfPresent(logMessage, filterDramaProgressMarkers(removeANSI(string(output))), logToServer)
+	idsPath := filepath.Join(rootDir, reportDir, "retry_case_ids.json")
+	if err := writeDramaJSON(idsPath, ids); err != nil {
+		return err
 	}
-	if runErr != nil {
-		return runErr
+	metadataIDsPath := filepath.Join(rootDir, reportDir, "metadata_retry_case_ids.json")
+	if err := writeDramaJSON(metadataIDsPath, uniqueNonEmptyStrings(metadataRetryIDs)); err != nil {
+		return err
+	}
+	retryEnv := dramaPhaseEnv(env, map[string]string{"DRAMA_RETRY_PHASE": "1", "DRAMA_RETRY_IDS": "", "DRAMA_CASE_IDS_FILE": idsPath, "DRAMA_METADATA_RETRY_IDS_FILE": metadataIDsPath})
+	runPhase := func(nextEnv []string) error {
+		// Stream and discard routine output, rather than buffering tens of
+		// thousands of per-drama lines in memory during a 30 minute phase.
+		return runDramaK6Command(ctx, rootDir, nextEnv)
+	}
+	if err := runPhase(retryEnv); err != nil {
+		return err
+	}
+	if err := finishDramaPhaseCoverage(ctx, rootDir, reportDir, retryEnv, "retry", ids, logMessage, runPhase); err != nil {
+		return err
 	}
 
 	result, err := readDramaRetryResult(rootDir, reportDir)
@@ -1181,6 +1243,11 @@ func removeDramaRetryArtifacts(rootDir string, reportDir string) {
 	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_result.json"))
 	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_report.html"))
 	_ = os.Remove(filepath.Join(reportsDir, "drama_failure_summary.json"))
+	_ = os.Remove(filepath.Join(reportsDir, "drama_completion.json"))
+	_ = os.Remove(filepath.Join(reportsDir, "drama_initial_completion.json"))
+	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_completion.json"))
+	_ = os.Remove(filepath.Join(reportsDir, "drama_initial_coverage.json"))
+	_ = os.Remove(filepath.Join(reportsDir, "drama_retry_coverage.json"))
 }
 
 func readDramaRetryCandidates(rootDir string, reportDir string) ([]dramaRetryCandidate, error) {
@@ -1220,6 +1287,16 @@ func appendDramaRetrySection(rootDir string, reportDir string, failures []dramaR
 	}
 
 	section := buildDramaRetrySection(failures, note)
+	var scopeChanges struct {
+		RemovedIDs []string `json:"removedIds"`
+	}
+	if b, err := os.ReadFile(filepath.Join(rootDir, reportDir, "drama_retry_scope_changes.json")); err == nil && json.Unmarshal(b, &scopeChanges) == nil && len(scopeChanges.RemovedIDs) > 0 {
+		section += fmt.Sprintf("<p>复验刷新后有%d部移出在线白名单范围，未执行检测；移出范围不代表异常恢复。</p>", len(scopeChanges.RemovedIDs))
+	}
+	var coverage dramaCoverageFile
+	if b, err := os.ReadFile(filepath.Join(rootDir, reportDir, "drama_retry_coverage.json")); err == nil && json.Unmarshal(b, &coverage) == nil {
+		section += dramaCoverageSection(coverage)
+	}
 	htmlContent := string(content)
 	if strings.Contains(htmlContent, "</body>") {
 		htmlContent = strings.Replace(htmlContent, "</body>", section+"</body>", 1)

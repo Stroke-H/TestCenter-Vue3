@@ -642,6 +642,11 @@ func runScheduledTaskWithRetries(ctx context.Context, task ScheduledTask, runID 
 		}
 
 		log.Printf("[ScheduledTask] %s (%s) attempt %d/%d failed: %v", task.Name, task.ID, attempt, maxAttempts, err)
+		// Playback already has per-case confirmation and completion continuation.
+		// Do not turn a deterministic phase/report failure into a full re-test.
+		if task.Function == scheduledFunctionEpisodePlayback && isDramaPhaseError(err) {
+			return attempts
+		}
 	}
 
 	return attempts
@@ -675,8 +680,16 @@ func runDramaPlaybackTask(ctx context.Context, testEnv string, reportDir string)
 	if err := runCommand(ctx, rootDir, env, "node", filepath.Join("k6-scripts", "prepare_data.js")); err != nil {
 		return fmt.Errorf("prepare data failed: %w", err)
 	}
-	if err := runCommand(ctx, rootDir, env, "k6", "run", filepath.Join("k6-scripts", "drama_check_flow.js")); err != nil {
+	if err := prepareDramaDescriptionLanguages(ctx, rootDir, nil); err != nil {
+		return fmt.Errorf("description language preparation failed: %w", err)
+	}
+	if err := runDramaK6Command(ctx, rootDir, env); err != nil {
 		return fmt.Errorf("k6 run failed: %w", err)
+	}
+	if err := finishDramaPhaseCoverage(ctx, rootDir, reportDir, env, "initial", readDramaIDs(rootDir), nil, func(nextEnv []string) error {
+		return runDramaK6Command(ctx, rootDir, nextEnv)
+	}); err != nil {
+		return err
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -777,7 +790,16 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 	failureDetail := formatScheduledDramaFailureDetail(dramaFailures)
 	groupFailureDetail := formatScheduledDramaFailureDetail(groupFailures)
 	classificationFailureDetail := formatScheduledDramaFailureDetail(classificationFailures)
+	languageFailures, otherFailures := splitDramaLanguageFailures(otherFailures)
+	freeFailures, otherFailures := splitDramaFreeChapterFailures(otherFailures)
+	copyrightFailures, otherFailures := splitDramaCopyrightFailures(otherFailures)
 	otherFailureDetail := formatScheduledDramaFailureDetail(otherFailures)
+	ruleEntryCount := dramaRuleCardCount(groupFailures, classificationFailures, languageFailures, copyrightFailures)
+	compactRules := ruleEntryCount > dramaRuleCardDetailLimit
+	if compactRules {
+		groupFailureDetail, classificationFailureDetail = "", ""
+		analysis = truncateDramaReportText(analysis, 800)
+	}
 
 	statusText := "通过"
 	if status != "Passed" {
@@ -797,6 +819,13 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 		builder.WriteString("异常剧集明细\n")
 		builder.WriteString(failureDetail + "\n\n")
 	}
+	if compactRules {
+		builder.WriteString(dramaRuleCardSummary(groupFailures, classificationFailures, languageFailures, copyrightFailures) + "\n")
+		if detailsURL := dramaErrorsDetailsURL(reportURL); detailsURL != "" {
+			builder.WriteString("查看完整错误内容：" + detailsURL + "\n")
+		}
+		builder.WriteString("\n")
+	}
 	if strings.TrimSpace(groupFailureDetail) != "" {
 		builder.WriteString("分组异常\n")
 		builder.WriteString(groupFailureDetail + "\n\n")
@@ -805,13 +834,39 @@ func buildScheduledTaskNotice(task ScheduledTask, status string, result string, 
 		builder.WriteString("分类异常\n")
 		builder.WriteString(classificationFailureDetail + "\n\n")
 	}
+	if len(languageFailures) > 0 && !compactRules {
+		builder.WriteString("语种异常\n")
+		if detailsURL := dramaLanguageDetailsURL(reportURL); detailsURL != "" {
+			builder.WriteString("查看异常明细：" + detailsURL + "\n")
+		}
+		for _, failure := range languageFailures {
+			builder.WriteString(formatScheduledDramaFailureDetail([]dramaFailureSummary{compactDramaLanguageFailure(failure)}) + "\n")
+		}
+		builder.WriteString("\n")
+	}
 	if strings.TrimSpace(otherFailureDetail) != "" {
+		// Free-chapter rows are rendered in their own category below.
 		builder.WriteString("其他异常\n")
 		builder.WriteString(otherFailureDetail + "\n\n")
 	}
+	if len(freeFailures) > 0 {
+		builder.WriteString("免费集数异常\n" + formatScheduledDramaFailureDetail(freeFailures) + "\n\n")
+	}
+	if len(copyrightFailures) > 0 && !compactRules {
+		builder.WriteString("版权异常\n" + formatScheduledDramaFailureDetail(copyrightFailures) + "\n\n")
+	}
+	if ruleEntryCount > 0 && !compactRules {
+		if detailsURL := dramaErrorsDetailsURL(reportURL); detailsURL != "" {
+			builder.WriteString("查看完整错误内容：" + detailsURL + "\n")
+		}
+	}
 	builder.WriteString("报告地址：" + reportURL)
 	text := sanitizeFeishuPlainText(builder.String())
-	return text, buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, dramaFailures, groupFailures, classificationFailures, otherFailures)
+	// Pass the original language rows to the card builder; it separates categories.
+	cardOther := append(append([]dramaFailureSummary{}, otherFailures...), languageFailures...)
+	cardOther = append(cardOther, freeFailures...)
+	cardOther = append(cardOther, copyrightFailures...)
+	return text, buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, dramaFailures, groupFailures, classificationFailures, cardOther)
 }
 
 func buildScheduledTaskNoticeByFunction(task ScheduledTask, status string, result string, duration string, reportURL string, startedAt time.Time, reportDir string) (string, map[string]any) {
@@ -961,9 +1016,11 @@ func SendDramaRunFeishuReportHandler(c *gin.Context) {
 	}
 
 	card := buildScheduledTaskFeishuCard(task, statusText, duration, reportURL, analysis, dramaFailures, groupFailures, classificationFailures, otherFailures)
-	if err := sendFeishuGroupInteractiveCard(card); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "发送飞书失败: " + err.Error()})
-		return
+	for _, page := range splitScheduledFeishuCards(card) {
+		if err := sendFeishuGroupInteractiveCard(page); err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "发送飞书失败: " + err.Error()})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "剧集播放接口测试 AI 报告已发送到飞书"})
@@ -1022,7 +1079,7 @@ func isScheduledDramaGroupError(line string) bool {
 
 func isScheduledDramaOtherError(line string) bool {
 	normalized := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "•"))
-	return strings.HasPrefix(normalized, "[命名规范]")
+	return strings.HasPrefix(normalized, "[命名规范]") || strings.HasPrefix(normalized, "[简介语种]") || strings.HasPrefix(normalized, "[免费集数]") || strings.HasPrefix(normalized, "[版权规则]")
 }
 
 func isScheduledDramaClassificationError(line string) bool {
@@ -1072,12 +1129,20 @@ func buildDramaFailuresForAI(failures []dramaFailureSummary) string {
 }
 
 func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duration string, reportURL string, analysis string, dramaFailures []dramaFailureSummary, groupFailures []dramaFailureSummary, classificationFailures []dramaFailureSummary, otherFailures []dramaFailureSummary) map[string]any {
+	languageFailures, otherFailures := splitDramaLanguageFailures(otherFailures)
+	freeFailures, otherFailures := splitDramaFreeChapterFailures(otherFailures)
+	copyrightFailures, otherFailures := splitDramaCopyrightFailures(otherFailures)
 	statusColor := "green"
-	if statusText != "通过" || len(dramaFailures) > 0 || len(groupFailures) > 0 || len(classificationFailures) > 0 || len(otherFailures) > 0 {
+	if statusText != "通过" || len(dramaFailures) > 0 || len(groupFailures) > 0 || len(classificationFailures) > 0 || len(otherFailures) > 0 || len(languageFailures) > 0 || len(freeFailures) > 0 || len(copyrightFailures) > 0 {
 		statusColor = "orange"
 	}
 	if statusText == "失败" {
 		statusColor = "red"
+	}
+	ruleEntryCount := dramaRuleCardCount(groupFailures, classificationFailures, languageFailures, copyrightFailures)
+	compactRules := ruleEntryCount > dramaRuleCardDetailLimit
+	if compactRules {
+		analysis = truncateDramaReportText(analysis, 800)
 	}
 
 	elements := []map[string]any{
@@ -1118,6 +1183,10 @@ func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duratio
 		}
 	}
 
+	if compactRules {
+		elements = append(elements, map[string]any{"tag": "hr"}, map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": "**规则异常摘要**\n" + dramaRuleCardSummary(groupFailures, classificationFailures, languageFailures, copyrightFailures)}})
+		groupFailures, classificationFailures, languageFailures, copyrightFailures = nil, nil, nil, nil
+	}
 	if len(groupFailures) > 0 {
 		elements = append(elements, map[string]any{"tag": "hr"})
 		elements = append(elements, map[string]any{
@@ -1158,6 +1227,28 @@ func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duratio
 		}
 	}
 
+	if len(languageFailures) > 0 {
+		heading := fmt.Sprintf("**语种异常（%d 部）**", len(languageFailures))
+		if detailsURL := dramaLanguageDetailsURL(reportURL); detailsURL != "" {
+			heading += "  [查看异常明细](" + detailsURL + ")"
+		}
+		elements = append(elements, map[string]any{"tag": "hr"}, map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": heading}})
+		for _, failure := range languageFailures {
+			elements = append(elements, map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": formatDramaFailureCardBlock(compactDramaLanguageFailure(failure))}})
+		}
+	}
+	if len(freeFailures) > 0 {
+		elements = append(elements, map[string]any{"tag": "hr"}, map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": fmt.Sprintf("**免费集数异常（%d 部）**", len(freeFailures))}})
+		for _, failure := range freeFailures {
+			elements = append(elements, map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": formatDramaFailureCardBlock(failure)}})
+		}
+	}
+	if len(copyrightFailures) > 0 {
+		elements = append(elements, map[string]any{"tag": "hr"}, map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": fmt.Sprintf("**版权异常（%d 部）**", len(copyrightFailures))}})
+		for _, failure := range copyrightFailures {
+			elements = append(elements, map[string]any{"tag": "div", "text": map[string]any{"tag": "lark_md", "content": formatDramaFailureCardBlock(failure)}})
+		}
+	}
 	if len(otherFailures) > 0 {
 		elements = append(elements, map[string]any{"tag": "hr"})
 		elements = append(elements, map[string]any{
@@ -1179,6 +1270,10 @@ func buildScheduledTaskFeishuCard(task ScheduledTask, statusText string, duratio
 	}
 
 	if strings.TrimSpace(reportURL) != "" {
+		if ruleEntryCount > 0 {
+			detailsURL := firstNonEmpty(dramaErrorsDetailsURL(reportURL), reportURL)
+			elements = append(elements, map[string]any{"tag": "action", "actions": []map[string]any{{"tag": "button", "text": map[string]any{"tag": "plain_text", "content": "查看完整错误内容"}, "url": detailsURL, "type": "primary"}}})
+		}
 		elements = append(elements, map[string]any{"tag": "hr"})
 		elements = append(elements, map[string]any{
 			"tag": "action",
@@ -1333,7 +1428,7 @@ func loadArchivedDramaFailures(runDir string, reportHTML string) []dramaFailureS
 	for _, item := range merged {
 		failures = append(failures, item)
 	}
-	return failures
+	return filterDramaScopeExcludedFailures(failures, filepath.Join(runDir, "artifacts"))
 }
 
 var dramaDetailsRegexp = regexp.MustCompile(`(?is)<details[^>]*>\s*<summary>\s*<b>\s*(.*?)\s*</b>\s*</summary>\s*<div[^>]*>\s*(.*?)\s*</div>\s*</details>`)
@@ -1447,6 +1542,7 @@ func loadScheduledDramaFailures(reportDir string) []dramaFailureSummary {
 	for _, item := range merged {
 		failures = append(failures, item)
 	}
+	failures = filterDramaScopeExcludedFailures(failures, filepath.Join(rootDir, reportDir))
 	enrichScheduledDramaFailures(rootDir, failures)
 	return failures
 }
@@ -1728,6 +1824,9 @@ func appendScheduledTaskAuditLog(task ScheduledTask, status string, result strin
 
 func summarizeScheduledDramaAuditFailures(failures []dramaFailureSummary) string {
 	dramaFailures, groupFailures, classificationFailures, otherFailures := splitScheduledDramaFailures(failures)
+	languageFailures, otherFailures := splitDramaLanguageFailures(otherFailures)
+	freeFailures, otherFailures := splitDramaFreeChapterFailures(otherFailures)
+	copyrightFailures, otherFailures := splitDramaCopyrightFailures(otherFailures)
 	parts := make([]string, 0, 4)
 	if len(dramaFailures) > 0 {
 		parts = append(parts, fmt.Sprintf("剧集错误 %d", len(dramaFailures)))
@@ -1740,6 +1839,15 @@ func summarizeScheduledDramaAuditFailures(failures []dramaFailureSummary) string
 	}
 	if len(otherFailures) > 0 {
 		parts = append(parts, fmt.Sprintf("其他错误 %d", len(otherFailures)))
+	}
+	if len(languageFailures) > 0 {
+		parts = append(parts, fmt.Sprintf("语种错误 %d", len(languageFailures)))
+	}
+	if len(freeFailures) > 0 {
+		parts = append(parts, fmt.Sprintf("免费集数错误 %d", len(freeFailures)))
+	}
+	if len(copyrightFailures) > 0 {
+		parts = append(parts, fmt.Sprintf("版权错误 %d", len(copyrightFailures)))
 	}
 	if len(parts) == 0 {
 		return "无异常"
@@ -2236,11 +2344,14 @@ func notifyScheduledTaskCreator(username string, text string, card map[string]an
 		return fmt.Errorf("no feishu open_id found for %s or minghong", username)
 	}
 	if len(card) > 0 {
-		if err := sendFeishuOpenIDInteractiveCard(openID, card); err != nil {
-			log.Printf("[ScheduledTask] interactive card send failed, falling back to text: %v", err)
-		} else {
-			return nil
+		pages := splitScheduledFeishuCards(card)
+		for index, page := range pages {
+			if err := sendFeishuOpenIDInteractiveCard(openID, page); err != nil {
+				log.Printf("[ScheduledTask] interactive card page %d/%d failed, falling back to text: %v", index+1, len(pages), err)
+				return sendFeishuOpenIDText(openID, text)
+			}
 		}
+		return nil
 	}
 	if err := sendFeishuOpenIDText(openID, text); err != nil {
 		return err

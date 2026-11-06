@@ -4,7 +4,28 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestNextDefectFeishuRetryStopsAfterFiveFailures(t *testing.T) {
+	now := time.Date(2026, 9, 28, 10, 0, 0, 0, time.Local)
+
+	nextRetryAt, stopped := nextDefectFeishuRetry(1, now)
+	if stopped {
+		t.Fatal("the first failed attempt should still be retried")
+	}
+	if expected := now.Add(time.Minute).Format(time.RFC3339Nano); nextRetryAt != expected {
+		t.Fatalf("expected first retry at %s, got %s", expected, nextRetryAt)
+	}
+
+	nextRetryAt, stopped = nextDefectFeishuRetry(defectFeishuMaxRetryCount, now)
+	if !stopped {
+		t.Fatal("the fifth failed attempt must stop automatic retries")
+	}
+	if nextRetryAt != "" {
+		t.Fatalf("stopped task must not have a next retry time, got %s", nextRetryAt)
+	}
+}
 
 func TestDefectFeishuPriorityUsesSeverity(t *testing.T) {
 	tests := map[int]string{1: "option_1", 2: "option_2", 3: "option_3", 4: "option_3"}

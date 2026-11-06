@@ -130,6 +130,11 @@ type ApiJsonField = 'headers' | 'body'
 
 const SHORT_DRAMA_API_CONFIG_STORAGE_KEY = 'testcenter.shortDramaApi.interfaces.v1'
 const DELETE_ACCOUNT_API_CONFIG_STORAGE_KEY = 'testcenter.deleteAccountApi.singleCase.v1'
+const DELETE_ACCOUNT_PROJECT_APPS: Record<string, string> = {
+  ShortsWave: 'com.company.shortsdrama.wave',
+  NovelNova: 'com.novelnova.readstory',
+  Mangogo: 'com.newdramas.mangogo'
+}
 
 // 自增 ID 计数器，确保每个接口条目有唯一标识
 let apiInterfaceIdCounter = 1
@@ -347,7 +352,7 @@ const deleteAccountEnvironment = ref<DeleteAccountEnvironment>(
     : 'test'
 )
 const deleteAccountCustomDomain = ref(savedDeleteAccountConfig?.customDomain || '')
-if (isDeleteAccount && ['ShortsWave', 'NovelNova'].includes(savedDeleteAccountConfig?.project || '')) {
+if (isDeleteAccount && savedDeleteAccountConfig?.project?.trim()) {
   projectName.value = savedDeleteAccountConfig!.project!
 }
 
@@ -389,6 +394,38 @@ const selectedDeleteAccountCase = computed<ApiInterface>(() => (
 ))
 const deleteAccountEditingBlock = ref<string | null>(null)
 const deleteAccountLoginInfo = ref('')
+const deleteAccountUID = ref('')
+type DeleteAccountMethod = 'uid' | 'headers'
+const deleteAccountMethod = ref<DeleteAccountMethod>('uid')
+const deleteAccountTargetSettingsVisible = computed(() => deleteAccountMethod.value === 'uid'
+  ? Boolean(deleteAccountUID.value.trim())
+  : Boolean(deleteAccountLoginInfo.value.trim()))
+const captureDeleteAccountMethod = () => ({
+  cases: JSON.parse(JSON.stringify(deleteAccountCases.value)) as ApiInterface[],
+  project: projectName.value,
+  environment: deleteAccountEnvironment.value,
+  customDomain: deleteAccountCustomDomain.value
+})
+const deleteAccountMethodSnapshots = {
+  uid: captureDeleteAccountMethod(),
+  headers: captureDeleteAccountMethod()
+}
+watch(deleteAccountMethod, (method, previous) => {
+  deleteAccountMethodSnapshots[previous] = captureDeleteAccountMethod()
+  const snapshot = deleteAccountMethodSnapshots[method]
+  deleteAccountCases.value = JSON.parse(JSON.stringify(snapshot.cases))
+  projectName.value = snapshot.project
+  deleteAccountEnvironment.value = snapshot.environment
+  deleteAccountCustomDomain.value = snapshot.customDomain
+  deleteAccountEditingBlock.value = null
+  deleteAccountLoginInfoState.value = 'idle'
+  deleteAccountLoginInfoSummary.value = '请填写当前途径的信息，确认请求配置后执行'
+})
+const deleteAccountLookupEnvironment = ref<ApiEnvironment>('test')
+const deleteAccountLookupLoading = ref(false)
+watch(deleteAccountUID, (value, previous) => {
+  if (value.trim() && !previous.trim()) projectName.value = ''
+})
 const deleteAccountLoginInfoSummary = ref('粘贴抓取到的 Optional([...]) 或 JSON 信息后自动解析')
 const deleteAccountLoginInfoState = ref<'idle' | 'success' | 'error'>('idle')
 let lastSavedDeleteAccountConfigSnapshot = ''
@@ -792,6 +829,7 @@ const parseDeleteAccountLoginInfo = (rawValue: string): Record<string, unknown> 
 }
 
 const applyDeleteAccountLoginInfo = (quiet = false) => {
+  if (deleteAccountMethod.value !== 'headers') return
   try {
     const parsedInfo = parseDeleteAccountLoginInfo(deleteAccountLoginInfo.value)
     const currentHeaders = parseApiHeaders(deleteAccountLoginCase.value.headers)
@@ -838,6 +876,55 @@ const applyDeleteAccountLoginInfo = (quiet = false) => {
     deleteAccountLoginInfoState.value = 'error'
     deleteAccountLoginInfoSummary.value = error.message || '匿名登录信息解析失败'
     if (!quiet) ElMessage.warning(deleteAccountLoginInfoSummary.value)
+  }
+}
+
+// This read-only lookup never sends an anonymous-login or deletion request.
+const lookupDeleteAccountUID = async (): Promise<boolean> => {
+  if (deleteAccountMethod.value !== 'uid') return false
+  const uid = deleteAccountUID.value.trim()
+  if (!uid || !projectName.value.trim()) {
+    ElMessage.warning('填写 UID 时必须选择项目')
+    return false
+  }
+  if (deleteAccountLookupLoading.value) return false
+  try {
+    const app = String(parseApiHeaders(deleteAccountLoginCase.value.headers).app || '').trim()
+    if (!app) throw new Error('请在匿名登录 Case 请求头中配置 app')
+    const project = projectName.value
+    const environment = deleteAccountEnvironment.value === 'custom'
+      ? deleteAccountLookupEnvironment.value : deleteAccountEnvironment.value
+    deleteAccountLookupLoading.value = true
+    const response = await fetch(buildBackendUrl('/api/delete-account/lookup-user'), {
+      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid, app, project, environment })
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || '后台用户查询失败')
+    if (deleteAccountMethod.value !== 'uid' || uid !== deleteAccountUID.value.trim() || project !== projectName.value ||
+        app !== String(parseApiHeaders(deleteAccountLoginCase.value.headers).app || '').trim() ||
+        environment !== (deleteAccountEnvironment.value === 'custom' ? deleteAccountLookupEnvironment.value : deleteAccountEnvironment.value)) {
+      throw new Error('查询期间配置已变化，请重新查询')
+    }
+    if (data.uid !== uid || !data.headers?.['device-uuid'] || data.headers.app !== app) throw new Error('用户查询结果缺少身份信息或不匹配')
+    for (const item of deleteAccountCases.value) {
+      const headers = parseApiHeaders(item.headers)
+      // Do not retain another device's identifiers or session token.
+      for (const key of Object.keys(headers)) {
+        if (['device-uuid', 'advertising-id', 'idfv', 'afid', 'x-session-token'].includes(key.toLowerCase())) delete headers[key]
+      }
+      item.headers = JSON.stringify({ ...headers, ...data.headers }, null, 2)
+    }
+    deleteAccountLoginInfoState.value = 'success'
+    deleteAccountLoginInfoSummary.value = `后台精确匹配 UID ${uid}，带入 ${Object.keys(data.headers).length} 项请求头（${data.start} 至 ${data.end}）；未找到的字段请人工检查。`
+    persistDeleteAccountConfig()
+    ElMessage.success('用户信息已带入；尚未执行匿名登录或删除')
+    return true
+  } catch (error: any) {
+    ElMessage.error(error.message || '后台用户查询失败')
+    return false
+  } finally {
+    deleteAccountLookupLoading.value = false
   }
 }
 
@@ -1507,13 +1594,29 @@ watch(deleteAccountCases, () => {
   try {
     const headers = parseApiHeaders(deleteAccountLoginCase.value.headers)
     const appID = String(headers.app || '')
-    if (appID === 'com.novelnova.readstory') projectName.value = 'NovelNova'
-    if (appID === 'com.company.shortsdrama.wave') projectName.value = 'ShortsWave'
+    if (deleteAccountMethod.value !== 'uid' || !deleteAccountUID.value.trim()) {
+      const matchedProject = Object.entries(DELETE_ACCOUNT_PROJECT_APPS).find(([, app]) => app === appID)?.[0]
+      if (matchedProject) projectName.value = matchedProject
+    }
   } catch {
     // 编辑中的 JSON 可能暂时不完整，完成编辑时会统一校验。
   }
   persistDeleteAccountConfig()
 }, { deep: true, flush: 'post' })
+
+watch(projectName, (project) => {
+  if (!isDeleteAccount) return
+  const app = DELETE_ACCOUNT_PROJECT_APPS[project]
+  if (!app) return
+  for (const item of deleteAccountCases.value) {
+    try {
+      const headers = parseApiHeaders(item.headers)
+      if (headers.app !== app) item.headers = JSON.stringify({ ...headers, app }, null, 2)
+    } catch {
+      // Do not overwrite unfinished JSON edits. Execution still validates JSON.
+    }
+  }
+})
 
 watch([testServer, projectName, deleteAccountEnvironment, deleteAccountCustomDomain], () => {
   if (isDeleteAccount) persistDeleteAccountConfig()
@@ -1555,6 +1658,15 @@ const domainMappings = {
   }
 }
 
+// Keep delete-account project routing isolated from other API tools.
+const deleteAccountDomainMappings: Record<string, Partial<Record<ApiEnvironment, string>>> = {
+  ...domainMappings,
+  Mangogo: {
+    test: 'http://35.225.224.94',
+    prod: 'https://api.mangogoshorts.com'
+  }
+}
+
 watch([toolName, projectName, testServer], () => {
   persistShortDramaApiConfig()
 }, { flush: 'post' })
@@ -1582,6 +1694,12 @@ const escapeDeleteAccountHTML = (value: unknown) => String(value ?? '')
   .replace(/'/g, '&#039;')
 
 const runDeleteAccountNestedCases = async () => {
+  const expectedUID = deleteAccountMethod.value === 'uid' ? deleteAccountUID.value.trim() : ''
+  if (deleteAccountMethod.value === 'uid' && !expectedUID) {
+    ElMessage.warning('请填写 UID，或切换到通过 request head 删号')
+    return
+  }
+  if (expectedUID && !await lookupDeleteAccountUID()) return
   const loginStep = deleteAccountLoginCase.value
   const deleteStep = deleteAccountDeleteCase.value
   if (!loginStep || !deleteStep) {
@@ -1610,7 +1728,10 @@ const runDeleteAccountNestedCases = async () => {
     return
   }
 
-  const projectDomains = domainMappings[projectName.value as keyof typeof domainMappings]
+  const projectDomains = deleteAccountDomainMappings[projectName.value]
+  // Snapshot the actual execution target before awaiting network requests.
+  const executionProject = projectName.value.trim() || '未选择项目（自定义）'
+  const executionEnvironment = deleteAccountServerOptions.find(item => item.value === deleteAccountEnvironment.value)?.label || deleteAccountEnvironment.value
   let baseDomain = ''
   if (deleteAccountEnvironment.value === 'custom') {
     try {
@@ -1624,7 +1745,7 @@ const runDeleteAccountNestedCases = async () => {
     baseDomain = projectDomains?.[deleteAccountEnvironment.value] || ''
   }
   if (!baseDomain) {
-    ElMessage.warning('当前项目或执行环境没有可用域名配置')
+    ElMessage.warning('当前项目或执行环境没有可用域名配置，请选择自定义环境并填写该项目的客户端接口域名')
     return
   }
 
@@ -1694,6 +1815,9 @@ const runDeleteAccountNestedCases = async () => {
     const userName = userData.user_name || '未知'
     const sessionToken = userData.session_token
     if (!sessionToken) throw new Error('登录响应中未找到有效 session_token')
+    if (expectedUID && String(userID) !== expectedUID) {
+      throw new Error('匿名登录返回的用户 ID 与填写 UID 不一致，已阻止删除；请检查后台 device_id 是否为实际登录设备标识')
+    }
 
     loginStep.status = 'success'
     loginStep.responseData = redactApiPayload(loginData, [String(sessionToken)])
@@ -1705,6 +1829,14 @@ const runDeleteAccountNestedCases = async () => {
         <div class="delete-account-confirm-lead">
           <span class="delete-account-confirm-badge"><i></i> CASE 1/2 已通过</span>
           <p>匿名登录成功，请确认账号身份后再执行下一步。</p>
+        </div>
+        <div class="delete-account-confirm-project">
+          <span class="delete-account-confirm-project__label">当前执行项目 · 重点核对</span>
+          <div class="delete-account-confirm-project__heading">
+            <strong>${escapeDeleteAccountHTML(executionProject)}</strong>
+            <span>${escapeDeleteAccountHTML(executionEnvironment)}</span>
+          </div>
+          <code>${escapeDeleteAccountHTML(loginHeaders.app || '未配置 app')}</code>
         </div>
         <div class="delete-account-confirm-user-card">
           <div class="delete-account-confirm-user-card__title">
@@ -3041,6 +3173,10 @@ onBeforeRouteLeave(() => {
 
         <div v-if="!isShortDramaApiTest" class="tool-title-section">
           <h1 class="tool-title">{{ toolName }}</h1>
+          <div v-if="isDeleteAccount" class="delete-account-method-tabs" role="tablist" aria-label="删号方式">
+            <button type="button" role="tab" :aria-selected="deleteAccountMethod === 'uid'" aria-controls="delete-account-uid-panel" :class="{ 'is-active': deleteAccountMethod === 'uid' }" :disabled="currentStatus === 'Executing' || deleteAccountLookupLoading" @click="deleteAccountMethod = 'uid'">通过 UID 删号</button>
+            <button type="button" role="tab" :aria-selected="deleteAccountMethod === 'headers'" aria-controls="delete-account-headers-panel" :class="{ 'is-active': deleteAccountMethod === 'headers' }" :disabled="currentStatus === 'Executing' || deleteAccountLookupLoading" @click="deleteAccountMethod = 'headers'">通过 request head 删号</button>
+          </div>
           <p class="tool-desc">{{ toolDesc }}</p>
         </div>
 
@@ -3051,49 +3187,21 @@ onBeforeRouteLeave(() => {
               <span>两个 Case 按顺序嵌套执行：匿名登录成功并人工确认后，才会进入删除账号 Case。</span>
             </div>
 
-            <div class="short-drama-settings-grid delete-account-settings-grid">
-              <label class="short-drama-setting">
-                <span class="short-drama-setting__label">执行环境</span>
-                <el-select v-model="deleteAccountEnvironment" placeholder="选择服务器" size="small" class="short-drama-setting__control">
-                  <el-option
-                    v-for="server in deleteAccountServerOptions"
-                    :key="server.value"
-                    :label="server.label"
-                    :value="server.value"
-                  />
+            <div v-if="deleteAccountMethod === 'uid'" id="delete-account-uid-panel" role="tabpanel" aria-label="通过 UID 删号" class="delete-account-login-info-card">
+              <strong>通过 UID 带入用户信息</strong>
+              <el-input v-model="deleteAccountUID" placeholder="填写用户 UID；填写后必须重新选择项目" :disabled="currentStatus === 'Executing'" clearable />
+              <div v-if="deleteAccountTargetSettingsVisible && deleteAccountEnvironment === 'custom'" style="margin:8px 0">
+                <span>运营后台查询环境：</span>
+                <el-select v-model="deleteAccountLookupEnvironment" size="small" style="width:140px">
+                  <el-option v-for="server in serverOptions" :key="server.value" :label="server.label" :value="server.value" />
                 </el-select>
-              </label>
-              <label
-                class="short-drama-setting"
-                :class="{ 'delete-account-project-setting--disabled': deleteAccountEnvironment === 'custom' }"
-              >
-                <span class="short-drama-setting__label">项目</span>
-                <el-select
-                  v-model="projectName"
-                  placeholder="选择项目"
-                  size="small"
-                  class="short-drama-setting__control"
-                  :disabled="deleteAccountEnvironment === 'custom'"
-                >
-                  <el-option label="ShortsWave" value="ShortsWave" />
-                  <el-option label="NovelNova" value="NovelNova" />
-                </el-select>
-              </label>
+              </div>
+              <el-button size="small" :loading="deleteAccountLookupLoading" :disabled="!deleteAccountUID.trim() || !projectName.trim() || currentStatus === 'Executing'" @click="lookupDeleteAccountUID">查询并带入</el-button>
+              <p>读取匿名登录请求头的 app，查询 2025-01-01 至今天的记录。执行时会重新查询，并核对登录 UID，人工确认后才删除。其他项目可输入项目名；无预设接口域名时请选择自定义环境，填写正确的客户端域名。</p>
+              <p v-if="deleteAccountLoginInfoState === 'success'">{{ deleteAccountLoginInfoSummary }}</p>
             </div>
 
-            <label v-if="deleteAccountEnvironment === 'custom'" class="short-drama-setting delete-account-custom-domain-setting">
-              <span class="short-drama-setting__label">自定义域名</span>
-              <el-input
-                v-model="deleteAccountCustomDomain"
-                size="small"
-                class="short-drama-setting__control"
-                placeholder="例如 https://api.example.com 或 http://192.168.1.10:8080"
-                @blur="finishDeleteAccountCustomDomainEditing"
-              />
-              <small>执行时将使用该域名拼接匿名登录和删除账号接口路径</small>
-            </label>
-
-            <div class="delete-account-login-info-card">
+            <div v-if="deleteAccountMethod === 'headers'" id="delete-account-headers-panel" role="tabpanel" aria-label="通过 request head 删号" class="delete-account-login-info-card">
               <div class="delete-account-login-info-card__header">
                 <div>
                   <strong>匿名登录信息</strong>
@@ -3127,6 +3235,53 @@ onBeforeRouteLeave(() => {
               </div>
               <p>解析结果会合并到下方“匿名登录”Case 的请求头；请求体保持接口要求的 JSON 结构。</p>
             </div>
+
+            <template v-if="deleteAccountTargetSettingsVisible">
+            <div class="short-drama-settings-grid delete-account-settings-grid">
+              <label class="short-drama-setting">
+                <span class="short-drama-setting__label">执行环境</span>
+                <el-select v-model="deleteAccountEnvironment" placeholder="选择服务器" size="small" class="short-drama-setting__control">
+                  <el-option
+                    v-for="server in deleteAccountServerOptions"
+                    :key="server.value"
+                    :label="server.label"
+                    :value="server.value"
+                  />
+                </el-select>
+              </label>
+              <label
+                class="short-drama-setting"
+                :class="{ 'delete-account-project-setting--disabled': deleteAccountEnvironment === 'custom' && deleteAccountMethod !== 'uid' }"
+              >
+                <span class="short-drama-setting__label">项目</span>
+                <el-select
+                  v-model="projectName"
+                  placeholder="选择项目"
+                  size="small"
+                  class="short-drama-setting__control"
+                  :disabled="deleteAccountEnvironment === 'custom' && deleteAccountMethod !== 'uid'"
+                  filterable
+                  allow-create
+                  default-first-option
+                >
+                  <el-option v-for="(_, project) in DELETE_ACCOUNT_PROJECT_APPS" :key="project" :label="project" :value="project" />
+                </el-select>
+              </label>
+            </div>
+
+            <label v-if="deleteAccountEnvironment === 'custom'" class="short-drama-setting delete-account-custom-domain-setting">
+              <span class="short-drama-setting__label">自定义域名</span>
+              <el-input
+                v-model="deleteAccountCustomDomain"
+                size="small"
+                class="short-drama-setting__control"
+                placeholder="例如 https://api.example.com 或 http://192.168.1.10:8080"
+                @blur="finishDeleteAccountCustomDomainEditing"
+              />
+              <small>执行时将使用该域名拼接匿名登录和删除账号接口路径</small>
+            </label>
+
+            </template>
 
             <template v-for="(deleteCase, deleteCaseIndex) in deleteAccountCases" :key="deleteCase.id">
               <div
@@ -4407,6 +4562,45 @@ onBeforeRouteLeave(() => {
 </template>
 
 <style scoped>
+.delete-account-method-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 14px 0 12px;
+  padding: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f1f5f9;
+}
+
+.delete-account-method-tabs > button {
+  flex: 1;
+  padding: 10px 6px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #64748b;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .18s ease, color .18s ease, box-shadow .18s ease;
+}
+
+.delete-account-method-tabs > button.is-active {
+  color: #4f46e5;
+  background: #fff;
+  box-shadow: 0 2px 6px #0f172a0d;
+}
+
+.delete-account-method-tabs > button:focus-visible {
+  outline: 2px solid #818cf8;
+  outline-offset: 2px;
+}
+
+.delete-account-method-tabs > button:disabled {
+  cursor: not-allowed;
+  opacity: .6;
+}
 /* ==================== 页面容器 ==================== */
 .com-api-container {
   display: flex;
@@ -6841,6 +7035,52 @@ button:disabled {
   color: #64748b;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.delete-account-confirm-project {
+  padding: 14px 16px;
+  border: 1px solid #c7d2fe;
+  border-left: 4px solid #6366f1;
+  border-radius: 12px;
+  background: #eef2ff;
+  text-align: left;
+}
+
+.delete-account-confirm-project__label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6366f1;
+}
+
+.delete-account-confirm-project__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 7px 0;
+}
+
+.delete-account-confirm-project__heading strong {
+  font-size: 20px;
+  color: #312e81;
+  overflow-wrap: anywhere;
+}
+
+.delete-account-confirm-project__heading > span {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 11px;
+  color: #4338ca;
+}
+
+.delete-account-confirm-project > code {
+  display: block;
+  font-size: 11px;
+  color: #64748b;
+  overflow-wrap: anywhere;
 }
 
 .delete-account-confirm-user-card {

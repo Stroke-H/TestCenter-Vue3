@@ -57,6 +57,7 @@ func main() {
 		api.GET("/ws/jungle", services.JungleChessWSHandler)
 		// Generic HTTP proxy to avoid CORS for external APIs
 		api.POST("/proxy", services.ProxyHandler)
+		api.POST("/delete-account/lookup-user", services.DeleteAccountLookupHandler)
 
 		// GoFCM push test tool (Protected)
 		pushTest := api.Group("/push-test")
@@ -131,6 +132,15 @@ func main() {
 			defects.POST("/:id/attachments", services.RequireDefectPermission("defects.edit"), services.UploadDefectAttachmentHandler)
 			defects.GET("/:id/attachments/:attachment_id", services.DownloadDefectAttachmentHandler)
 			defects.DELETE("/:id/attachments/:attachment_id", services.RequireDefectPermission("defects.edit"), services.DeleteDefectAttachmentHandler)
+		}
+
+		// Payment Records (Protected)
+		paymentRecords := api.Group("/payment-records")
+		{
+			paymentRecords.GET("", services.ListPaymentRecordsHandler)
+			paymentRecords.POST("", services.CreatePaymentRecordHandler)
+			paymentRecords.PUT("/:id", services.UpdatePaymentRecordHandler)
+			paymentRecords.PATCH("/:id/status", services.UpdatePaymentRecordStatusHandler)
 		}
 
 		feishuProjectOAuth := api.Group("/feishu-project/oauth")
@@ -231,6 +241,10 @@ func main() {
 			testRuns.POST("/:runId/issue-dispositions/resolve", services.ResolveDramaIssueDispositionsHandler)
 			testRuns.PUT("/:runId/issue-dispositions", services.SaveDramaIssueDispositionHandler)
 			testRuns.GET("/:runId/logs", services.GetTestRunLogsHandler)
+			testRuns.GET("/:runId/language-errors", services.GetDramaLanguageDetailsHandler)
+			testRuns.GET("/:runId/errors", services.GetDramaErrorsPageHandler)
+			testRuns.GET("/:runId/report-data", services.GetDramaReportDataHandler)
+			testRuns.GET("/:runId/report-data/:issueId", services.GetDramaReportIssueHandler)
 			testRuns.GET("/:runId/artifacts/:artifact", services.GetTestRunArtifactHandler)
 		}
 

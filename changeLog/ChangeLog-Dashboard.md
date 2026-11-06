@@ -1,5 +1,31 @@
 # ChangeLog - Dashboard
 
+## 2026-11-03
+
+### Updated
+- **Delete Account Method Tabs**: 删号标题下新增UID与request head双页签，分别展示后台查询或请求头填写入口。UID模式必填UID且精确匹配，request head模式不读取残留UID；两种方式切换时独立暂存请求配置、项目及环境，查询/执行期间禁止切换，原人工确认保留。
+- **Delete Account UID Lookup**: 删号卡片新增可选UID及只读查询带入。填写UID后必须重新选择项目；服务端使用已配置运营后台账号进行pwd_login，携带x-token精确查询app和UID，日期固定从2025-01-01至访问当天（北京时间）。仅白名单映射设备、广告ID、版本及设备环境字段，不复用后台session/refresh token。带入两张独立Case并清理旧设备标识；执行前重新查询，匿名登录返回用户ID与目标UID不一致时禁止进入删除确认，原人工确认步骤保留。
+- **Custom Domain Isolation**: 自定义客户端域名与运营后台查询环境分离，后台账号不会发送到自定义域名；UID模式下允许选择/输入项目名，缺少项目或有效设备标识时不执行。无预设客户端域名的项目需明确填写实际域名。不改变短剧接口或其他工具行为。
+
+## 2026-10-27
+
+### Updated
+- **Payment Quick Status Actions**: 支付流水“未退款”支持点击确认变更为已退款；“未发起 / 已发起”支持点击选择其他申报状态，更新后同步飞书多维表格并刷新余额和筛选结果。已退款与申报完成保持普通点击打开详情。
+- **Status-only Update**: 新增只更新指定状态的接口，校验原状态并锁定记录，避免快捷操作覆盖金额等其他字段；同步失败时保留本地状态和失败原因。
+
+## 2026-10-14
+
+### Added
+- **Payment Records**: 左侧导航在仪表盘下新增“支付记录”，提供支付记录列表、新增记录、关键词/日期/支付方式筛选、分页与累计/本月金额概览；记录持久化保存支付时间、支付人、金额、支付方式、消费应用、备注及平台创建人。
+- **Payment Record Feishu Sync**: 新增或编辑支付记录时自动创建或更新指定飞书多维表格行，首次使用会初始化支付字段；平台保留同步状态和错误，飞书临时异常不会阻断本地记录落库。
+
+### Changed
+- **Virtual Card Balance Overview**: 支付记录页面第三张概览卡改为“虚拟卡余额”，当前暂定展示 500 美元可用余额。
+- **Payment Provider Options**: 支付方式选项统一调整为 `Stripe`、`Breeze`、`Adyen` 和 `Paypal`，新增记录默认选择 `Stripe`。
+- **Payment Amount Presets**: 新增支付记录的金额改为 `$3.99`、`$4.99`、`$9.99`、`$19.99` 四档快捷选择，并保留“自定义”金额输入。
+- **Consumer App Selection**: “交易 / 订单号”改为“消费应用”，提供 ShortsWave、Mangogo、CocoShorts 的 iOS/Android 双端选项及自定义输入。
+- **Payment Record Maintenance**: 支付记录支持编辑，并新增“退款状态”和“对公支付申报状态”；虚拟卡余额按 500 美元初始额度扣减未退款记录金额，已退款记录自动恢复余额。
+
 ## 2026-07-02
 
 ### Added

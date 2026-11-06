@@ -20,7 +20,8 @@ import {
   Iphone,
   Lock,
   Bell,
-  Connection
+  Connection,
+  CreditCard
 } from '@element-plus/icons-vue'
 import { User as UserMenuIcon } from '@element-plus/icons-vue'
 
@@ -67,6 +68,7 @@ function canDisplayMenuItem(item: MenuItem) {
 const menuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [
     { path: '/dashboard', title: '仪表盘', icon: Odometer },
+    { path: '/payment-records', title: '支付记录', icon: CreditCard },
     { path: '/defects', title: '缺陷管理', icon: DefectIcon, permissionKey: 'defects.visible' },
     {
       path: '/report_center',

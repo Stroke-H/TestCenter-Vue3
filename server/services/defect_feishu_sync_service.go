@@ -33,6 +33,10 @@ const (
 	defectFeishuTomatoTemplateID    = "3365448"
 	defectFeishuTomatoBusinessTT    = "687f005893c29a184c13b872"
 	defectFeishuTomatoBusinessOther = "687f005893c29a184c13b873"
+
+	// A failed task may run at most five times. A manual retry explicitly
+	// requeues the task and resets this counter, giving the user a fresh attempt.
+	defectFeishuMaxRetryCount = 5
 )
 
 type defectFeishuSpaceConfig struct {
@@ -301,7 +305,8 @@ func processDueDefectFeishuSyncs(ctx context.Context, limit int) error {
 	}
 	now := time.Now().Format(time.RFC3339Nano)
 	rows, err := db.QueryContext(ctx, `SELECT defect_id FROM defect_feishu_syncs
-		WHERE sync_status IN ('pending','failed') AND next_retry_at<=? ORDER BY updated_at ASC LIMIT ?`, now, limit)
+		WHERE sync_status IN ('pending','failed') AND retry_count<? AND next_retry_at<=?
+		ORDER BY updated_at ASC LIMIT ?`, defectFeishuMaxRetryCount, now, limit)
 	if err != nil {
 		return err
 	}
@@ -317,7 +322,8 @@ func processDueDefectFeishuSyncs(ctx context.Context, limit int) error {
 	rows.Close()
 	for _, id := range ids {
 		result, err := db.ExecContext(ctx, `UPDATE defect_feishu_syncs SET sync_status='syncing',
-			last_attempt_at=?, updated_at=? WHERE defect_id=? AND sync_status IN ('pending','failed')`, now, now, id)
+			last_attempt_at=?, updated_at=? WHERE defect_id=? AND sync_status IN ('pending','failed') AND retry_count<?`,
+			now, now, id, defectFeishuMaxRetryCount)
 		if err != nil {
 			continue
 		}
@@ -326,8 +332,14 @@ func processDueDefectFeishuSyncs(ctx context.Context, limit int) error {
 			continue
 		}
 		if err := syncDefectToFeishu(ctx, id); err != nil {
-			markDefectFeishuSyncFailed(ctx, id, err)
-			log.Printf("[DefectFeishuSync] defect %s failed: %v", id, err)
+			retryCount, stopped := markDefectFeishuSyncFailed(ctx, id, err)
+			if stopped {
+				log.Printf("[DefectFeishuSync] defect %s failed on attempt %d/%d; automatic retries stopped: %v",
+					id, retryCount, defectFeishuMaxRetryCount, err)
+			} else {
+				log.Printf("[DefectFeishuSync] defect %s failed on attempt %d/%d: %v",
+					id, retryCount, defectFeishuMaxRetryCount, err)
+			}
 		}
 	}
 	return nil
@@ -980,19 +992,32 @@ func markDefectFeishuSyncPending(ctx context.Context, defectID, workItemID, work
 	return err
 }
 
-func markDefectFeishuSyncFailed(ctx context.Context, defectID string, syncErr error) {
+func markDefectFeishuSyncFailed(ctx context.Context, defectID string, syncErr error) (int, bool) {
 	db, _, err := DatabaseManager.DB(ctx)
 	if err != nil {
-		return
+		return 0, false
 	}
 	var retryCount int
 	_ = db.QueryRowContext(ctx, "SELECT retry_count FROM defect_feishu_syncs WHERE defect_id=?", defectID).Scan(&retryCount)
 	retryCount++
-	delay := time.Duration(1<<minDefectFeishuInt(retryCount-1, 6)) * time.Minute
 	now := time.Now()
+	nextRetryAt, stopped := nextDefectFeishuRetry(retryCount, now)
+	errorText := syncErr.Error()
+	if stopped {
+		errorText += fmt.Sprintf("（自动尝试已达 %d 次，已停止；可手动重新同步）", defectFeishuMaxRetryCount)
+	}
 	_, _ = db.ExecContext(ctx, `UPDATE defect_feishu_syncs SET sync_status='failed', retry_count=?,
 		last_error=?, next_retry_at=?, updated_at=? WHERE defect_id=?`, retryCount,
-		truncateDefectFeishuText(syncErr.Error(), 2000), now.Add(delay).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), defectID)
+		truncateDefectFeishuText(errorText, 2000), nextRetryAt, now.Format(time.RFC3339Nano), defectID)
+	return retryCount, stopped
+}
+
+func nextDefectFeishuRetry(failedAttempts int, now time.Time) (string, bool) {
+	if failedAttempts >= defectFeishuMaxRetryCount {
+		return "", true
+	}
+	delay := time.Duration(1<<minDefectFeishuInt(failedAttempts-1, 6)) * time.Minute
+	return now.Add(delay).Format(time.RFC3339Nano), false
 }
 
 func minDefectFeishuInt(a, b int) int {

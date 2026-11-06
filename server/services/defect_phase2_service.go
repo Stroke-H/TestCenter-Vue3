@@ -576,11 +576,11 @@ func listDefectMemberDefaultRoles(ctx context.Context) ([]DefectMemberDefaultRol
 		}
 		configured[userID] = roleKey
 	}
-	result := make([]DefectMemberDefaultRole, 0, len(accounts))
+	result := make([]DefectMemberDefaultRole, 0, len(configured))
 	for _, account := range accounts {
-		roleKey := configured[account.ID]
-		if roleKey == "" {
-			roleKey = "tester"
+		roleKey, exists := configured[account.ID]
+		if !exists {
+			continue
 		}
 		result = append(result, DefectMemberDefaultRole{
 			UserID: account.ID, Username: account.Username, Nickname: account.Nickname, DefaultRole: roleKey,

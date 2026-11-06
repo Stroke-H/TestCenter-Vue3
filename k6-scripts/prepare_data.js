@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import { filterDramaInspectionScope } from './drama_scope.js';
+import { prepareDramaRuleChecks } from './drama_prepared_rules.js';
 
 // 从环境变量读取账号配置，避免在仓库中保留真实登录信息
 const EMAIL = process.env.EMAIL || "";
@@ -129,7 +131,7 @@ async function main() {
   const match = setCookieHeader.match(/x-token=([^;]+)/);
   if (match && match[1]) {
     xToken = match[1];
-    console.log(`✅ 成功获取 x-token: ${xToken.substring(0, 15)}...`);
+    console.log('✅ 成功获取 x-token（认证信息已隐藏）');
   } else {
     console.error('❌ 在 Cookie 中未找到 x-token 字段:', setCookieHeader);
     process.exit(1);
@@ -160,7 +162,7 @@ async function main() {
   const dramaMeta = {};
   try {
      // 兼容性识别：如果返回的是 CSV 格式 (含有 _id,int_id 表头)
-     if (dramaDataText.includes('_id') || dramaDataText.includes(',')) {
+     if (!/^[\[{]/.test(dramaDataText.trim()) && (dramaDataText.includes('_id') || dramaDataText.includes(','))) {
         console.log('📝 检测到 CSV 格式，正在提取 hex _id 列与剧集元信息...');
         const lines = dramaDataText.split(/[\n\r]+/).filter(l => l.trim() !== '');
         const headers = parseCSVLine(lines[0]).map(value => value.trim());
@@ -177,7 +179,7 @@ async function main() {
      } else {
         // 兜底逻辑：尝试作为 JSON 解析
         const rawJson = JSON.parse(dramaDataText);
-        const rawList = Array.isArray(rawJson) ? rawJson : [];
+        const rawList = Array.isArray(rawJson) ? rawJson : Array.isArray(rawJson?.data) ? rawJson.data : [];
         dramaIds = rawList.map(item => {
           if (typeof item === 'string') return item;
           const id = String(item?._id || item?.id || item?.drama_id || '').trim();
@@ -189,8 +191,16 @@ async function main() {
               cn_name: item?.cn_name,
               created_at: item?.created_at,
               unlock_type: item?.unlock_type,
+              unlock_type_available: item?.unlock_type !== undefined,
+              free_chapters: item?.free_chapters,
               marketing_position: item?.marketing_position,
-              app_groups: item?.app_groups
+              marketing_position_available: item?.marketing_position !== undefined,
+              description: item?.description,
+              lang: item?.lang,
+              app_groups: item?.app_groups,
+              app_groups_available: item?.app_groups !== undefined,
+              copyright: item?.copyright,
+              copyright_expire_at: item?.copyright_expire_at
             });
             return id;
           }
@@ -232,6 +242,45 @@ async function main() {
     console.warn(`⚠️ App Group 元数据不可用，本轮相关剧集将进入二次确认: ${appGroupResult.error}`);
   }
 
+  const inspectionScope = filterDramaInspectionScope(dramaIds, dramaMeta, appGroups, appGroupResult.available);
+  inspectionScope.phase=process.env.DRAMA_PREPARE_PHASE==='retry'?'retry':'initial';
+  inspectionScope.generatedAt=new Date().toISOString();
+  const diagnosticDir = process.env.DRAMA_REPORT_DIR;
+  if(diagnosticDir) {
+    const dir=path.resolve(path.dirname(OUTPUT_FILE),diagnosticDir);
+    fs.mkdirSync(dir,{recursive:true});
+    fs.writeFileSync(path.join(dir,'drama_scope.json'),JSON.stringify(inspectionScope,null,2));
+    fs.writeFileSync(path.join(dir,`drama_${inspectionScope.phase}_scope.json`),JSON.stringify(inspectionScope,null,2));
+  }
+  if(inspectionScope.unresolved.length) throw new Error(`白名单范围无法确认：${inspectionScope.unresolved.length}部剧的分组元数据缺失或分组ID无法解析，禁止当作过滤或通过。`);
+  dramaIds=inspectionScope.includedIds;
+  const eligibleSet=new Set(dramaIds);
+  for(const id of Object.keys(dramaMeta))if(!eligibleSet.has(id))delete dramaMeta[id];
+  console.log(`白名单筛选完成：原始${inspectionScope.sourceCount}，参与${dramaIds.length}，范围外过滤${inspectionScope.excludedIds.length}`);
+
+  // Metadata rules finish here, independently of playback and language recognition.
+  const ruleConfigPath = path.join(import.meta.dirname, 'k6_config.json');
+  const ruleConfig = fs.existsSync(ruleConfigPath) ? JSON.parse(fs.readFileSync(ruleConfigPath, 'utf8')) : {};
+  let retryContext = {};
+  if (inspectionScope.phase === 'retry') {
+    if (!diagnosticDir) throw new Error('二次确认缺少运行目录，无法确认字段规则复验范围');
+    const candidatePath = path.resolve(path.dirname(OUTPUT_FILE), diagnosticDir, 'drama_retry_candidates.json');
+    const previousCandidates = JSON.parse(fs.readFileSync(candidatePath, 'utf8')).candidates;
+    if (!Array.isArray(previousCandidates)) throw new Error('二次确认候选文件无效，禁止扩大字段规则复验范围');
+    const globalMetadataRetry = previousCandidates.some(item => String(item.kind || '').split(',').includes('app_group_metadata'));
+    retryContext = {
+      candidateIds: globalMetadataRetry ? dramaIds : previousCandidates.map(item => item.dramaId),
+      metadataRetryIds: globalMetadataRetry ? dramaIds : previousCandidates.filter(item => String(item.kind || '').includes('app_group_metadata') || String(item.reason || '').includes('[App Group元数据]')).map(item => item.dramaId),
+    };
+  }
+  const ruleResult = prepareDramaRuleChecks(dramaIds, dramaMeta, appGroups, appGroupResult.available, ruleConfig, inspectionScope.phase, Date.now(), retryContext);
+  const { failures, candidates, ...preparedRuleValidation } = ruleResult;
+  if (diagnosticDir) {
+    const dir = path.resolve(path.dirname(OUTPUT_FILE), diagnosticDir);
+    fs.writeFileSync(path.join(dir, `drama_${inspectionScope.phase}_rules.json`), JSON.stringify(ruleResult, null, 2));
+  }
+  console.log(`[字段规则] 收集阶段检查完成：${dramaIds.length} 部，明确异常 ${failures.length} 部，待确认规则项 ${candidates.length} 条；简介语种与播放另行执行。`);
+
   // -------------------------------------------------------------
   // Step 3: 格式化包裹并持久化落盘
   // -------------------------------------------------------------
@@ -248,7 +297,9 @@ async function main() {
     // 将 API 基础路径透传给 K6 脚本，避免硬编码
     apiBase,
     dramaList: dramaIds,
+    inspectionScope,
     dramaMeta,
+    preparedRuleValidation,
     appGroups,
     validationMeta: {
       appGroups: {
@@ -311,8 +362,18 @@ function buildDramaMetaFromRecord(headers, row) {
     cn_name: firstRecordValue(record, ['cn_name', 'cnName', 'cn_title', 'cnTitle', '中文名', '中文标题']),
     created_at: firstRecordValue(record, ['created_at', 'createdAt']),
     unlock_type: firstRecordValue(record, ['unlock_type', 'unlockType']),
+    unlock_type_available: record.unlock_type!==undefined || record.unlockType!==undefined,
+    free_chapters: record.free_chapters,
     marketing_position: firstRecordValue(record, ['marketing_position', 'marketingPosition']),
-    app_groups: firstRecordValue(record, ['app_groups', 'appGroups', 'app_group_ids', 'appGroupIds'])
+    marketing_position_available: record.marketing_position!==undefined || record.marketingPosition!==undefined,
+    description: firstRecordValue(record, ['description']),
+    lang: firstRecordValue(record, ['lang']),
+    description_available: record.description !== undefined,
+    lang_available: record.lang !== undefined,
+    app_groups: firstRecordValue(record, ['app_groups', 'appGroups', 'app_group_ids', 'appGroupIds']),
+    app_groups_available: ['app_groups','appGroups','app_group_ids','appGroupIds'].some(k=>record[k]!==undefined),
+    copyright: record.copyright,
+    copyright_expire_at: record.copyright_expire_at
   });
 }
 
@@ -334,8 +395,21 @@ function normalizeDramaMeta(meta) {
     cn_name: String(meta.cn_name ?? meta.cnName ?? cnTitle).trim(),
     created_at: String(meta.created_at ?? meta.createdAt ?? '').trim(),
     unlock_type: String(meta.unlock_type ?? meta.unlockType ?? '').trim(),
+    unlock_type_available: meta.unlock_type_available ?? (meta.unlock_type!==undefined || meta.unlockType!==undefined),
+    free_chapters: meta.free_chapters ?? null,
+    free_chapters_available: meta.free_chapters_available ?? (meta.free_chapters !== undefined && meta.free_chapters !== null),
     marketing_position: String(meta.marketing_position ?? meta.marketingPosition ?? '').trim(),
-    app_groups: normalizeAppGroupsValue(meta.app_groups ?? meta.appGroups ?? meta.app_group_ids ?? meta.appGroupIds)
+    marketing_position_available: meta.marketing_position_available ?? (meta.marketing_position!==undefined || meta.marketingPosition!==undefined),
+    description: String(meta.description ?? '').trim(),
+    lang: String(meta.lang ?? '').trim(),
+    description_available: meta.description_available ?? (meta.description !== undefined),
+    lang_available: meta.lang_available ?? (meta.lang !== undefined),
+    app_groups: normalizeAppGroupsValue(meta.app_groups ?? meta.appGroups ?? meta.app_group_ids ?? meta.appGroupIds),
+    app_groups_available: meta.app_groups_available ?? (meta.app_groups!==undefined||meta.appGroups!==undefined||meta.app_group_ids!==undefined||meta.appGroupIds!==undefined),
+    copyright: meta.copyright ?? null,
+    copyright_available: meta.copyright_available ?? (meta.copyright!==undefined),
+    copyright_expire_at: meta.copyright_expire_at ?? null,
+    copyright_expire_at_available: meta.copyright_expire_at_available ?? (meta.copyright_expire_at!==undefined)
   };
 }
 
@@ -350,7 +424,7 @@ function normalizeAppGroupsValue(value) {
   if (!text) return [];
   try {
     const parsed = JSON.parse(text);
-    return normalizeAppGroupsValue(parsed);
+    return parsed===null||typeof parsed==='object'?normalizeAppGroupsValue(parsed):[String(parsed).trim()].filter(Boolean);
   } catch (error) {
     return text.split(/[,\s|;]+/).map(item => item.trim()).filter(Boolean);
   }
@@ -393,7 +467,13 @@ async function fetchDramaMetadata(apiBase, xToken) {
     list.forEach(item => {
       const id = String(item?._id || item?.id || item?.drama_id || '').trim();
       if (/^[0-9a-fA-F]{24}$/.test(id)) {
-        metadata[id] = normalizeDramaMeta(item);
+        // A successfully fetched record with an omitted/null description is
+        // genuinely empty; distinguish that from a record never fetched at all.
+        metadata[id] = normalizeDramaMeta({
+          ...item,
+          description: item.description ?? '',
+          lang: item.lang ?? '',
+        });
       }
     });
 
@@ -411,13 +491,26 @@ function mergeDramaMeta(primary, secondary) {
   const right = normalizeDramaMeta(secondary || {});
   return normalizeDramaMeta({
     int_id: left.int_id || right.int_id,
-    title: left.title || right.title,
-    cn_title: left.cn_title || right.cn_title,
-    cn_name: left.cn_name || right.cn_name,
+    title: right.title || left.title,
+    cn_title: right.cn_title || left.cn_title,
+    cn_name: right.cn_name || left.cn_name,
     created_at: left.created_at || right.created_at,
-    unlock_type: left.unlock_type || right.unlock_type,
-    marketing_position: left.marketing_position || right.marketing_position,
-    app_groups: left.app_groups.length ? left.app_groups : right.app_groups
+    unlock_type: right.unlock_type_available ? right.unlock_type : left.unlock_type,
+    unlock_type_available: right.unlock_type_available || left.unlock_type_available,
+    free_chapters: right.free_chapters_available ? right.free_chapters : left.free_chapters,
+    free_chapters_available: right.free_chapters_available || left.free_chapters_available,
+    marketing_position: right.marketing_position_available ? right.marketing_position : left.marketing_position,
+    marketing_position_available: right.marketing_position_available || left.marketing_position_available,
+    description: right.description_available ? right.description : left.description,
+    lang: right.lang_available ? right.lang : left.lang,
+    description_available: right.description_available || left.description_available,
+    lang_available: right.lang_available || left.lang_available,
+    app_groups: right.app_groups_available ? right.app_groups : left.app_groups,
+    app_groups_available: right.app_groups_available || left.app_groups_available,
+    copyright: right.copyright_available ? right.copyright : left.copyright,
+    copyright_available: right.copyright_available || left.copyright_available,
+    copyright_expire_at: right.copyright_expire_at_available ? right.copyright_expire_at : left.copyright_expire_at,
+    copyright_expire_at_available: right.copyright_expire_at_available || left.copyright_expire_at_available
   });
 }
 
